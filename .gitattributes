@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+# 大体积二进制文件需要 Git LFS 时，在目标项目中按真实路径补充规则。
+# 示例：assets/**/*.zip filter=lfs diff=lfs merge=lfs -text

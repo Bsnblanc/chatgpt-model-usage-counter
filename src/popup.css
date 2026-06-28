@@ -1,0 +1,250 @@
+/*
+CSS TOKEN TABLE
+
+Source: src/dashboard.js injectStyles() lines 2710-2873.
+Purpose: semantic --usage-* custom-property plan for every hardcoded color in the injected dashboard CSS.
+Dark values are aligned to the ChatGPT dark theme reference: page #1a1a2e/#212121, surfaces #2a2b32/#171717, text #ececf1/#b4b4b4/#8e8ea0/#565869, borders #565869/#3e3f4b, accent #10a37f/#19c37d.
+
+| Token | Light value | Dark value | Usage |
+| --- | --- | --- | --- |
+| --usage-text-primary | #18201c | #ececf1 | Dashboard base text, active tab text, index links, primary hover text. |
+| --usage-text-control | #344139 | #ececf1 | Default pill button/control text. |
+| --usage-text-secondary | #475569 | #b4b4b4 | Neutral control labels, export notes/status text, maintenance/unknown hero text. |
+| --usage-text-muted | #64748b | #8e8ea0 | Subtitle copy, chart axes, labels, pager text, empty/status helper text. |
+| --usage-text-body-subtle | #334155 | #b4b4b4 | Feature chips, parameter values, export summaries. |
+| --usage-text-disabled | #94a3b8 | #565869 | Disabled export controls, record indexes, empty record placeholders. |
+| --usage-text-on-accent | #fff | #ffffff | Text placed on filled accent buttons and active format options. |
+| --usage-text-inverse | #fff | #ececf1 | Tooltip foreground text. |
+| --usage-chart-point-stroke | #fff | #2a2b32 | White point stroke around chart markers. |
+| --usage-surface-page | #fbfcfa | #2a2b32 | Popup scroll container/page background（与面板 surface-panel 统一，消除 .shell 内边距处的旧色边框）. |
+| --usage-surface-panel | #fbfcfa | #2a2b32 | Main page surface, topline, buttons, inputs, active tabs, chart containers. |
+| --usage-surface-transparent | transparent | transparent | Transparent fieldsets, chips, rows, panels, and inactive controls. |
+| --usage-surface-track | #eef2ec | #212121 | Segmented tab/export-control track backgrounds. |
+| --usage-surface-hover | #f1f5ef | #343541 | Format option hover background. |
+| --usage-surface-row-hover | #f8fafc | #343541 | Parameter, variant, and feature row hover background. |
+| --usage-surface-chip | #f1f5f9 | #343541 | Count feature badge background. |
+| --usage-surface-disabled | #d8e1d7 | #343541 | Disabled export button background. |
+| --usage-surface-control-hover | #fff | #343541 | Export segmented-control button hover background. |
+| --usage-border-divider | #e8ede6 | #3e3f4b | Topline, count, model, text-row, export, session, and hero dividers. |
+| --usage-border-control | #ccd4ca | #565869 | Default button, pager button, select, and input borders. |
+| --usage-border-disabled | #cbd5c7 | #444654 | Disabled export button border. |
+| --usage-border-option | #d8e0d6 | #3e3f4b | Inactive format option border. |
+| --usage-border-hover | #b9c7b5 | #565869 | Format option hover border. |
+| --usage-border-panel | #dde3dc | #3e3f4b | View tabs, model chips, chart wraps, export control borders. |
+| --usage-border-chart-grid | #d9e1d7 | #3e3f4b | Chart grid stroke. |
+| --usage-border-section | #eef2f7 | #3e3f4b | OpenAI component section separators. |
+| --usage-border-error | #fecaca | #7f1d1d | Export failure and OpenAI error borders. |
+| --usage-accent-primary | #245f49 | #10a37f | Filled export action, active format option, checkbox/accent-color. |
+| --usage-accent-primary-hover | #1f513f | #19c37d | Filled export button hover background and border. |
+| --usage-accent-link | #2563eb | #10a37f | Focus rings, links, counters, model emphasis, action links. |
+| --usage-accent-link-hover | #1d4ed8 | #19c37d | Hovered index links and export segmented-control hover text. |
+| --usage-shadow-accent | rgba(36,95,73,.2) | rgba(16,163,127,.3) | Active format option accent shadow. |
+| --usage-shadow-active-tab | rgba(24,32,28,.08) | rgba(0,0,0,.3) | Active view tab shadow. |
+| --usage-shadow-tooltip | rgba(15,23,42,.2) | rgba(0,0,0,.3) | Tooltip elevation shadow. |
+| --usage-shadow-export | rgba(15,23,42,.14) | rgba(0,0,0,.3) | Export button elevation shadow. |
+| --usage-tooltip-surface | #111827 | #171717 | Tooltip background surface. |
+| --usage-plan-operational-bg | #dcfce7 | #0f2f1f | Current plan success badge background. |
+| --usage-plan-operational-text | #166534 | #86efac | Current plan success badge text. |
+| --usage-plan-error-bg | #fee2e2 | #3a1518 | Current plan error badge background. |
+| --usage-plan-error-text | #991b1b | #f87171 | Current plan error badge text. |
+| --usage-status-info-bg | #e0f2fe | #17212b | Default OpenAI status badge background before a specific status is applied. |
+| --usage-status-info-text | #075985 | #7dd3fc | Default OpenAI status badge text. |
+| --usage-status-info-dot | #0284c7 | #38bdf8 | Default OpenAI status badge indicator dot. |
+| --usage-status-operational-bg | #dcfce7 | #0f2f1f | OpenAI operational badge background. |
+| --usage-status-operational-text | #166534 | #86efac | OpenAI operational badge text. |
+| --usage-status-operational-dot | #16a34a | #16a34a | OpenAI operational badge indicator dot. |
+| --usage-status-degraded-bg | #fef3c7 | #3a2a10 | OpenAI degraded/partial badge background. |
+| --usage-status-degraded-text | #92400e | #fbbf24 | OpenAI degraded/partial badge and hero text. |
+| --usage-status-degraded-dot | #d97706 | #d97706 | OpenAI degraded/partial badge indicator dot. |
+| --usage-status-major-bg | #fee2e2 | #3a1518 | OpenAI major incident badge background. |
+| --usage-status-major-text | #991b1b | #f87171 | OpenAI major incident badge and hero text. |
+| --usage-status-major-dot | #dc2626 | #dc2626 | OpenAI major incident badge indicator dot. |
+| --usage-status-maintenance-unknown-bg | #e2e8f0 | #343541 | OpenAI maintenance/unknown badge background. |
+| --usage-status-maintenance-unknown-text | #475569 | #b4b4b4 | OpenAI maintenance/unknown badge and hero text. |
+| --usage-status-maintenance-unknown-dot | #64748b | #8e8ea0 | OpenAI maintenance/unknown badge indicator dot. |
+| --usage-warning-text | #9a3412 | #fbbf24 | Export warning message text. |
+| --usage-error-status-text | #b91c1c | #f87171 | Export and dashboard status error text. |
+| --usage-error-surface | #fef2f2 | #3a1518 | Export failure details and OpenAI error background. |
+| --usage-error-text | #7f1d1d | #fca5a5 | Export failure details body text and OpenAI error small text. |
+| --usage-error-text-strong | #991b1b | #f87171 | Export failure strong text and OpenAI error primary text. |
+| --usage-skeleton-start | #f8fafc | #2a2b32 | Skeleton shimmer first and last gradient stops. |
+| --usage-skeleton-middle | #e2e8f0 | #3e3f4b | Skeleton shimmer middle gradient stop. |
+
+Covered source values from injectStyles(): #075985, #111827, #166534, #16a34a, #18201c, #1d4ed8, #1f513f, #245f49, #2563eb, #0284c7, #334155, #344139, #475569, #64748b, #7f1d1d, #92400e, #94a3b8, #991b1b, #9a3412, #b91c1c, #b9c7b5, #cbd5c7, #ccd4ca, #d8e0d6, #d8e1d7, #d9e1d7, #dc2626, #dcfce7, #dde3dc, #d97706, #e0f2fe, #e2e8f0, #e8ede6, #eef2ec, #eef2f7, #f1f5ef, #f1f5f9, #f7f8f6, #f8fafc, #fbfcfa, #fecaca, #fee2e2, #fef2f2, #fef3c7, #fff, rgba(15,23,42,.14), rgba(15,23,42,.2), rgba(24,32,28,.08), rgba(36,95,73,.2), transparent.
+
+Migration note: legacy runtime declarations --bg: #f7f8f6; and --text: #18201c; were replaced by --usage-surface-page and --usage-text-primary.
+*/
+:root {
+  color-scheme: light dark;
+  --usage-text-primary: #18201c;
+  --usage-text-control: #344139;
+  --usage-text-secondary: #475569;
+  --usage-text-muted: #64748b;
+  --usage-text-body-subtle: #334155;
+  --usage-text-disabled: #94a3b8;
+  --usage-text-on-accent: #fff;
+  --usage-text-inverse: #fff;
+  --usage-chart-point-stroke: #fff;
+  --usage-surface-page: #fbfcfa;
+  --usage-surface-panel: #fbfcfa;
+  --usage-surface-transparent: transparent;
+  --usage-surface-track: #eef2ec;
+  --usage-surface-hover: #f1f5ef;
+  --usage-surface-row-hover: #f8fafc;
+  --usage-surface-chip: #f1f5f9;
+  --usage-surface-disabled: #d8e1d7;
+  --usage-surface-control-hover: #fff;
+  --usage-border-divider: #e8ede6;
+  --usage-border-control: #ccd4ca;
+  --usage-border-disabled: #cbd5c7;
+  --usage-border-option: #d8e0d6;
+  --usage-border-hover: #b9c7b5;
+  --usage-border-panel: #dde3dc;
+  --usage-border-chart-grid: #d9e1d7;
+  --usage-border-section: #eef2f7;
+  --usage-border-error: #fecaca;
+  --usage-accent-primary: #245f49;
+  --usage-accent-primary-hover: #1f513f;
+  --usage-accent-link: #2563eb;
+  --usage-accent-link-hover: #1d4ed8;
+  --usage-shadow-accent: rgba(36,95,73,.2);
+  --usage-shadow-active-tab: rgba(24,32,28,.08);
+  --usage-shadow-tooltip: rgba(15,23,42,.2);
+  --usage-shadow-export: rgba(15,23,42,.14);
+  --usage-tooltip-surface: #111827;
+  --usage-plan-operational-bg: #dcfce7;
+  --usage-plan-operational-text: #166534;
+  --usage-plan-error-bg: #fee2e2;
+  --usage-plan-error-text: #991b1b;
+  --usage-status-info-bg: #e0f2fe;
+  --usage-status-info-text: #075985;
+  --usage-status-info-dot: #0284c7;
+  --usage-status-operational-bg: #dcfce7;
+  --usage-status-operational-text: #166534;
+  --usage-status-operational-dot: #16a34a;
+  --usage-status-degraded-bg: #fef3c7;
+  --usage-status-degraded-text: #92400e;
+  --usage-status-degraded-dot: #d97706;
+  --usage-status-major-bg: #fee2e2;
+  --usage-status-major-text: #991b1b;
+  --usage-status-major-dot: #dc2626;
+  --usage-status-maintenance-unknown-bg: #e2e8f0;
+  --usage-status-maintenance-unknown-text: #475569;
+  --usage-status-maintenance-unknown-dot: #64748b;
+  --usage-warning-text: #9a3412;
+  --usage-error-status-text: #b91c1c;
+  --usage-error-surface: #fef2f2;
+  --usage-error-text: #7f1d1d;
+  --usage-error-text-strong: #991b1b;
+  --usage-skeleton-start: #f8fafc;
+  --usage-skeleton-middle: #e2e8f0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --usage-text-primary: #ececf1;
+    --usage-text-control: #ececf1;
+    --usage-text-secondary: #b4b4b4;
+    --usage-text-muted: #8e8ea0;
+    --usage-text-body-subtle: #b4b4b4;
+    --usage-text-disabled: #565869;
+    --usage-text-on-accent: #ffffff;
+    --usage-text-inverse: #ececf1;
+    --usage-chart-point-stroke: #2a2b32;
+    --usage-surface-page: #2a2b32;
+    --usage-surface-panel: #2a2b32;
+    --usage-surface-transparent: transparent;
+    --usage-surface-track: #212121;
+    --usage-surface-hover: #343541;
+    --usage-surface-row-hover: #343541;
+    --usage-surface-chip: #343541;
+    --usage-surface-disabled: #343541;
+    --usage-surface-control-hover: #343541;
+    --usage-border-divider: #3e3f4b;
+    --usage-border-control: #565869;
+    --usage-border-disabled: #444654;
+    --usage-border-option: #3e3f4b;
+    --usage-border-hover: #565869;
+    --usage-border-panel: #3e3f4b;
+    --usage-border-chart-grid: #3e3f4b;
+    --usage-border-section: #3e3f4b;
+    --usage-border-error: #7f1d1d;
+    --usage-accent-primary: #10a37f;
+    --usage-accent-primary-hover: #19c37d;
+    --usage-accent-link: #10a37f;
+    --usage-accent-link-hover: #19c37d;
+    --usage-shadow-accent: rgba(16,163,127,.3);
+    --usage-shadow-active-tab: rgba(0,0,0,.3);
+    --usage-shadow-tooltip: rgba(0,0,0,.3);
+    --usage-shadow-export: rgba(0,0,0,.3);
+    --usage-tooltip-surface: #171717;
+    --usage-plan-operational-bg: #0f2f1f;
+    --usage-plan-operational-text: #86efac;
+    --usage-plan-error-bg: #3a1518;
+    --usage-plan-error-text: #f87171;
+    --usage-status-info-bg: #17212b;
+    --usage-status-info-text: #7dd3fc;
+    --usage-status-info-dot: #38bdf8;
+    --usage-status-operational-bg: #0f2f1f;
+    --usage-status-operational-text: #86efac;
+    --usage-status-operational-dot: #16a34a;
+    --usage-status-degraded-bg: #3a2a10;
+    --usage-status-degraded-text: #fbbf24;
+    --usage-status-degraded-dot: #d97706;
+    --usage-status-major-bg: #3a1518;
+    --usage-status-major-text: #f87171;
+    --usage-status-major-dot: #dc2626;
+    --usage-status-maintenance-unknown-bg: #343541;
+    --usage-status-maintenance-unknown-text: #b4b4b4;
+    --usage-status-maintenance-unknown-dot: #8e8ea0;
+    --usage-warning-text: #fbbf24;
+    --usage-error-status-text: #f87171;
+    --usage-error-surface: #3a1518;
+    --usage-error-text: #fca5a5;
+    --usage-error-text-strong: #f87171;
+    --usage-skeleton-start: #2a2b32;
+    --usage-skeleton-middle: #3e3f4b;
+  }
+}
+
+html {
+  width: 400px;
+  min-width: 400px;
+  max-width: 400px;
+  height: 560px;
+  min-height: 560px;
+  max-height: 560px;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 400px;
+  min-width: 400px;
+  max-width: 400px;
+  height: 560px;
+  min-height: 560px;
+  max-height: 560px;
+  overflow: hidden;
+  margin: 0;
+  color: var(--usage-text-primary);
+  background: var(--usage-surface-page);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+button,
+select,
+input {
+  font: inherit;
+}
+
+.shell {
+  width: 400px;
+  height: 560px;
+  min-height: 560px;
+  overflow: hidden;
+  padding: 8px;
+}
