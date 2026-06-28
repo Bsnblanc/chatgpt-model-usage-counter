@@ -471,6 +471,11 @@
       {
         title: exportTitle(options),
         exportedAt: exportTimestampRaw(options),
+        generatedBy: {
+          name: EXPORT_PROMO_NAME,
+          url: EXPORT_PROMO_URL,
+          description: EXPORT_PROMO_DESC
+        },
         formatVersion: 3,
         conversationCount: normalized.length,
         messageCount: normalized.reduce(function countMessages(total, conversation) {
@@ -1030,6 +1035,10 @@
       });
     }
 
+    // 推广页脚:简要介绍 + GitHub 链接(放在正文末尾)。
+    lines.push("", "---", "");
+    lines.push("> **" + EXPORT_PROMO_NAME + "** — " + EXPORT_PROMO_DESC);
+    lines.push("> GitHub · <" + EXPORT_PROMO_URL + ">");
     return lines.join("\n").replace(/\n+$/, "") + "\n";
   }
 
@@ -1972,7 +1981,7 @@
     var out = [];
     blocks.forEach(function (b) {
       if (b.type === "heading") {
-        var style = b.level <= 1 ? "Heading1" : "Heading2";
+        var style = b.level <= 1 ? "Heading1" : b.level === 2 ? "Heading2" : b.level === 3 ? "Heading3" : "Heading4";
         out.push('<w:p><w:pPr><w:pStyle w:val="' + style + '"/></w:pPr>' + docxInlineRuns(b.spans.map(function (s) { return Object.assign({}, s, { bold: true }); })) + "</w:p>");
       } else if (b.type === "para") {
         out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/></w:pPr>' + docxInlineRuns(b.spans) + "</w:p>");
@@ -2039,6 +2048,11 @@
       });
     });
 
+    // 推广页脚:分隔线 + 简要介绍 + GitHub 链接。
+    paragraphs.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="E6E9EF"/></w:pBdr></w:pPr></w:p>');
+    paragraphs.push(paragraph(EXPORT_PROMO_NAME + " — " + EXPORT_PROMO_DESC, "Footnote"));
+    paragraphs.push(paragraph("GitHub · " + EXPORT_PROMO_URL, "Footnote"));
+
     var documentXml =
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
@@ -2088,6 +2102,8 @@
           '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:spacing w:after="220"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="34"/><w:color w:val="111827"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="260" w:after="120"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="27"/><w:color w:val="1F4F9F"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="220" w:after="100"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="23"/><w:color w:val="111827"/></w:rPr></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="180" w:after="80"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="21"/><w:color w:val="1F2937"/></w:rPr></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="Heading4"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="160" w:after="60"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="20"/><w:color w:val="1F4F9F"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:after="60"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:color w:val="64748B"/><w:sz w:val="20"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="ContentLabel"><w:name w:val="Content Label"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="80" w:after="60"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="21"/><w:color w:val="111827"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="BodyText"><w:name w:val="Body Text"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:line="320" w:lineRule="auto" w:after="160"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:sz w:val="22"/><w:color w:val="111827"/></w:rPr></w:style>' +
@@ -2887,6 +2903,11 @@
   // 画布渲染:系统中文字体 + Markdown 渲染 → 用于 PNG(直接 toBlob)与 PDF(切页嵌图)。
   // 取代只支持 ASCII 的像素字体渲染器,以及不嵌字体的 STSong PDF——这两者中文都无法正确显示。
   // ============================================================================
+  // 导出推广页脚:简要介绍 + 链接。Chrome 商店链接尚未过审,暂用 GitHub 宣传链接。
+  var EXPORT_PROMO_NAME = "ChatGPT Model Usage Counter";
+  var EXPORT_PROMO_DESC = "按模型和日期统计 ChatGPT 用量,并把所选对话本地导出为 JSON / Markdown / PDF / Word / PNG。";
+  var EXPORT_PROMO_URL = "https://github.com/Bsnblanc/chatgpt-model-usage-counter";
+
   var CV_FONT = "'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Segoe UI',system-ui,sans-serif";
   var CV_MONO = "'Cascadia Code','Consolas','SFMono-Regular',Menlo,monospace";
 
@@ -2914,6 +2935,9 @@
     var lines = String(text == null ? "" : text).replace(/\r/g, "").split("\n");
     var blocks = [], i = 0;
     function blank(l) { return /^\s*$/.test(l); }
+    function isPipeRow(l) { return /^\s*\|.*\|\s*$/.test(l); }
+    function isTableDivider(l) { return /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(l) && l.indexOf("-") >= 0; }
+    function pipeColCount(l) { return l.trim().replace(/^\||\|$/g, "").split("|").length; }
     while (i < lines.length) {
       var line = lines[i];
       if (/^```/.test(line)) {
@@ -2921,18 +2945,27 @@
         while (i < lines.length && !/^```/.test(lines[i])) { code.push(lines[i]); i++; }
         i++; blocks.push({ type: "code", code: code.join("\n") }); continue;
       }
-      if (/^\s*#{1,6}\s+/.test(line)) {
-        blocks.push({ type: "heading", level: line.match(/^\s*(#{1,6})/)[1].length, spans: cvParseInline(line.replace(/^\s*#{1,6}\s+/, "")) });
+      // 标题识别:标准 ATX 是 # 后跟空格;额外放宽"# 后直接跟中文"(如 ###标题,中文里常省略空格),
+      // 否则这类没有空格的中文标题会退化成带 # 的单行纯文本,只显示一行、不被当成标题。
+      // 拉丁字母/数字仍要求空格,避免把 #标签 / #1 / #include / #! 误判成标题。
+      if (/^\s*#{1,6}(\s+|[一-鿿])/.test(line)) {
+        blocks.push({ type: "heading", level: line.match(/^\s*(#{1,6})/)[1].length, spans: cvParseInline(line.replace(/^\s*#{1,6}\s*/, "")) });
         i++; continue;
       }
       if (/^\s*>\s?/.test(line)) {
         var q = []; while (i < lines.length && /^\s*>\s?/.test(lines[i])) { q.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
         blocks.push({ type: "quote", spans: cvParseInline(q.join("\n")) }); continue;
       }
-      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1]) && lines[i + 1].indexOf("-") >= 0) {
-        var rows = [cvRowCells(line)]; i += 2;
-        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(cvRowCells(lines[i])); i++; }
-        blocks.push({ type: "table", rows: rows }); continue;
+      // 表格识别:有分隔行(| --- |)按标准识别;没有分隔行但连续多列竖杠行也识别为表格,
+      // 避免部分表格在导出里退化成竖杠纯文本(仍由竖杠表示)。
+      if (isPipeRow(line) && i + 1 < lines.length &&
+        (isTableDivider(lines[i + 1]) || (isPipeRow(lines[i + 1]) && pipeColCount(line) >= 2))) {
+        var rows = [];
+        while (i < lines.length && (isPipeRow(lines[i]) || isTableDivider(lines[i]))) {
+          if (!isTableDivider(lines[i])) { rows.push(cvRowCells(lines[i])); }
+          i++;
+        }
+        if (rows.length) { blocks.push({ type: "table", rows: rows }); continue; }
       }
       if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
         var items = [], ordered = /^\s*\d+[.)]/.test(line);
@@ -2942,7 +2975,7 @@
       if (/^\s*(---+|\*\*\*+|___+)\s*$/.test(line)) { blocks.push({ type: "hr" }); i++; continue; }
       if (blank(line)) { i++; continue; }
       var para = [line]; i++;
-      while (i < lines.length && !blank(lines[i]) && !/^```/.test(lines[i]) && !/^\s*#{1,6}\s+/.test(lines[i]) &&
+      while (i < lines.length && !blank(lines[i]) && !/^```/.test(lines[i]) && !/^\s*#{1,6}(\s+|[一-鿿])/.test(lines[i]) &&
         !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i]) && !/^\s*>\s?/.test(lines[i]) && !/^\s*\|.*\|\s*$/.test(lines[i])) { para.push(lines[i]); i++; }
       blocks.push({ type: "para", spans: cvParseInline(para.join("\n")) });
     }
@@ -3022,24 +3055,58 @@
     }
     function drawTable(rows, x, blockW) {
       if (!rows.length) return;
-      var cols = rows[0].length || 1, colW = blockW / cols, rh = 30, startY = y;
+      var cols = 1;
+      rows.forEach(function (r) { if (r.length > cols) { cols = r.length; } });
+      var colW = blockW / cols, cellPad = 8, cellSize = 13, cellLh = Math.round(cellSize * 1.5), startY = y;
       rows.forEach(function (row, ri) {
-        if (ri === 0) rect(x, blockW, rh, "#f1f5f9");
+        // 每个单元格先按列宽折行,行高取本行所有单元格的最大行数,避免文字溢出到相邻列或被裁掉。
+        var cellLines = [], maxLines = 1;
+        for (var ci = 0; ci < cols; ci++) {
+          var spans = cvParseInline(String(row[ci] == null ? "" : row[ci]));
+          if (ri === 0) { spans = spans.map(function (s) { return Object.assign({}, s, { bold: true }); }); }
+          var wrapped = cvWrap(measure, spans, colW - cellPad * 2, cellSize);
+          cellLines.push(wrapped);
+          if (wrapped.length > maxLines) { maxLines = wrapped.length; }
+        }
+        var rh = maxLines * cellLh + 12;
+        if (ri === 0) { rect(x, blockW, rh, "#f1f5f9"); }
         ops.push({ kind: "rect", x: x, y: y, w: blockW, h: 1, color: RULE });
-        row.forEach(function (cell, ci) { ops.push({ kind: "text", x: x + ci * colW + 8, y: y + 19, text: String(cell), size: 13, color: ri === 0 ? "#0f172a" : "#334155", bold: ri === 0, font: CV_FONT }); });
+        for (var cj = 0; cj < cols; cj++) {
+          var cellX = x + cj * colW + cellPad, ty = y + 6 + cellSize;
+          cellLines[cj].forEach(function (toks) {
+            var cx = cellX;
+            toks.forEach(function (tok) {
+              ops.push({ kind: "text", x: cx, y: ty, text: tok.t, size: cellSize, color: ri === 0 ? "#0f172a" : "#334155", bold: tok.bold, italic: tok.italic, font: tok.code ? CV_MONO : CV_FONT });
+              cx += tok.w;
+            });
+            ty += cellLh;
+          });
+        }
         y += rh;
       });
       ops.push({ kind: "rect", x: x, y: y, w: blockW, h: 1, color: RULE });
-      for (var c = 0; c <= cols; c++) ops.push({ kind: "rect", x: x + c * colW, y: startY, w: 1, h: y - startY, color: RULE });
+      for (var c = 0; c <= cols; c++) { ops.push({ kind: "rect", x: x + c * colW, y: startY, w: 1, h: y - startY, color: RULE }); }
     }
     function drawBlocks(blocks, x, blockW) {
       blocks.forEach(function (b) {
-        if (b.type === "heading") { var hs = b.level <= 1 ? 22 : b.level === 2 ? 19 : 17; gap(12); drawSpans(b.spans, x, blockW, hs, INK, true); gap(4); }
+        if (b.type === "heading") {
+          // 标题分级:用字号、颜色、上方间距区分层级,只有 h1 加一条分隔线,避免"什么都是大标题"。
+          var lvl = b.level || 1;
+          var hStyle = lvl <= 1 ? { size: 21, color: INK, top: 18, bot: 7, rule: true }
+            : lvl === 2 ? { size: 18, color: INK, top: 15, bot: 6, rule: false }
+            : lvl === 3 ? { size: 16, color: INK, top: 12, bot: 4, rule: false }
+            : lvl === 4 ? { size: 14.5, color: ACCENT, top: 10, bot: 3, rule: false }
+            : { size: 13.5, color: MUTED, top: 9, bot: 3, rule: false };
+          gap(hStyle.top);
+          drawSpans(b.spans, x, blockW, hStyle.size, hStyle.color, true);
+          if (hStyle.rule) { gap(3); rule(x, x + blockW); }
+          gap(hStyle.bot);
+        }
         else if (b.type === "para") { drawSpans(b.spans, x, blockW, 15, INK, false); gap(7); }
         else if (b.type === "list") { b.items.forEach(function (item, idx) { addText(x + 2, b.ordered ? (idx + 1) + "." : "•", 15, MUTED); drawSpans(item, x + 24, blockW - 24, 15, INK, false); gap(4); }); gap(4); }
         else if (b.type === "code") { var codeLines = String(b.code).split("\n"); var clh = 20, cpad = 10, boxH = codeLines.length * clh + cpad * 2; rect(x, blockW, boxH, "#f6f8fa", 8); var cy0 = y + cpad + 14; codeLines.forEach(function (ln, ci) { ops.push({ kind: "text", x: x + cpad, y: cy0 + ci * clh, text: ln, size: 13, color: "#24292f", font: CV_MONO }); }); y += boxH; gap(8); }
         else if (b.type === "quote") { var sY = y; drawSpans(b.spans, x + 14, blockW - 14, 15, MUTED, false, true); ops.push({ kind: "rect", x: x, y: sY - 2, w: 3, h: (y - sY) + 2, color: "#cbd5e1" }); gap(7); }
-        else if (b.type === "table") { drawTable(b.rows, x, blockW); gap(8); }
+        else if (b.type === "table") { gap(8); drawTable(b.rows, x, blockW); gap(12); }
         else if (b.type === "hr") { gap(6); rule(x, x + blockW); gap(10); }
       });
     }
@@ -3061,6 +3128,11 @@
         gap(4);
       });
     });
+    // 推广页脚:简要介绍 + GitHub 链接,放在所有对话之后。
+    gap(18); rule(margin, width - margin); gap(16);
+    addText(margin, EXPORT_PROMO_NAME, 13, ACCENT, { bold: true }); gap(19);
+    drawSpans(cvParseInline(EXPORT_PROMO_DESC), margin, contentW, 11.5, MUTED, false); gap(3);
+    addText(margin, "GitHub · " + EXPORT_PROMO_URL, 11.5, ACCENT); gap(4);
     gap(margin);
 
     var DPR = (y * 2) > 30000 ? 1 : 2;

@@ -372,9 +372,11 @@ function assertPublicJsonShape(payload) {
     "exportedAt",
     "featureUsage",
     "formatVersion",
+    "generatedBy",
     "messageCount",
     "title"
   ]);
+  assert.deepEqual(Object.keys(payload.generatedBy).sort(), ["description", "name", "url"]);
   assert.deepEqual(Object.keys(payload.featureUsage).sort(), ["byFeature", "total"]);
   assert.equal(typeof payload.featureUsage.total, "number");
   assert.equal(typeof payload.featureUsage.byFeature, "object");

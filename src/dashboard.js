@@ -2026,10 +2026,20 @@
     if (!dashboard || !dashboard.style) {
       return;
     }
-    var variables = USAGE_THEME_VARIABLES[resolvePopupTheme(state)] || USAGE_THEME_VARIABLES.light;
+    var popupTheme = resolvePopupTheme(state);
+    var variables = USAGE_THEME_VARIABLES[popupTheme] || USAGE_THEME_VARIABLES.light;
     Object.keys(variables).forEach(function applyVariable(name) {
       dashboard.style.setProperty(name, variables[name]);
     });
+    // 把主题变量与 color-scheme 一并提升到 <html>,让 body/.shell 的页面背景和原生滚动条跟随强制主题。
+    // 否则强制浅色而系统配色为深色时,popup 内容四周会露出一圈深色边(浅色主题黑边问题)。
+    var docEl = dashboard.ownerDocument && dashboard.ownerDocument.documentElement;
+    if (docEl && docEl.style && typeof docEl.style.setProperty === "function") {
+      Object.keys(variables).forEach(function applyDocVariable(name) {
+        docEl.style.setProperty(name, variables[name]);
+      });
+      docEl.style.setProperty("color-scheme", popupTheme === "dark" ? "dark" : "light");
+    }
   }
 
   function subscribePopupThemeChanges(state) {

@@ -215,6 +215,8 @@ html {
   min-height: 560px;
   max-height: 560px;
   overflow: hidden;
+  /* 浅色主题黑边修复:让窗口画布跟随当前页面背景,避免强制主题与系统配色不一致时露出深色边。 */
+  background: var(--usage-surface-page);
 }
 
 * {
@@ -247,4 +249,6 @@ input {
   min-height: 560px;
   overflow: hidden;
   padding: 8px;
+  /* 页面背景铺满 .shell(含 8px 内边距区),覆盖 body 的系统配色,消除内容四周的黑边。 */
+  background: var(--usage-surface-page);
 }
