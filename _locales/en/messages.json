@@ -1,0 +1,4 @@
+{
+  "extName": { "message": "ChatGPT Model Usage Counter" },
+  "extDescription": { "message": "Count your local ChatGPT prompts by model, with usage charts and conversation export." }
+}

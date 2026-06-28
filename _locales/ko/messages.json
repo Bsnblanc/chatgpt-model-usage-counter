@@ -1,0 +1,4 @@
+{
+  "extName": { "message": "ChatGPT 모델 사용량 카운터" },
+  "extDescription": { "message": "ChatGPT 프롬프트 제출을 모델별로 로컬 집계. 사용량 차트와 대화 내보내기 지원." }
+}

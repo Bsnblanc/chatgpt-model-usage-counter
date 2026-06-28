@@ -694,7 +694,9 @@ test("usage panel entry reflects abnormal stored OpenAI status", () => {
   assert.equal(host.getAttribute("data-openai-status-state"), "major");
   assert.equal(host.getAttribute("data-openai-status-label"), "Major outage");
   assert.equal(toggle.getAttribute("aria-label"), "Model Usage · OpenAI: Major outage");
-  assert.match(style, /data-openai-status-state='major'/);
+  // 用户要求:入口不再随 OpenAI 状态变色(去掉奶油/红/灰警告底色),状态仍通过 host 属性 + aria-label + 面板状态页传达。
+  assert.doesNotMatch(style, /panel-toggle\{[^}]*#fef3c7/);
+  assert.doesNotMatch(style, /panel-toggle\{[^}]*#fee2e2/);
 
   storageListeners[0]({
     "chatgptModelUsageOpenAIStatus.v1": {

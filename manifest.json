@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Model Usage Counter",
-  "description": "Counts local ChatGPT prompt submissions by selected model.",
-  "version": "1.2.14",
+  "name": "__MSG_extName__",
+  "description": "__MSG_extDescription__",
+  "default_locale": "en",
+  "version": "1.2.16",
   "action": {
     "default_icon": {
       "16": "icons/icon16.png",

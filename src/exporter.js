@@ -2743,6 +2743,83 @@
   // —— 账号安全的对话读取 ——
   // 只读取「当前页面已渲染」的对话 DOM,绝不调用任何 ChatGPT/OpenAI 后端接口,
   // 不读取 cookie / token,不发起网络请求。用户显式点击导出时才执行。
+  // ChatGPT 把助手消息的 Markdown 在页面里渲染成 HTML(.markdown 容器内的 h1-6 / strong / table / pre 等)。
+  // 直接取 innerText 会把 ## ** | ``` 等记号全抹掉,导出就成同字号纯文字。这里从 HTML 重建 Markdown。
+  function mdRepeatStr(s, n) { var r = ""; for (var i = 0; i < n; i++) { r += s; } return r; }
+
+  function mdInlineFromDom(node) {
+    if (!node) { return ""; }
+    if (node.nodeType === 3) { return String(node.nodeValue || ""); }
+    if (node.nodeType !== 1) { return ""; }
+    var tag = String(node.tagName || "").toLowerCase();
+    var inner = "";
+    if (node.childNodes) { Array.prototype.forEach.call(node.childNodes, function (c) { inner += mdInlineFromDom(c); }); }
+    if (tag === "strong" || tag === "b") { return inner.trim() ? "**" + inner + "**" : inner; }
+    if (tag === "em" || tag === "i") { return inner.trim() ? "*" + inner + "*" : inner; }
+    if (tag === "code") { return "`" + (node.textContent || inner) + "`"; }
+    if (tag === "a") { var href = node.getAttribute ? (node.getAttribute("href") || "") : ""; return href ? "[" + inner + "](" + href + ")" : inner; }
+    if (tag === "br") { return "\n"; }
+    return inner;
+  }
+
+  function mdTableFromDom(table) {
+    if (!table || typeof table.querySelectorAll !== "function") { return String((table && table.textContent) || ""); }
+    var trs = table.querySelectorAll("tr");
+    var rows = [];
+    Array.prototype.forEach.call(trs, function (tr) {
+      var cells = [];
+      Array.prototype.forEach.call(tr.querySelectorAll("th,td"), function (c) {
+        cells.push(String(c.textContent || "").trim().replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " "));
+      });
+      if (cells.length) { rows.push("| " + cells.join(" | ") + " |"); }
+    });
+    if (rows.length > 0) {
+      var firstTr = trs[0];
+      var cols = firstTr ? firstTr.querySelectorAll("th,td").length : 1;
+      rows.splice(1, 0, "|" + mdRepeatStr(" --- |", Math.max(1, cols)));
+    }
+    return rows.join("\n");
+  }
+
+  function mdBlockFromDom(node, out) {
+    if (!node) { return; }
+    if (node.nodeType === 3) { var t = String(node.nodeValue || "").trim(); if (t) { out.push(t); } return; }
+    if (node.nodeType !== 1) { return; }
+    var tag = String(node.tagName || "").toLowerCase();
+    if (/^h[1-6]$/.test(tag)) { out.push(mdRepeatStr("#", Number(tag.charAt(1))) + " " + mdInlineFromDom(node).trim()); return; }
+    if (tag === "p") { var p = mdInlineFromDom(node).trim(); if (p) { out.push(p); } return; }
+    if (tag === "ul" || tag === "ol") {
+      var i = 1, ordered = tag === "ol", items = [];
+      Array.prototype.forEach.call(node.children || [], function (li) {
+        if (String(li.tagName || "").toLowerCase() !== "li") { return; }
+        items.push((ordered ? (i++) + ". " : "- ") + mdInlineFromDom(li).trim());
+      });
+      if (items.length) { out.push(items.join("\n")); }
+      return;
+    }
+    if (tag === "pre") {
+      var codeEl = typeof node.querySelector === "function" ? node.querySelector("code") : null;
+      var codeText = codeEl ? (codeEl.textContent || "") : (node.textContent || "");
+      out.push("```\n" + String(codeText).replace(/\n+$/, "") + "\n```");
+      return;
+    }
+    if (tag === "blockquote") {
+      var bq = [];
+      if (node.childNodes) { Array.prototype.forEach.call(node.childNodes, function (c) { mdBlockFromDom(c, bq); }); }
+      out.push(bq.join("\n").split("\n").map(function (l) { return "> " + l; }).join("\n"));
+      return;
+    }
+    if (tag === "table") { out.push(mdTableFromDom(node)); return; }
+    if (tag === "hr") { out.push("---"); return; }
+    if (node.childNodes) { Array.prototype.forEach.call(node.childNodes, function (c) { mdBlockFromDom(c, out); }); }
+  }
+
+  function domMarkdown(el) {
+    var out = [];
+    if (el && el.childNodes) { Array.prototype.forEach.call(el.childNodes, function (c) { mdBlockFromDom(c, out); }); }
+    return out.join("\n\n");
+  }
+
   function domMessageText(node) {
     if (!node) {
       return "";
@@ -2754,6 +2831,13 @@
         node.querySelector(".whitespace-pre-wrap");
     }
     var holder = body || node;
+    // 助手消息(.markdown 渲染容器)从 HTML 重建 Markdown,保留标题/表格/加粗/代码/列表;失败再退回 innerText。
+    if (body && /(^|\s)markdown(\s|$)/.test(String(body.className || "")) && body.childNodes && body.childNodes.length && typeof body.querySelectorAll === "function") {
+      try {
+        var md = domMarkdown(body);
+        if (md && md.trim()) { return normalizeText(md); }
+      } catch (mdError) { void mdError; }
+    }
     var raw = holder.innerText != null ? holder.innerText : (holder.textContent || "");
     return normalizeText(raw);
   }
@@ -2950,7 +3034,7 @@
     }
     function drawBlocks(blocks, x, blockW) {
       blocks.forEach(function (b) {
-        if (b.type === "heading") { var hs = b.level <= 1 ? 21 : b.level === 2 ? 18 : 16; gap(8); drawSpans(b.spans, x, blockW, hs, INK, true); gap(3); }
+        if (b.type === "heading") { var hs = b.level <= 1 ? 22 : b.level === 2 ? 19 : 17; gap(12); drawSpans(b.spans, x, blockW, hs, INK, true); gap(4); }
         else if (b.type === "para") { drawSpans(b.spans, x, blockW, 15, INK, false); gap(7); }
         else if (b.type === "list") { b.items.forEach(function (item, idx) { addText(x + 2, b.ordered ? (idx + 1) + "." : "•", 15, MUTED); drawSpans(item, x + 24, blockW - 24, 15, INK, false); gap(4); }); gap(4); }
         else if (b.type === "code") { var codeLines = String(b.code).split("\n"); var clh = 20, cpad = 10, boxH = codeLines.length * clh + cpad * 2; rect(x, blockW, boxH, "#f6f8fa", 8); var cy0 = y + cpad + 14; codeLines.forEach(function (ln, ci) { ops.push({ kind: "text", x: x + cpad, y: cy0 + ci * clh, text: ln, size: 13, color: "#24292f", font: CV_MONO }); }); y += boxH; gap(8); }
@@ -2962,7 +3046,7 @@
 
     var title = documentTitle(list, options);
     var msgCount = list.reduce(function (t, c) { return t + c.messages.length; }, 0);
-    addText(margin, title, 25, INK, { bold: true }); gap(34);
+    addText(margin, title, 27, INK, { bold: true }); gap(36);
     addText(margin, "导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + msgCount + " 条消息", 12.5, MUTED); gap(20);
     rule(margin, width - margin); gap(18);
     list.forEach(function (conv, ci) {

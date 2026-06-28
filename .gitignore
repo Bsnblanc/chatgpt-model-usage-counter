@@ -17,6 +17,7 @@ __pycache__/
 .cache/
 tmp/
 tmp-export-samples/
+tmp-verify/
 bitbrowser/verify-out/
 # 内部验证产物 / 真机快照(含真实 ChatGPT 存储与 prompt 观测,绝不上传)
 .sisyphus/
@@ -42,5 +43,7 @@ TASK-PROMPT.md
 /SECURITY.md
 /CONTRIBUTING.md
 /package-store.ps1
+/.build-zip.ps1
 /store-assets/screenshot-source.html
+/store-assets/UPLOAD-READY.md
 /*.png
