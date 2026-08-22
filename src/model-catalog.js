@@ -17,6 +17,7 @@
   var MODEL_TEXT_CONTEXT_RE = /\b(?:current model|selected model|active model|model selector|model switcher|model-switcher|data-model|data-model-id)\b/i;
   var SLUG_TOKEN_RE = /\b[a-z][a-z0-9._-]{1,95}\b/gi;
   var GENERIC_VERSIONED_SLUG_RE = /^(?=[a-z0-9._-]{2,96}$)(?=.*[a-z])(?=.*\d)(?=.*[-_.])[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+$/i;
+  var EXECUTION_MODE_SUFFIX_RE = /[-_.](thinking|instant|fast|auto|pro)$/i;
 
   function normalizeWhitespace(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -119,6 +120,14 @@
       (hasGenericModelSlugEvidence(clean) || hasExplicitVersionEvidence(clean));
   }
 
+  function isChatGPTRouteSlug(value) {
+    var clean = normalizeSlug(value);
+    // "auto" is a real ChatGPT request route only when it comes from an exact
+    // request/catalog field. resolveModelInfo still rejects arbitrary visible
+    // "Auto" text, so this does not turn a generic UI label into a model.
+    return clean === "auto" || isRequestModelSlug(clean);
+  }
+
   function cloneParameters(parameters) {
     var result = {};
     Object.keys(parameters || {}).forEach(function copy(key) {
@@ -131,6 +140,20 @@
   function inferMode(text) {
     var match = normalizeWhitespace(text).match(MODE_SUFFIX_RE) || normalizeWhitespace(text).match(/\b(thinking|instant|fast|auto|pro)\b/i);
     return match ? match[1].toLowerCase() : "";
+  }
+
+  function usesIntelligenceModel(mode) {
+    return mode === "thinking" || mode === "pro";
+  }
+
+  function versionPresetForSlug(version, slug) {
+    var clean = normalizeSlug(slug);
+    if (!version || !clean) {
+      return null;
+    }
+    return (version.intelligencePresets || []).filter(function matches(preset) {
+      return preset.modelSlug === clean;
+    })[0] || null;
   }
 
   function chatGPTModeModelFromSlug(apiSlug) {
@@ -277,6 +300,288 @@
     return info ? info.label : "";
   }
 
+  function sanitizePublicModelLabel(value) {
+    var clean = normalizeWhitespace(value)
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .replace(/[|]+$/g, "")
+      .trim()
+      .slice(0, 96);
+    if (!clean || /^(?:default|none|null|undefined|unknown(?: model)?)$/i.test(clean)) {
+      return "";
+    }
+    return clean;
+  }
+
+  function sanitizeRuntimeModelCatalog(catalog) {
+    var source = catalog && typeof catalog === "object" ? catalog : {};
+    var models = (Array.isArray(source.models) ? source.models : []).slice(0, 200).map(function cleanModel(model) {
+      var item = model && typeof model === "object" ? model : {};
+      var slug = normalizeSlug(item.slug || item.id || item.model);
+      if (!isChatGPTRouteSlug(slug)) {
+        return null;
+      }
+      return {
+        slug: slug,
+        title: sanitizePublicModelLabel(item.title || item.name || item.display_name),
+        reasoningType: normalizeWhitespace(item.reasoningType || item.reasoning_type).toLowerCase().slice(0, 32)
+      };
+    }).filter(Boolean);
+    var versions = (Array.isArray(source.versions) ? source.versions : []).slice(0, 120).map(function cleanVersion(version) {
+      var item = version && typeof version === "object" ? version : {};
+      var slugs = (Array.isArray(item.slugs) ? item.slugs : []).map(normalizeSlug).filter(isChatGPTRouteSlug).slice(0, 40);
+      var presets = (Array.isArray(item.intelligencePresets)
+        ? item.intelligencePresets
+        : Array.isArray(item.intelligence_presets)
+          ? item.intelligence_presets
+          : []).slice(0, 40).map(function cleanPreset(preset) {
+            var value = preset && typeof preset === "object" ? preset : {};
+            return {
+              title: sanitizePublicModelLabel(value.title),
+              selectedDisplayTitle: sanitizePublicModelLabel(value.selectedDisplayTitle || value.selected_display_title),
+              selectedDisplayVersion: sanitizePublicModelLabel(value.selectedDisplayVersion || value.selected_display_version),
+              modelSlug: isChatGPTRouteSlug(value.modelSlug || value.model_slug)
+                ? normalizeSlug(value.modelSlug || value.model_slug)
+                : "",
+              lane: normalizeWhitespace(value.lane).toLowerCase().slice(0, 32)
+            };
+          }).filter(function keepPreset(preset) {
+            return preset.modelSlug || preset.title || preset.selectedDisplayTitle;
+          });
+      if (!slugs.length && !presets.length) {
+        return null;
+      }
+      return {
+        id: sanitizePublicModelLabel(item.id),
+        displayText: sanitizePublicModelLabel(item.displayText || item.display_text),
+        displayTextForIntelligence: sanitizePublicModelLabel(item.displayTextForIntelligence || item.display_text_for_intelligence),
+        shortDisplayTextForIntelligence: sanitizePublicModelLabel(item.shortDisplayTextForIntelligence || item.short_display_text_for_intelligence),
+        slugs: slugs,
+        intelligencePresets: presets
+      };
+    }).filter(Boolean);
+    var categories = (Array.isArray(source.categories) ? source.categories : []).slice(0, 120).map(function cleanCategory(category) {
+      var item = category && typeof category === "object" ? category : {};
+      var defaultModel = normalizeSlug(item.defaultModel || item.default_model);
+      if (!isChatGPTRouteSlug(defaultModel)) {
+        defaultModel = "";
+      }
+      var supportedModels = (Array.isArray(item.supportedModels) ? item.supportedModels : Array.isArray(item.supported_models) ? item.supported_models : [])
+        .map(normalizeSlug)
+        .filter(isChatGPTRouteSlug)
+        .slice(0, 80);
+      if (!defaultModel && !supportedModels.length) {
+        return null;
+      }
+      return {
+        humanCategoryName: sanitizePublicModelLabel(item.humanCategoryName || item.human_category_name),
+        humanCategoryShortName: sanitizePublicModelLabel(item.humanCategoryShortName || item.human_category_short_name),
+        defaultModel: defaultModel,
+        supportedModels: supportedModels
+      };
+    }).filter(Boolean);
+    if (!models.length && !versions.length && !categories.length) {
+      return null;
+    }
+    return {
+      observedAt: normalizeWhitespace(source.observedAt || source.observed_at).slice(0, 48),
+      models: models,
+      versions: versions,
+      categories: categories
+    };
+  }
+
+  function runtimeModelBySlug(catalog, slug) {
+    var clean = normalizeSlug(slug);
+    return (catalog && catalog.models || []).filter(function matches(model) {
+      return model.slug === clean;
+    })[0] || null;
+  }
+
+  function runtimeVersionBySlug(catalog, slug) {
+    var clean = normalizeSlug(slug);
+    return (catalog && catalog.versions || []).filter(function matches(version) {
+      return version.slugs.indexOf(clean) >= 0 || version.intelligencePresets.some(function presetMatches(preset) {
+        return preset.modelSlug === clean;
+      });
+    })[0] || null;
+  }
+
+  function runtimeCategoryBySlug(catalog, slug) {
+    var clean = normalizeSlug(slug);
+    return (catalog && catalog.categories || []).filter(function matches(category) {
+      return category.defaultModel === clean || category.supportedModels.indexOf(clean) >= 0;
+    })[0] || null;
+  }
+
+  function runtimeBaseSlug(catalog, requestSlug) {
+    var clean = normalizeSlug(requestSlug);
+    if (runtimeModelBySlug(catalog, clean) || runtimeVersionBySlug(catalog, clean)) {
+      return clean;
+    }
+    var candidate = clean;
+    for (var i = 0; i < 3; i += 1) {
+      var match = candidate.match(EXECUTION_MODE_SUFFIX_RE);
+      if (!match) {
+        break;
+      }
+      candidate = candidate.slice(0, candidate.length - match[0].length);
+      if (runtimeModelBySlug(catalog, candidate) || runtimeVersionBySlug(catalog, candidate)) {
+        return candidate;
+      }
+    }
+    return clean;
+  }
+
+  function publicLabelsForRuntimeSlug(catalog, slug) {
+    var labels = [];
+    var seen = {};
+    function add(value) {
+      var label = sanitizePublicModelLabel(value);
+      var key = normalizeKey(label);
+      if (label && key && !seen[key]) {
+        seen[key] = true;
+        labels.push(label);
+      }
+    }
+    var model = runtimeModelBySlug(catalog, slug);
+    var version = runtimeVersionBySlug(catalog, slug);
+    var category = runtimeCategoryBySlug(catalog, slug);
+    if (model) add(model.title);
+    if (version) {
+      add(version.displayTextForIntelligence);
+      add(version.shortDisplayTextForIntelligence);
+    }
+    if (category) {
+      add(category.humanCategoryName);
+      add(category.humanCategoryShortName);
+    }
+    return labels;
+  }
+
+  function selectedPublicModelFromText(text, runtimeCatalog) {
+    var catalog = sanitizeRuntimeModelCatalog(runtimeCatalog);
+    var clean = normalizeWhitespace(text);
+    if (!catalog || !clean) {
+      return "";
+    }
+    var cleanKey = normalizeKey(clean);
+    var labels = [];
+    catalog.models.forEach(function addModel(model) {
+      if (model.title) labels.push(model.title);
+    });
+    catalog.versions.forEach(function addVersion(version) {
+      if (version.displayTextForIntelligence) labels.push(version.displayTextForIntelligence);
+      if (version.shortDisplayTextForIntelligence) labels.push(version.shortDisplayTextForIntelligence);
+    });
+    labels.sort(function longestFirst(left, right) { return right.length - left.length; });
+    for (var i = 0; i < labels.length; i += 1) {
+      var label = labels[i];
+      var key = normalizeKey(label);
+      if (key && (cleanKey === key || cleanKey.indexOf(key) >= 0 || key.indexOf(cleanKey) >= 0)) {
+        return label;
+      }
+    }
+    for (var versionIndex = 0; versionIndex < catalog.versions.length; versionIndex += 1) {
+      var version = catalog.versions[versionIndex];
+      var versionId = normalizeWhitespace(version.id);
+      if (!versionId || clean.toLowerCase().indexOf(versionId.toLowerCase()) < 0) {
+        continue;
+      }
+      if (/(?:thinking|reasoning|extra\s*high|xhigh|\bhigh\b|\bmedium\b|\blow\b|pro)/i.test(clean) && version.displayTextForIntelligence) {
+        return version.displayTextForIntelligence;
+      }
+      var baseSlug = version.slugs[0] || (version.intelligencePresets[0] && version.intelligencePresets[0].modelSlug);
+      var model = runtimeModelBySlug(catalog, baseSlug);
+      if (model && model.title) {
+        return model.title;
+      }
+    }
+    return "";
+  }
+
+  function resolveRuntimePublicModelInfo(runtimeCatalog, requestModel, options) {
+    var catalog = sanitizeRuntimeModelCatalog(runtimeCatalog);
+    var requestSlug = normalizeSlug(requestModel);
+    if (!isChatGPTRouteSlug(requestSlug)) {
+      return null;
+    }
+    var settings = options && typeof options === "object" ? options : {};
+    var selected = sanitizePublicModelLabel(settings.selectedPublicModel) ||
+      selectedPublicModelFromText(settings.selectedText, catalog);
+    var baseSlug = catalog ? runtimeBaseSlug(catalog, requestSlug) : requestSlug;
+    var model = catalog ? runtimeModelBySlug(catalog, baseSlug) : null;
+    var version = catalog ? runtimeVersionBySlug(catalog, baseSlug) : null;
+    var mode = inferMode(requestSlug);
+    var label = "";
+    var source = "";
+    var expectedLabel = "";
+
+    var versionPreset = versionPresetForSlug(version, baseSlug);
+
+    // ChatGPT exposes "Model" and "Effort" as separate picker fields. The live
+    // account catalog can intentionally expose the same internal base slug in
+    // two layers:
+    //   models[].title                       -> fallback/base model name
+    //   versions[].displayTextForIntelligence -> currently selectable model
+    //
+    // A version intelligence_preset is the account's explicit binding from an
+    // exact request slug (including the Instant lane) to that selectable
+    // public model. It therefore outranks models[].title. Without this rule a
+    // paid account selecting "GPT-5.6 Sol / Instant" is falsely recorded as
+    // "GPT-5.6 Luna" merely because both layers share gpt-5-6.
+    //
+    // -thinking and -pro are also intelligence routes after their suffix is
+    // reduced to the version's base slug. Unknown/unbound slugs stay exact.
+    if (
+      version &&
+      version.displayTextForIntelligence &&
+      (usesIntelligenceModel(mode) || versionPreset)
+    ) {
+      expectedLabel = version.displayTextForIntelligence;
+      label = expectedLabel;
+      source = usesIntelligenceModel(mode)
+        ? "account-catalog:version-intelligence"
+        : "account-catalog:version-preset";
+    } else if (model && model.title) {
+      expectedLabel = model.title;
+      label = expectedLabel;
+      source = "account-catalog:model-title";
+    }
+
+    if (selected && catalog) {
+      var selectedKey = normalizeKey(selected);
+      var selectedIsCatalogLabel = publicLabelsForRuntimeSlug(catalog, baseSlug)
+        .map(normalizeKey)
+        .indexOf(selectedKey) >= 0;
+      var selectedMatchesExpected = expectedLabel && (
+        selectedKey === normalizeKey(expectedLabel) ||
+        (
+          usesIntelligenceModel(mode) &&
+          version &&
+          selectedKey === normalizeKey(version.shortDisplayTextForIntelligence)
+        )
+      );
+      if (selectedIsCatalogLabel && (!expectedLabel || selectedMatchesExpected)) {
+        label = expectedLabel || selected;
+        source = "selector+account-catalog";
+      }
+    }
+    if (!label) {
+      label = requestSlug;
+      source = "unmapped-request-slug";
+    }
+
+    return {
+      publicModel: sanitizePublicModelLabel(label) || requestSlug,
+      requestModel: requestSlug,
+      baseModel: baseSlug,
+      mode: mode,
+      mappingStatus: /^unmapped/.test(source) ? "unmapped" : "mapped",
+      source: source,
+      catalogObservedAt: catalog ? catalog.observedAt : ""
+    };
+  }
+
   return {
     MODELS: [],
     REASONING_EFFORTS: REASONING_EFFORTS.slice(0),
@@ -292,8 +597,14 @@
     isFeatureNamedSlug: isFeatureNamedSlug,
     isModelSlug: isModelSlug,
     isRequestModelSlug: isRequestModelSlug,
+    isChatGPTRouteSlug: isChatGPTRouteSlug,
     resolveModelInfo: resolveModelInfo,
     resolveModelLabel: resolveModelLabel,
-    resolveRequestModelInfo: resolveRequestModelInfo
+    resolveRequestModelInfo: resolveRequestModelInfo,
+    resolveRuntimePublicModelInfo: resolveRuntimePublicModelInfo,
+    usesIntelligenceModel: usesIntelligenceModel,
+    sanitizePublicModelLabel: sanitizePublicModelLabel,
+    sanitizeRuntimeModelCatalog: sanitizeRuntimeModelCatalog,
+    selectedPublicModelFromText: selectedPublicModelFromText
   };
 });

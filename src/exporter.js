@@ -2137,10 +2137,9 @@
       });
     });
 
-    // 推广页脚:分隔线 + 简要介绍 + GitHub 链接。
+    // 推广页脚保持为一条紧凑尾注，避免短对话仅因宣传文字产生空白尾页。
     paragraphs.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="E6E9EF"/></w:pBdr></w:pPr></w:p>');
-    paragraphs.push(paragraph(EXPORT_PROMO_NAME + " — " + EXPORT_PROMO_DESC, "Footnote"));
-    paragraphs.push(paragraph("GitHub · " + EXPORT_PROMO_URL, "Footnote"));
+    paragraphs.push(paragraph(EXPORT_PROMO_NAME + " · " + EXPORT_PROMO_URL, "PromoFooter"));
 
     var documentXml =
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -2201,6 +2200,7 @@
           '<w:style w:type="paragraph" w:styleId="SpeakerBot"><w:name w:val="Speaker Bot"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:keepNext/><w:spacing w:before="260" w:after="60"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:b/><w:sz w:val="23"/><w:color w:val="2A2E3A"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="MsgBody"><w:name w:val="Message Body"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:line="330" w:lineRule="auto" w:after="120"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:sz w:val="22"/><w:color w:val="1F2228"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Footnote"><w:name w:val="Footnote"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="20" w:after="120"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:i/><w:sz w:val="16"/><w:color w:val="76808F"/></w:rPr></w:style>' +
+          '<w:style w:type="paragraph" w:styleId="PromoFooter"><w:name w:val="Promo Footer"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="20" w:after="0"/></w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Microsoft YaHei"/><w:i/><w:sz w:val="16"/><w:color w:val="76808F"/></w:rPr></w:style>' +
           "</w:styles>"
       },
       {
@@ -3294,7 +3294,7 @@
     return { doc: doc, width: width, height: totalH, ops: ops };
   }
 
-  function paintConversationCanvas(layout, startY, pageHeight) {
+  function paintConversationCanvas(layout, startY, pageHeight, forcedDpr) {
     var width = layout.width;
     var sliceStart = Math.max(0, Math.floor(startY || 0));
     var sliceHeight = Math.max(1, Math.ceil(pageHeight || layout.height));
@@ -3302,7 +3302,10 @@
     // 860×14000 canvas at DPR 2 consumes about 184 MiB before PNG encoding,
     // which can crash the popup on long conversations.
     var doubledBytes = width * sliceHeight * 4 * 4;
-    var DPR = (sliceHeight * 2) <= 30000 && doubledBytes <= (96 * 1024 * 1024) ? 2 : 1;
+    var requestedDpr = Number(forcedDpr);
+    var DPR = requestedDpr === 1 || requestedDpr === 2
+      ? requestedDpr
+      : (sliceHeight * 2) <= 30000 && doubledBytes <= (96 * 1024 * 1024) ? 2 : 1;
     var doc = layout.doc;
     var canvas = doc.createElement("canvas");
     canvas.width = width * DPR;
@@ -3427,6 +3430,120 @@
         }
         resolve(dataUrlToUint8Blob(canvas.toDataURL("image/png"), PNG_MIME));
       } catch (e) { reject(e); }
+    });
+  }
+
+  function canvasRgbaScanlines(canvas) {
+    var context = canvas.getContext("2d");
+    var width = canvas.width;
+    var height = canvas.height;
+    var rgba = context.getImageData(0, 0, width, height).data;
+    var rowLength = width * 4 + 1;
+    var scanlines = new Uint8Array(rowLength * height);
+    for (var row = 0; row < height; row += 1) {
+      var sourceStart = row * width * 4;
+      var targetStart = row * rowLength;
+      scanlines[targetStart] = 0;
+      scanlines.set(rgba.subarray(sourceStart, sourceStart + width * 4), targetStart + 1);
+    }
+    return scanlines;
+  }
+
+  function pngBytesFromCompressedParts(width, height, compressedParts, metadataText) {
+    var header = [];
+    writeBigUint32(header, width);
+    writeBigUint32(header, height);
+    header.push(8, 6, 0, 0, 0);
+    var parts = [
+      PNG_SIGNATURE,
+      pngChunk("IHDR", new Uint8Array(header))
+    ];
+    (compressedParts || []).forEach(function addCompressedPart(part) {
+      if (part && part.length) {
+        parts.push(pngChunk("IDAT", part));
+      }
+    });
+    parts.push(pngChunk("IEND", new Uint8Array(0)));
+    return addPngExportTextChunks(concatBytes(parts), metadataText || "");
+  }
+
+  // One selected conversation must produce one PNG file, even when the visual
+  // transcript is taller than a safe browser canvas. Render bounded canvas
+  // slices, feed their scanlines into one streaming zlib stream, and assemble
+  // the resulting IDAT chunks into a single standards-compliant PNG.
+  function buildPngBlobFromConversations(conversations, options) {
+    options = options || {};
+    var layout = layoutConversationsCanvas(conversations, options);
+    var ranges = conversationCanvasPageRanges(layout, options.pageHeight || 14000);
+    var CompressionCtor = root.CompressionStream || (typeof CompressionStream !== "undefined" ? CompressionStream : null);
+    var metadataText = buildPlainTextLines(conversations, options).join("\n");
+
+    if (!CompressionCtor) {
+      if (layout.height > 30000) {
+        return Promise.reject(new Error("This Chrome version cannot create one complete PNG for a very long conversation."));
+      }
+      var fallbackCanvas = paintConversationCanvas(layout, 0, layout.height, 1);
+      return canvasToPngBlob(fallbackCanvas).then(function addFallbackMetadata(blob) {
+        return blobToUint8Array(blob).then(function withMetadata(bytes) {
+          releaseCanvas(fallbackCanvas);
+          return new Blob([addPngExportTextChunks(bytes, metadataText)], { type: PNG_MIME });
+        });
+      }, function fallbackFailed(error) {
+        releaseCanvas(fallbackCanvas);
+        throw error;
+      });
+    }
+
+    var compression = new CompressionCtor("deflate");
+    var writer = compression.writable.getWriter();
+    var reader = compression.readable.getReader();
+    var compressedParts = [];
+
+    function readCompressed() {
+      return reader.read().then(function consume(result) {
+        if (result.done) {
+          return;
+        }
+        compressedParts.push(result.value instanceof Uint8Array ? result.value : new Uint8Array(result.value));
+        return readCompressed();
+      });
+    }
+
+    var readPromise = readCompressed();
+
+    function renderAndWrite(index) {
+      if (index >= ranges.length) {
+        return writer.close();
+      }
+      var range = ranges[index];
+      // A fixed DPR keeps every slice at the same pixel width so their rows
+      // form one continuous PNG image.
+      var canvas = paintConversationCanvas(layout, range.start, range.height, 1);
+      var scanlines;
+      try {
+        scanlines = canvasRgbaScanlines(canvas);
+      } finally {
+        releaseCanvas(canvas);
+      }
+      return writer.write(scanlines).then(function nextSlice() {
+        return renderAndWrite(index + 1);
+      });
+    }
+
+    return renderAndWrite(0).then(function finishCompression() {
+      return readPromise;
+    }).then(function assemblePng() {
+      var bytes = pngBytesFromCompressedParts(
+        layout.width,
+        Math.ceil(layout.height),
+        compressedParts,
+        metadataText
+      );
+      return new Blob([bytes], { type: PNG_MIME });
+    }).catch(function abortStreams(error) {
+      try { writer.abort(error); } catch (_) {}
+      try { reader.cancel(error); } catch (_) {}
+      throw error;
     });
   }
 
@@ -3589,6 +3706,7 @@
     buildPdfBlobFromCanvas: buildPdfBlobFromCanvas,
     buildPdfBlobFromCanvases: buildPdfBlobFromCanvases,
     buildPdfBlobFromConversations: buildPdfBlobFromConversations,
+    buildPngBlobFromConversations: buildPngBlobFromConversations,
     buildDocxBytes: buildDocxBytes,
     collectConversationFromDom: collectConversationFromDom,
     buildHtml: buildHtml,

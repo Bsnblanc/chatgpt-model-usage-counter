@@ -65,6 +65,21 @@
     return result.label ? result : null;
   }
 
+  function publicModelLabelFromVisibleText(text) {
+    var clean = normalizeWhitespace(text)
+      .replace(/^(?:current model|selected model|active model|model selector|model switcher|switch model|当前模型|目前模型|模型)\s*[:：-]?\s*/i, "")
+      .replace(/\s+(?:model[-\s]?switcher(?:[-\s]?dropdown)?(?:[-\s]?button)?|dropdown[-\s]?button|menu[-\s]?button)\b.*$/i, "")
+      .trim();
+    if (!/^(?:(?:GPT|ChatGPT)[-\s]?(?:\d+(?:\.\d+)*|4o)|o\d+)(?:$|[-\s])/i.test(clean)) {
+      return "";
+    }
+    clean = clean.replace(/^ChatGPT/i, "GPT").replace(/^gpt/i, "GPT");
+    if (modelCatalog && typeof modelCatalog.sanitizePublicModelLabel === "function") {
+      return modelCatalog.sanitizePublicModelLabel(clean);
+    }
+    return clean.slice(0, MAX_LABEL_LENGTH);
+  }
+
   function canonicalizeModelName(rawLabel) {
     if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
       var catalogInfo = modelCatalog.resolveModelInfo(rawLabel);
@@ -219,6 +234,8 @@
         info = modelCatalog.resolveRequestModelInfo(candidate);
       }
       if (info && info.label) {
+        info.selectedText = candidate.slice(0, 160);
+        info.publicModel = publicModelLabelFromVisibleText(candidate);
         return info;
       }
     }

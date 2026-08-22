@@ -357,6 +357,15 @@ function createPanelDocument(options = {}) {
 function runPanelContentScript(document, options = {}) {
   const messages = [];
   const storageListeners = [];
+  const location = {
+    href: options.href || "https://chatgpt.com/c/test",
+    pathname: new URL(options.href || "https://chatgpt.com/c/test").pathname,
+    reload() {
+      if (typeof options.onReload === "function") {
+        options.onReload();
+      }
+    }
+  };
   const context = {
     window: {
       ChatGPTUsageDetector: detector,
@@ -367,7 +376,7 @@ function runPanelContentScript(document, options = {}) {
       }
     },
     document,
-    location: { href: "https://chatgpt.com/c/test" },
+    location,
     chrome: {
       runtime: {
         lastError: null,
@@ -575,6 +584,70 @@ test("usage panel proactively flags context loss after the extension is reloaded
   assert.match(toggle.title, /刷新本页/);
 });
 
+test("usage panel observes the document root and re-mounts after a non-conversation SPA route replaces main content", () => {
+  const document = createPanelDocument({ titleBar: true });
+  let intervalCb = null;
+  let observedRoot = null;
+  const { context } = runPanelContentScript(document, {
+    setInterval(fn) { intervalCb = fn; return 1; },
+    getComputedStyle() { return { backgroundColor: "transparent" }; },
+    matchMedia() { return { matches: false, addEventListener() {}, addListener() {} }; },
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; }
+      observe(root) { observedRoot = root; }
+      disconnect() {}
+    }
+  });
+
+  const host = document.getElementById("chatgpt-model-usage-counter-panel-host");
+  const oldMain = document.main;
+  assert.equal(host.parentNode, document.titleBar);
+  assert.equal(observedRoot, document.documentElement);
+  assert.equal(typeof intervalCb, "function");
+
+  document.body.children = document.body.children.filter((child) => child !== oldMain);
+  oldMain.parentNode = null;
+  oldMain.parentElement = null;
+  document.main = new PanelTestElement({
+    tagName: "MAIN",
+    rect: { top: 0, left: 260, width: 1020, height: 900, right: 1280, bottom: 900 }
+  });
+  document.body.appendChild(document.main);
+  context.location.href = "https://chatgpt.com/library";
+  context.location.pathname = "/library";
+
+  intervalCb();
+
+  const mount = document.getElementById("chatgpt-model-usage-counter-panel-main-mount");
+  assert.ok(mount);
+  assert.equal(mount.parentNode, document.main);
+  assert.equal(host.parentNode, mount);
+  assert.equal(host.classList.contains("is-main-top"), true);
+});
+
+test("usage entry reloads the current page when its extension context is stale", () => {
+  const document = createPanelDocument({ titleBar: true });
+  let intervalCb = null;
+  let reloads = 0;
+  const { context } = runPanelContentScript(document, {
+    runtimeId: "ext-id-123",
+    setInterval(fn) { intervalCb = fn; return 1; },
+    onReload() { reloads += 1; },
+    getComputedStyle() { return { backgroundColor: "transparent" }; },
+    matchMedia() { return { matches: false, addEventListener() {}, addListener() {} }; },
+    MutationObserver: class { observe() {} disconnect() {} }
+  });
+
+  const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
+  const panel = document.getElementById("chatgpt-model-usage-counter-panel");
+  context.chrome.runtime.id = undefined;
+  intervalCb();
+  toggle.listeners.click();
+
+  assert.equal(reloads, 1);
+  assert.equal(panel.hidden, true);
+});
+
 test("usage panel creates a main top mount when ChatGPT has no explicit header", () => {
   const document = createPanelDocument();
   runPanelContentScript(document);
@@ -744,6 +817,10 @@ test("content script sends one usage.increment message for a send click", () => 
         return [modelButton];
       }
 
+      if (selector.includes("data-message-model-slug")) {
+        return elements.filter((element) => element.getAttribute("data-message-model-slug"));
+      }
+
       if (selector.includes("data-message-author-role")) {
         return elements.filter((element) => element.getAttribute("data-message-author-role"));
       }
@@ -768,7 +845,11 @@ test("content script sends one usage.increment message for a send click", () => 
         lastError: null,
         sendMessage(message, callback) {
           messages.push(message);
-          if (callback) callback({ ok: true });
+          if (callback) {
+            callback(message.type === "usage.increment"
+              ? { ok: true, recorded: true, event: { model: message.payload.model }, stats: { totals: {} } }
+              : { ok: true, updated: true });
+          }
         }
       }
     },
@@ -801,6 +882,7 @@ test("content script sends one usage.increment message for a send click", () => 
   assert.equal(usage[0].payload.modelObservedSource, "message-dom:dom");
   assert.equal(usage[0].payload.source, "send-button");
   assert.equal(usage[0].payload.promptLength, "Summarize this conversation.".length);
+  assert.match(usage[0].payload.submissionId, /^usage-/);
 
   elements.push(new FakeElement({
     tagName: "DIV",
@@ -809,6 +891,33 @@ test("content script sends one usage.increment message for a send click", () => 
   }));
   mutationCallback();
   assert.equal(usageMessages(messages).length, 1);
+
+  elements.push(
+    new FakeElement({
+      tagName: "DIV",
+      attributes: {
+        "data-message-author-role": "assistant",
+        "data-message-id": "assistant-reasoning",
+        "data-message-model-slug": "gpt-5-6-thinking"
+      }
+    }),
+    new FakeElement({
+      tagName: "DIV",
+      textContent: "Final answer",
+      attributes: {
+        "data-message-author-role": "assistant",
+        "data-message-id": "assistant-final",
+        "data-message-model-slug": "gpt-5-6-pro"
+      }
+    })
+  );
+  mutationCallback();
+
+  const responses = messages.filter((message) => message.type === "usage.response");
+  assert.equal(responses.length, 1, "reasoning and final assistant nodes reconcile one submission once");
+  assert.equal(responses[0].payload.submissionId, usage[0].payload.submissionId);
+  assert.equal(responses[0].payload.responseModel, "gpt-5-6-pro", "the content-bearing final response wins over a reasoning node");
+  assert.equal(responses[0].payload.conversationId, "");
 });
 
 test("content script counts an intentional repeated prompt outside the direct-event dedupe window", () => {
@@ -2005,4 +2114,198 @@ test("all export preserves rendered-page fallback warnings and stays incomplete"
   assert.equal(result.failures.length, 0);
   assert.deepEqual(Array.from(result.conversations, (conversation) => conversation.id), ["chat-0001"]);
   assert.equal(result.warnings.some((warning) => warning.scope === "rendered-page-fallback"), true);
+});
+
+test("account-history credentials stay in memory only and are released after 30 seconds idle", async () => {
+  const listeners = {};
+  const timers = new Map();
+  const clearedTimers = new Set();
+  const accountHeaders = [];
+  let nextTimerId = 0;
+  let sessionFetches = 0;
+
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: { getAttribute() { return null; }, setAttribute() {} },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
+      ChatGPTConversationSource: {
+        async listAccountConversations(options) {
+          await options.fetchImpl("https://chatgpt.com/backend-api/conversations?offset=0&limit=100");
+          return {
+            conversations: [{ id: "chat-0001", title: "One" }],
+            complete: true,
+            warnings: []
+          };
+        }
+      },
+      async fetch(url, options = {}) {
+        if (url === "/api/auth/session") {
+          sessionFetches += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              accessToken: `memory-token-${sessionFetches}`,
+              account: { id: "account-0001" }
+            })
+          };
+        }
+        const authorization = typeof options.headers?.get === "function"
+          ? options.headers.get("authorization")
+          : options.headers?.authorization;
+        accountHeaders.push(authorization);
+        return { ok: true, status: 200, json: async () => ({ items: [], total: 0 }) };
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/",
+      origin: "https://chatgpt.com",
+      pathname: "/"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
+        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
+      }
+    },
+    Headers,
+    Date,
+    Math,
+    String,
+    Number,
+    Promise,
+    setTimeout(fn, delay) {
+      nextTimerId += 1;
+      timers.set(nextTimerId, { fn, delay });
+      return nextTimerId;
+    },
+    clearTimeout(id) {
+      clearedTimers.add(id);
+      timers.delete(id);
+    }
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  await context.window.__chatgptUsageListConversations();
+  await context.window.__chatgptUsageListConversations();
+
+  assert.equal(sessionFetches, 1, "active user-triggered history reads reuse only the in-memory session");
+  assert.deepEqual(accountHeaders, ["Bearer memory-token-1", "Bearer memory-token-1"]);
+
+  const idleTimer = [...timers.entries()].find(([, timer]) => timer.delay === 30_000);
+  assert.ok(idleTimer, "the 30-second credential release timer is scheduled");
+  timers.delete(idleTimer[0]);
+  idleTimer[1].fn();
+
+  await context.window.__chatgptUsageListConversations();
+  assert.equal(sessionFetches, 2, "the next history read reloads authorization after idle release");
+  assert.equal(accountHeaders.at(-1), "Bearer memory-token-2");
+  assert.equal(
+    Object.values(context).some((value) => String(value).includes("memory-token-")),
+    false,
+    "credentials are not exposed through the page-level test context"
+  );
+});
+
+test("every 401 or 403 clears account-history credentials and the first failure retries once", async () => {
+  const listeners = {};
+  let sessionFetches = 0;
+  let historyFetches = 0;
+  const accountHeaders = [];
+  const historyStatuses = [401, 403, 200];
+
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: { getAttribute() { return null; }, setAttribute() {} },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
+      ChatGPTConversationSource: {
+        async listAccountConversations(options) {
+          await options.fetchImpl("https://chatgpt.com/backend-api/conversations?offset=0&limit=100");
+          return {
+            conversations: [{ id: "chat-0001", title: "One" }],
+            complete: true,
+            warnings: []
+          };
+        }
+      },
+      async fetch(url, options = {}) {
+        if (url === "/api/auth/session") {
+          sessionFetches += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              accessToken: `refresh-token-${sessionFetches}`,
+              account: { id: "account-0001" }
+            })
+          };
+        }
+        historyFetches += 1;
+        const authorization = typeof options.headers?.get === "function"
+          ? options.headers.get("authorization")
+          : options.headers?.authorization;
+        accountHeaders.push(authorization);
+        const status = historyStatuses.shift() ?? 200;
+        return { ok: status === 200, status, json: async () => ({ items: [], total: 0 }) };
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/",
+      origin: "https://chatgpt.com",
+      pathname: "/"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
+        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
+      }
+    },
+    Headers,
+    Date,
+    Math,
+    String,
+    Number,
+    Promise,
+    setTimeout() { return 1; },
+    clearTimeout() {}
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  await context.window.__chatgptUsageListConversations();
+  assert.equal(historyFetches, 2, "the first authorization failure retries exactly once");
+  assert.equal(sessionFetches, 2);
+  assert.deepEqual(accountHeaders, ["Bearer refresh-token-1", "Bearer refresh-token-2"]);
+
+  await context.window.__chatgptUsageListConversations();
+  assert.equal(
+    sessionFetches,
+    3,
+    "a repeated 403 also clears the refreshed credential before the next user action"
+  );
+  assert.equal(historyFetches, 3);
+  assert.equal(accountHeaders.at(-1), "Bearer refresh-token-3");
 });

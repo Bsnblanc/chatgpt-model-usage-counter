@@ -4,9 +4,9 @@
 
 <img src="store-assets/promotional/marquee-1400x560.png" alt="ChatGPT Model Usage Counter" width="820" />
 
-**本地统计你的 ChatGPT 模型用量，并把当前、选中或全部对话导出为 JSON / Markdown / PDF / Word / PNG。**
+**按 ChatGPT 公开模型和日期本地统计用量，并从对话列表中勾选一个或多个导出为 JSON / Markdown / PDF / Word / PNG。**
 
-**Count ChatGPT usage by exact model and date, then export the current, selected, or complete account history to JSON / Markdown / PDF / Word / PNG.**
+**Count ChatGPT usage by public model and date, then select one or more conversations to export as JSON / Markdown / PDF / Word / PNG.**
 
 [中文说明](#-中文) · [English](#-english) · [下载 / Download](https://github.com/Bsnblanc/chatgpt-model-usage-counter/releases)
 
@@ -22,7 +22,7 @@
 
 <p align="center">
   <img src="store-assets/screenshots/01-model-statistics-1280x800.png" alt="Exact model statistics and daily chart" width="49%" />
-  <img src="store-assets/screenshots/02-export-scopes-formats-1280x800.png" alt="Current, Selected, and All export scopes with five formats" width="49%" />
+  <img src="store-assets/screenshots/02-select-chats-formats-1280x800.png" alt="Conversation checklist with multi-select and five export formats" width="49%" />
 </p>
 
 <p align="center">
@@ -39,12 +39,16 @@
 
 | 功能 | 说明 |
 |---|---|
-| **按模型统计** | 以当前请求中的精确模型 slug 为准；支持新出现的版本化 GPT 标签和未来合法模型 slug，无需等待硬编码清单更新 |
+| **按实际回复统计** | 每次提交只计一次；最终助手消息的实际 `model_slug` 决定精确调用型号，请求路由和用户所选公开模型分别保留 |
+| **正确公开名称** | 公开名称由实际回复 slug、当前账号实时模型目录中的版本/预设绑定和提交时选择共同确定；共享 slug 不再只看 `models[].title` 而误归类 |
+| **新模型兼容** | 尚未映射的新回复 slug 原样保留并标记，不猜测、不并入旧模型；新出现且已有计数的模型默认勾选显示，用户主动取消的旧模型保持取消 |
 | **折线对比** | 多模型每日用量折线图,图例可多选 |
-| **模型详情** | 展开任一模型,看请求参数、功能标签和相关对话索引 |
-| **服务状态** | ChatGPT 网页相关的 OpenAI 公共服务状态(来自 `status.openai.com`) |
-| **导出对话** | 选择**当前 / 选中 / 全部**范围并导出为 **JSON / Markdown / PDF / Word / PNG**；多条对话打包成一个 ZIP，每段对话一个清晰命名的文件 |
-| **可读排版** | PDF / Word / PNG 渲染标题、加粗、列表、表格、代码块和中英文；超长 PNG 自动拆成编号图片并装入 ZIP，避免浏览器画布截断 |
+| **模型详情** | 展开任一模型,看实际回复型号、请求参数、功能标签和相关对话索引 |
+| **服务状态** | 合并 `status.openai.com` 的官方摘要和完整组件接口，显示全部相关 ChatGPT 网页条目，不任意截断 |
+| **导出对话** | 在包含普通、项目/工作区和归档记录的账号对话列表中自行勾选一个、多个或全选，再导出为 **JSON / Markdown / PDF / Word / PNG**；勾选时不重建列表或改变滚动位置 |
+| **单选与批量** | 单选直接下载一个文件；多选或全选下载一个 ZIP，每段对话一个独立文件并附完整性报告 |
+| **可读排版** | PDF / Word / PNG 渲染标题、加粗、列表、表格、代码块和中英文；超长 PDF 正确分页，超长 PNG 仍生成一张完整图片 |
+| **账号请求保护** | 对话正文只在用户点击导出后按已选项读取；详情请求最多 2 路并发并主动错峰，遇到限流遵守退避，长时间限流直接停止该项而不提前重试 |
 | **隐私优先** | 统计与设置只存 `chrome.storage.local`；导出文件在浏览器本地生成，不上传到发布者服务器 |
 
 ### 🚀 零基础部署(四步装好)
@@ -58,7 +62,7 @@
    1. 地址栏打开 `chrome://extensions/`;
    2. 打开右上角 **开发者模式 / Developer mode**;
    3. 点 **加载已解压的扩展程序 / Load unpacked**,选刚解压出来的**文件夹**(里面要有 `manifest.json`)。
-4. **开始用** —— 回到已登录的 <https://chatgpt.com/> 页面并**刷新**,从页面内入口或浏览器工具栏的插件图标打开统计面板。
+4. **开始用** —— 回到已登录的 <https://chatgpt.com/> 页面并**刷新**,从任一受支持 ChatGPT 页面右上角入口或浏览器工具栏的插件图标打开统计面板。
 
 > 💡 第一次建议先从工具栏插件图标打开,确认扩展已加载;然后提交一条新消息、回面板点刷新,模型次数就开始记录。已经开了很久的标签页记得先刷新一次。
 
@@ -67,12 +71,17 @@
 ### 🔒 隐私
 
 - 统计与设置只存在当前 Chrome 配置的 `chrome.storage.local`。
-- 记录可能包含:模型名、请求参数、功能标签、时间、页面标题 / URL、对话 ID、prompt 长度、prompt 哈希。
+- 记录可能包含:公开模型名、用户所选公开模型、请求型号、实际回复型号、请求参数、功能标签、时间、页面标题 / URL、对话 ID、prompt 长度和 prompt 哈希。
 - **不存**:prompt 原文、回答原文、密码、Cookie、Authorization header、访问令牌。
-- 进入导出页后，扩展会从当前已登录的 ChatGPT 同源会话读取对话索引（ID、标题和时间），用于“选中 / 全部”范围。
-- 点击格式按钮后，扩展才读取相应对话正文。它调用 ChatGPT 同源账号历史接口并自动使用当前登录会话；不读取 Cookie、Authorization header 或访问令牌。接口不可用时回退到当前页面和已加载侧边栏，并明确标记结果不完整。
-- 单个对话直接下载；多个或全部对话下载一个 ZIP，内含每段对话的独立文件和 `_export-report.json` 完整性报告。
-- 状态视图只请求 `status.openai.com` 的公开数据。
+- 主统计先读取请求路由作为待定值；最终助手回复出现后，用其消息元数据中的实际回复型号原地更正，不增加第二次计数。推理节点不得覆盖最终回复节点，回答正文自称的模型永不作为统计证据。
+- ChatGPT 公开模型名称来自当前登录账号的同源模型目录。目录中的 `versions[].intelligence_presets` 是内部 slug 与当前可选公开模型的明确绑定，优先于可能同 slug 的回退 `models[].title`。例如当前付费账号把 `gpt-5-6` 的 Instant 预设绑定到 GPT-5.6 Sol 时，必须统计为 Sol；没有该版本绑定的账号才按自身模型标题处理。
+- 扩展通过同源只读的 `/backend-api/models` 取得该目录，只保存一份清理后的模型 slug、公开标题、版本/预设绑定和分类名称；不会把完整账号响应、账号 ID 或令牌重复写入每条统计事件。
+- `selectedPublicModel`、请求型号和实际回复型号始终分别保留；界面未直接显示 Model 时，只在精确请求路由与实时账号目录能够唯一确定时补回所选公开模型。
+- 进入导出页后，扩展会从当前已登录的 ChatGPT 同源会话分页读取对话索引（ID、标题、时间和归档状态）；请求不添加会排除星标或项目/工作区对话的筛选参数，并为每段可用对话显示复选框。
+- 点击格式按钮后，扩展只读取用户已勾选的对话正文。它调用 ChatGPT 同源账号历史接口；所需账号令牌只在内容脚本内存中临时使用，连续 30 秒没有账号历史请求后即释放，不持久化、不记录、不导出，也不发送到 ChatGPT 之外。接口不可用时回退到当前页面和已加载侧边栏，并明确标记结果不完整。
+- 对话详情最多 2 路并发并设置请求间隔；收到 `429` 或 `Retry-After` 时统一退避。服务端要求等待超过 60 秒时停止该项并报告失败，不会提前重试、绕过限流或在后台扫描正文。
+- 单个对话直接下载；多个已选对话下载一个 ZIP，内含每段对话的独立文件和 `_export-report.json` 完整性报告。
+- 状态视图只请求 `status.openai.com` 的公开 `summary.json` 和 `components.json`。组件完整接口可用时显示全部匹配条目；只有摘要可用时明确提示当前列表不完整。
 
 完整用户指南见 [USAGE.md](./USAGE.md),隐私政策见 [PRIVACY.md](./PRIVACY.md)。
 
@@ -88,12 +97,16 @@ Records your ChatGPT usage **locally**, in your current Chrome profile. It count
 
 | Feature | What it does |
 |---|---|
-| **Per-model stats** | Uses the exact model slug in the current request; accepts new versioned GPT labels and valid future model slugs without a hardcoded inventory |
+| **Actual-response stats** | Each submission counts once; the final assistant message's `model_slug` determines the exact response model, while request route and selected public model remain separate |
+| **Correct public names** | Public names combine the final response slug, live account version/preset bindings, and the submit-time selection; a shared slug is never classified from `models[].title` alone |
+| **Future-model support** | An unmapped new response slug stays exact and marked unmapped instead of being guessed or merged; newly counted models are selected by default while models the user cleared stay cleared |
 | **Compare models** | Daily usage line chart with a multi-select legend |
-| **Model details** | Expand any model for request parameters, feature tags, and a conversation index |
-| **Service status** | ChatGPT-web-related OpenAI public status from `status.openai.com` |
-| **Export chats** | Choose **Current / Selected / All** and export to **JSON / Markdown / PDF / Word / PNG**; multiple chats become one ZIP with one clearly named file per conversation |
-| **Readable layout** | PDF / Word / PNG render headings, bold, lists, tables, code blocks, CJK, and Latin; super-long PNG output is split into numbered images inside a ZIP instead of being clipped |
+| **Model details** | Expand any model for actual response slugs, request parameters, feature tags, and a conversation index |
+| **Service status** | Merges the official `status.openai.com` summary and complete component feeds, with no arbitrary component truncation |
+| **Export chats** | Tick one, several, or all conversations from the active, project/workspace, and archived account index, then export to **JSON / Markdown / PDF / Word / PNG**; checking an item does not rebuild or scroll the list |
+| **Single and batch** | One selected chat downloads as one file; multiple selected chats download as one ZIP with one independent file per conversation and an integrity report |
+| **Readable layout** | PDF / Word / PNG render headings, bold, lists, tables, code blocks, CJK, and Latin; long PDFs paginate correctly and a long PNG remains one complete image |
+| **Account-request safeguards** | Conversation bodies are read only after an export click and only for checked items; detail reads use at most two paced workers, back off on rate limits, and stop rather than retrying before a long `Retry-After` expires |
 | **Privacy-first** | Statistics and settings live in `chrome.storage.local`; exports are generated in the browser and are never uploaded to a publisher server |
 
 ### 🚀 Zero-to-running in 4 steps
@@ -107,7 +120,7 @@ Records your ChatGPT usage **locally**, in your current Chrome profile. It count
    1. Open `chrome://extensions/`;
    2. Turn on **Developer mode** (top-right);
    3. Click **Load unpacked** and pick the **unzipped folder** (the one containing `manifest.json`).
-4. **Start using it** — open a logged-in <https://chatgpt.com/> tab and **refresh**, then open the panel from the in-page entry or the toolbar icon.
+4. **Start using it** — open a logged-in <https://chatgpt.com/> tab and **refresh**, then open the panel from the top-right entry on any supported ChatGPT page or from the toolbar icon.
 
 > 💡 First time, open it from the toolbar icon to confirm it loaded; submit a new message, refresh the panel, and counts start recording. Refresh long-open tabs once.
 
@@ -116,12 +129,16 @@ Supports `https://chatgpt.com/*` and keeps `https://chat.openai.com/*` compatibl
 ### 🔒 Privacy
 
 - Statistics and settings are stored locally in `chrome.storage.local` (current Chrome profile).
-- Records may include: model names, request parameters, feature tags, timestamps, page title / URL, conversation ID, prompt length, and a prompt hash.
+- Records may include: public model name, selected public model, request slug, actual response slug, request parameters, feature tags, timestamps, page title / URL, conversation ID, prompt length, and a prompt hash.
 - **Never stored**: raw prompts, raw responses, passwords, cookies, authorization headers, or access tokens.
-- Opening the export view reads the conversation index (IDs, titles, and timestamps) from the logged-in, same-origin ChatGPT session for the Selected and All scopes.
-- Clicking a format reads the requested conversation bodies. The extension uses ChatGPT same-origin account-history requests with the existing login session; it never reads cookies, authorization headers, or access tokens. If account-history retrieval fails, it falls back to the rendered page and loaded sidebar and marks the result incomplete.
-- One conversation downloads directly. Multiple or all conversations download as one ZIP containing one file per chat plus an `_export-report.json` integrity report.
-- The status view requests public data from `status.openai.com` only.
+- The request route is initially recorded as a provisional identity. When the final assistant answer appears, its metadata response slug reconciles the same event in place without adding another count. A reasoning node cannot override the final node, and a model claim in answer text is never evidence.
+- Public model names come from the signed-in account's same-origin model catalog. An explicit `versions[].intelligence_presets` binding outranks a fallback `models[].title` when both expose the same internal slug. The selected public model, request slug, and final response slug remain independently auditable.
+- The catalog comes from a read-only same-origin `/backend-api/models` request. Only one sanitized snapshot of model slugs, public titles, version/preset bindings, and category labels is stored; the full account response, account ID, and credentials are not copied into each usage event.
+- Opening the export view paginates the conversation index (IDs, titles, timestamps, and archive state) from the logged-in, same-origin ChatGPT session. It does not add filters that exclude starred or project/workspace chats, and renders one checkbox per available conversation.
+- Clicking a format reads only the checked conversation bodies. The extension uses ChatGPT same-origin account-history requests; the required account token is held only in content-script memory, released after 30 seconds without an account-history request, and never persisted, logged, exported, or sent outside ChatGPT. If account-history retrieval fails, it falls back to the rendered page and loaded sidebar and marks the result incomplete.
+- Conversation-detail reads use at most two paced workers. A `429` or `Retry-After` applies shared backoff; if the server asks for more than 60 seconds, that item stops with a reported failure instead of retrying early, bypassing limits, or scanning bodies in the background.
+- One checked conversation downloads directly. Multiple checked conversations download as one ZIP containing one file per chat plus an `_export-report.json` integrity report.
+- The status view requests only the public `summary.json` and `components.json` feeds from `status.openai.com`. It shows every matching component when the complete feed is available and explicitly warns when only the summary fallback is available.
 
 See [USAGE.md](./USAGE.md) for the full guide and [PRIVACY.md](./PRIVACY.md) for the privacy policy.
 

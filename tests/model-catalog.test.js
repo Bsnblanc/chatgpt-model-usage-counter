@@ -2,6 +2,39 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const catalog = require("../src/model-catalog");
 
+function runtimeCatalog() {
+  return {
+    observedAt: "2026-08-22T12:00:00.000Z",
+    models: [
+      { slug: "gpt-5-6", title: "GPT-5.6 Luna", reasoning_type: "auto" },
+      { slug: "gpt-5-6-mini", title: "GPT-5.6 Luna", reasoning_type: "none" },
+      { slug: "auto", title: "Auto", reasoning_type: "auto" }
+    ],
+    versions: [
+      {
+        id: "5.6",
+        display_text: "Latest • 5.6",
+        display_text_for_intelligence: "GPT-5.6 Sol",
+        short_display_text_for_intelligence: "5.6 Sol",
+        slugs: ["gpt-5-6"],
+        intelligence_presets: [
+          { title: "Instant", selected_display_title: "Instant", selected_display_version: "5.6", model_slug: "gpt-5-6", lane: "instant" }
+        ]
+      },
+      {
+        id: "auto",
+        display_text_for_intelligence: "Auto",
+        slugs: ["auto"],
+        intelligence_presets: []
+      }
+    ],
+    categories: [
+      { human_category_name: "Instant", human_category_short_name: "5.6 Luna", default_model: "gpt-5-6", supported_models: ["gpt-5-6"] },
+      { human_category_name: "Auto", default_model: "auto", supported_models: [] }
+    ]
+  };
+}
+
 test("catalog derives metadata from exact slugs without hardcoded model inventory", () => {
   const thinking = catalog.resolveModelInfo("future-family-2026-thinking");
   assert.equal(thinking.label, "future-family-2026-thinking");
@@ -215,4 +248,76 @@ test("catalog accepts unknown versioned slugs only with explicit model-field evi
     assert.equal(catalog.isRequestModelSlug(value), false, value);
     assert.equal(catalog.resolveRequestModelInfo(value), null, value);
   });
+});
+
+test("runtime account catalog separates the public model from internal execution slugs", () => {
+  const thinking = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "gpt-5-6-thinking");
+  const pro = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "gpt-5-6-pro");
+  const instant = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "gpt-5-6");
+
+  assert.equal(thinking.publicModel, "GPT-5.6 Sol");
+  assert.equal(thinking.requestModel, "gpt-5-6-thinking");
+  assert.equal(thinking.baseModel, "gpt-5-6");
+  assert.equal(thinking.mappingStatus, "mapped");
+  assert.equal(thinking.source, "account-catalog:version-intelligence");
+
+  assert.equal(pro.publicModel, "GPT-5.6 Sol");
+  assert.equal(pro.requestModel, "gpt-5-6-pro");
+  assert.equal(pro.mode, "pro");
+  assert.equal(pro.source, "account-catalog:version-intelligence");
+
+  assert.equal(instant.publicModel, "GPT-5.6 Sol");
+  assert.equal(instant.requestModel, "gpt-5-6");
+  assert.equal(instant.source, "account-catalog:version-preset");
+});
+
+test("live version bindings prevent stale selector or fallback titles from moving Sol into Luna", () => {
+  const pro = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "gpt-5-6-pro", {
+    selectedPublicModel: "GPT-5.6 Luna"
+  });
+  const instant = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "gpt-5-6", {
+    selectedPublicModel: "GPT-5.6 Sol"
+  });
+
+  assert.equal(pro.publicModel, "GPT-5.6 Sol");
+  assert.equal(pro.source, "account-catalog:version-intelligence");
+  assert.equal(instant.publicModel, "GPT-5.6 Sol");
+  assert.equal(instant.source, "selector+account-catalog");
+});
+
+test("accounts without an intelligence version still map the base slug to the account model title", () => {
+  const freeCatalog = runtimeCatalog();
+  freeCatalog.versions = freeCatalog.versions.filter((version) => version.id === "auto");
+  const luna = catalog.resolveRuntimePublicModelInfo(freeCatalog, "gpt-5-6");
+
+  assert.equal(luna.publicModel, "GPT-5.6 Luna");
+  assert.equal(luna.source, "account-catalog:model-title");
+});
+
+test("runtime account catalog keeps unknown future request slugs exact and marked unmapped", () => {
+  const info = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "future-family-2027-thinking", {
+    selectedPublicModel: "GPT-5.6 Sol"
+  });
+
+  assert.equal(info.publicModel, "future-family-2027-thinking");
+  assert.equal(info.requestModel, "future-family-2027-thinking");
+  assert.equal(info.mappingStatus, "unmapped");
+  assert.equal(info.source, "unmapped-request-slug");
+});
+
+test("Auto is accepted only as an exact ChatGPT route and maps through the live account catalog", () => {
+  assert.equal(catalog.resolveModelInfo("Auto"), null);
+  assert.equal(catalog.resolveRequestModelInfo("auto"), null);
+  assert.equal(catalog.isChatGPTRouteSlug("auto"), true);
+
+  const sanitized = catalog.sanitizeRuntimeModelCatalog(runtimeCatalog());
+  assert.equal(sanitized.models.find((model) => model.slug === "auto").title, "Auto");
+  assert.equal(sanitized.versions.find((version) => version.id === "auto").slugs[0], "auto");
+  assert.equal(sanitized.categories.find((category) => category.defaultModel === "auto").humanCategoryName, "Auto");
+
+  const info = catalog.resolveRuntimePublicModelInfo(sanitized, "auto");
+  assert.equal(info.publicModel, "Auto");
+  assert.equal(info.requestModel, "auto");
+  assert.equal(info.mappingStatus, "mapped");
+  assert.equal(info.source, "account-catalog:model-title");
 });

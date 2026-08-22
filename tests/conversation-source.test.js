@@ -79,7 +79,21 @@ test("account history pagination reads every active and archived page with same-
     assert.equal(call.options.method, "GET");
     assert.equal(call.options.headers.accept, "application/json");
     assert.equal(new URL(call.url).origin, "https://chatgpt.com");
+    assert.equal(new URL(call.url).searchParams.has("is_starred"), false);
+    assert.equal(new URL(call.url).searchParams.has("hide_snorlax"), false);
   });
+});
+
+test("account history URLs do not exclude starred or project conversations", () => {
+  const active = new URL(source.conversationListUrl("https://chatgpt.com", 0, 100, false, false));
+  const archived = new URL(source.conversationListUrl("https://chatgpt.com", 0, 100, true, false));
+
+  [active, archived].forEach((url) => {
+    assert.equal(url.searchParams.has("is_starred"), false);
+    assert.equal(url.searchParams.has("hide_snorlax"), false);
+  });
+  assert.equal(active.searchParams.get("is_archived"), "false");
+  assert.equal(archived.searchParams.get("is_archived"), "true");
 });
 
 test("archived-history failure keeps active conversations and marks the result incomplete", async () => {
@@ -151,6 +165,114 @@ test("conversation detail retries transient throttling before reporting a failur
   assert.equal(calls, 2);
   assert.equal(result.failures.length, 0);
   assert.deepEqual(result.conversations.map((conversation) => conversation.id), ["chat-0001"]);
+});
+
+test("conversation collection caps requested concurrency at two account requests", async () => {
+  let active = 0;
+  let peak = 0;
+  const ids = ["chat-0001", "chat-0002", "chat-0003", "chat-0004", "chat-0005"];
+  const result = await source.collectConversations(ids, {
+    exporter,
+    origin: "https://chatgpt.com",
+    concurrency: 8,
+    fetchImpl: async (url) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      const id = decodeURIComponent(new URL(url).pathname.split("/").pop());
+      return response(conversationPayload(id));
+    }
+  });
+
+  assert.equal(peak, 2);
+  assert.equal(result.failures.length, 0);
+  assert.deepEqual(result.conversations.map((conversation) => conversation.id), ids);
+});
+
+test("a long Retry-After stops the item instead of retrying before ChatGPT allows it", async () => {
+  let calls = 0;
+  const result = await source.collectConversations(["chat-0001"], {
+    exporter,
+    origin: "https://chatgpt.com",
+    fetchImpl: async () => {
+      calls += 1;
+      return {
+        ok: false,
+        status: 429,
+        headers: { get: () => "120" },
+        json: async () => ({})
+      };
+    }
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.conversations.length, 0);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0].error, /429/);
+});
+
+test("modern account conversation API paginates every older message page before export", async () => {
+  const calls = [];
+  const directMessage = (id, role, text, model = "") => ({
+    id,
+    author: { role },
+    create_time: Number(id.match(/\d+/)?.[0] || 0),
+    content: { content_type: "text", parts: [text] },
+    metadata: model ? { model_slug: model } : {}
+  });
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/messages")) {
+      assert.equal(parsed.searchParams.get("before"), "message-003");
+      return response({
+        messages: [
+          directMessage("message-001", "user", "Old question"),
+          directMessage("message-002", "assistant", "Old answer", "gpt-5-6-thinking")
+        ],
+        page_info: {
+          start_cursor: "message-001",
+          end_cursor: "message-002",
+          has_previous_page: false,
+          has_next_page: true
+        }
+      });
+    }
+    return response({
+      conversation_id: "modern-0001",
+      title: "Modern paginated conversation",
+      messages: [
+        directMessage("message-003", "user", "New question"),
+        directMessage("message-004", "assistant", "New answer", "gpt-5-6-pro")
+      ],
+      page_info: {
+        start_cursor: "message-003",
+        end_cursor: "message-004",
+        has_previous_page: true,
+        has_next_page: false
+      }
+    });
+  };
+
+  const result = await source.fetchConversationById("modern-0001", {
+    fetchImpl,
+    exporter,
+    origin: "https://chatgpt.com"
+  });
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], /\/backend-api\/conversations\/modern-0001\?/);
+  assert.match(calls[1], /\/backend-api\/conversations\/modern-0001\/messages\?/);
+  assert.deepEqual(
+    result.messages.map((message) => [message.id, message.model]),
+    [
+      ["message-001", ""],
+      ["message-002", "gpt-5-6-thinking"],
+      ["message-003", ""],
+      ["message-004", "gpt-5-6-pro"]
+    ]
+  );
 });
 
 test("conversation source rejects non-ChatGPT origins before making a request", async () => {

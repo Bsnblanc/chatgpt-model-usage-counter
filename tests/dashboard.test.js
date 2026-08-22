@@ -847,16 +847,24 @@ test("dashboard export view heading shows Export, not the stats title/subtitle",
     statusText: "",
     statusError: false,
     statusScope: "global",
-    exportConversationList: []
+    exportConversationList: [
+      { id: "chat-0001", title: "First chat", updateTime: "2026-05-30T15:00:00.000Z" },
+      { id: "chat-0002", title: "First chat", archived: true }
+    ],
+    exportSelected: {}
   };
 
   dashboard._test.render(state);
 
   // 导出页标题应是 Export,而不是统计页的 "Model usage" + "X total | N selected"(用户:导出界面标题不对)。
   assert.match(container.innerHTML, /<h2>Export<\/h2>/);
-  assert.match(container.innerHTML, /current, selected, or complete account history/);
-  assert.match(container.innerHTML, /data-export-scope="current"/);
-  assert.match(container.innerHTML, /data-export-format="json"/);
+  assert.match(container.innerHTML, /Choose one or more conversations from the list/);
+  assert.match(container.innerHTML, /data-export-conv="chat-0001"/);
+  assert.match(container.innerHTML, /data-export-conv="chat-0002"/);
+  assert.match(container.innerHTML, /Archived/);
+  assert.match(container.innerHTML, /One selection downloads one file/);
+  assert.doesNotMatch(container.innerHTML, /data-export-scope=/);
+  assert.match(container.innerHTML, /data-export-format="json" disabled/);
   assert.doesNotMatch(container.innerHTML, /\d+ total \| \d+ selected/);
 });
 
@@ -914,6 +922,28 @@ test("usage chart separates date ticks, axis label, and legend rows", () => {
   assert.ok(Number.isFinite(legendY), "legend label y position should be rendered");
   assert.ok(xAxisY - dateY >= 10, "x-axis label should not overlap date ticks");
   assert.ok(legendY - xAxisY >= 10, "legend row should not overlap x-axis label");
+});
+
+test("the default date range ends on the browser-local current day", () => {
+  const today = localDateKey();
+  const model = "future-family-current-day";
+  const data = dashboard.chartSeries(
+    {
+      totals: { [model]: 1 },
+      byDate: { [today]: { [model]: 1 } },
+      models: {},
+      sessionsByModel: {},
+      variantsByModel: {},
+      parametersByModel: {},
+      events: []
+    },
+    [model],
+    "",
+    ""
+  );
+
+  assert.equal(data.dates.at(-1), today);
+  assert.equal(data.series[0].values.at(-1), 1);
 });
 
 test("renderModelTextList keeps parameters and conversation index inside each exact model record", () => {
@@ -1153,12 +1183,144 @@ test("model rows keep today's count inside the selected date range", () => {
   assert.doesNotMatch(html, /Today 7/);
 });
 
-test("modelVariants returns exact request model counts", () => {
+test("modelVariants returns exact response model counts", () => {
   const variants = dashboard.modelVariants(createStats(), "future-family-2026-thinking");
 
   assert.equal(variants.length, 1);
   assert.equal(variants[0].name, "future-family-2026-thinking");
   assert.equal(variants[0].count, 2);
+});
+
+test("modelVariants uses responseModel instead of the requested route for actual response details", () => {
+  const stats = createStats();
+  stats.totals = { "GPT-5.6 Sol": 2 };
+  stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 2 } };
+  stats.models = {
+    "GPT-5.6 Sol": {
+      label: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-thinking"
+    }
+  };
+  stats.events = [
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-thinking",
+      modelMode: "pro",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-05-30T15:10:00.000Z"
+    },
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelMode: "thinking",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-05-30T15:00:00.000Z"
+    }
+  ];
+
+  const variants = dashboard.modelVariants(stats, "GPT-5.6 Sol");
+
+  assert.deepEqual(
+    variants.map((variant) => [variant.name, variant.count]),
+    [["gpt-5-6-pro", 1], ["gpt-5-6-thinking", 1]]
+  );
+  assert.equal(variants[0].apiModel, "gpt-5-6-pro");
+});
+
+test("request-only events remain pending and never appear as actual response models", () => {
+  const stats = createStats();
+  stats.totals = { "GPT-5.6 Sol": 2 };
+  stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 2 } };
+  stats.events = [
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-pro",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-05-30T15:10:00.000Z"
+    },
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-05-30T15:00:00.000Z"
+    }
+  ];
+
+  const variants = dashboard.modelVariants(stats, "GPT-5.6 Sol", 10, stats.events);
+  const requests = dashboard.modelRequestModels(stats, "GPT-5.6 Sol", 10, stats.events);
+  const html = dashboard.renderModelTextList(stats, {
+    language: "zh",
+    startDate: "2026-05-30",
+    endDate: "2026-05-30"
+  });
+
+  assert.deepEqual(variants.map((variant) => [variant.name, variant.count]), [["gpt-5-6-pro", 1]]);
+  assert.deepEqual(requests.map((request) => [request.name, request.count]), [["gpt-5-6-thinking", 2]]);
+  assert.match(html, /实际回复型号[\s\S]*gpt-5-6-pro/);
+  assert.match(html, /待确认实际回复/);
+  assert.match(html, /请求型号[\s\S]*gpt-5-6-thinking/);
+  assert.equal(
+    html.slice(html.indexOf("实际回复型号"), html.indexOf("请求型号")).includes("gpt-5-6-thinking"),
+    false
+  );
+});
+
+test("chart count details also separate actual response, request, and pending models", () => {
+  const stats = createStats();
+  stats.totals = { "GPT-5.6 Sol": 3 };
+  stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 3 } };
+  stats.events = [
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-05-30T15:20:00.000Z"
+    },
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6",
+      responseModel: "gpt-5-6",
+      modelParameters: { model: "gpt-5-6" },
+      submittedAt: "2026-05-30T15:10:00.000Z"
+    },
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-05-30T15:00:00.000Z"
+    }
+  ];
+
+  const html = dashboard.renderActiveView(
+    {
+      language: "zh",
+      activeView: "chart",
+      startDate: "2026-05-30",
+      endDate: "2026-05-30",
+      selectedModels: { "GPT-5.6 Sol": true },
+      stats
+    },
+    ["GPT-5.6 Sol"]
+  );
+
+  assert.match(html, /实际回复型号[\s\S]*gpt-5-6[\s\S]*gpt-5-6-thinking/);
+  assert.match(html, /待确认实际回复/);
+  assert.match(html, /请求型号[\s\S]*gpt-5-6-thinking[\s\S]*gpt-5-6/);
+  assert.equal(
+    html.slice(html.indexOf("实际回复型号"), html.indexOf("请求型号")).includes("待确认实际回复"),
+    true
+  );
 });
 
 test("parameterCombinations prefers stored aggregate when available", () => {
@@ -1347,6 +1509,125 @@ test("dashboard refreshes usage stats when local storage changes", async () => {
   assert.match(container.innerHTML, /future-family-2026-thinking/);
 });
 
+test("newly counted models become visible by default without reselecting a model the user cleared", () => {
+  const state = {
+    stats: {
+      totals: {
+        "future-family-2026-thinking": 2,
+        "future-family-2026-instant": 1
+      },
+      byDate: {},
+      models: {},
+      sessionsByModel: {},
+      variantsByModel: {},
+      parametersByModel: {},
+      events: []
+    },
+    selectedModels: {},
+    knownModels: {},
+    modelSelectionInitialized: false
+  };
+
+  dashboard._test.ensureSelection(state);
+  assert.equal(state.selectedModels["future-family-2026-thinking"], true);
+  assert.equal(state.selectedModels["future-family-2026-instant"], true);
+
+  state.selectedModels["future-family-2026-thinking"] = false;
+  state.stats.totals["future-family-2027-pro"] = 1;
+  dashboard._test.ensureSelection(state);
+
+  assert.equal(state.selectedModels["future-family-2026-thinking"], false);
+  assert.equal(state.selectedModels["future-family-2026-instant"], true);
+  assert.equal(state.selectedModels["future-family-2027-pro"], true);
+});
+
+test("dashboard refresh reloads the account conversation list in the export view", async () => {
+  const previousHandler = globalThis.ChatGPTUsageDashboardMessageHandler;
+  const previousList = globalThis.__chatgptUsageListConversations;
+  const previousChrome = globalThis.chrome;
+  const previousDocument = globalThis.document;
+  const container = new DashboardTestContainer();
+  let listRequestCount = 0;
+
+  globalThis.document = {
+    getElementById() {
+      return null;
+    },
+    createElement() {
+      return { id: "", textContent: "" };
+    },
+    head: {
+      appendChild() {}
+    }
+  };
+  globalThis.chrome = {
+    storage: {
+      onChanged: {
+        addListener() {}
+      }
+    }
+  };
+  globalThis.ChatGPTUsageDashboardMessageHandler = (message) => {
+    if (message.type === "usage.get") {
+      return { ok: true, stats: createStats() };
+    }
+    if (message.type === "settings.get") {
+      return { ok: true, settings: { language: "en", startDate: "2026-05-30", endDate: "2026-05-30" } };
+    }
+    return undefined;
+  };
+  globalThis.__chatgptUsageListConversations = () => {
+    listRequestCount += 1;
+    return {
+      conversations: listRequestCount === 1
+        ? [{ id: "chat-1", title: "First" }]
+        : [
+            { id: "chat-1", title: "First" },
+            { id: "chat-2", title: "Second" }
+          ],
+      complete: true,
+      source: "account"
+    };
+  };
+
+  try {
+    const instance = dashboard.init(container, { surface: "page" });
+    await flushDashboardPromises();
+
+    instance.state.activeView = "export";
+    await instance.reload();
+    assert.equal(listRequestCount, 1);
+    assert.deepEqual(instance.state.exportConversationList.map((conversation) => conversation.id), ["chat-1"]);
+
+    instance.state.exportSelected = { "chat-1": true };
+    await instance.reload();
+    assert.equal(listRequestCount, 2);
+    assert.deepEqual(instance.state.exportConversationList.map((conversation) => conversation.id), ["chat-1", "chat-2"]);
+    assert.deepEqual(instance.state.exportSelected, { "chat-1": true });
+  } finally {
+    if (typeof previousHandler === "undefined") {
+      delete globalThis.ChatGPTUsageDashboardMessageHandler;
+    } else {
+      globalThis.ChatGPTUsageDashboardMessageHandler = previousHandler;
+    }
+    if (typeof previousList === "undefined") {
+      delete globalThis.__chatgptUsageListConversations;
+    } else {
+      globalThis.__chatgptUsageListConversations = previousList;
+    }
+    if (typeof previousChrome === "undefined") {
+      delete globalThis.chrome;
+    } else {
+      globalThis.chrome = previousChrome;
+    }
+    if (typeof previousDocument === "undefined") {
+      delete globalThis.document;
+    } else {
+      globalThis.document = previousDocument;
+    }
+  }
+});
+
 test("dashboard refresh keeps parameter rows and in-range aggregate feature rows when range events are empty", async () => {
   const previousHandler = globalThis.ChatGPTUsageDashboardMessageHandler;
   const previousChrome = globalThis.chrome;
@@ -1498,35 +1779,114 @@ test("custom date controls render only inside the usage view", () => {
   assert.doesNotMatch(dashboard.renderActiveView(state, []), /usage-date-controls/);
 });
 
-test("exportTargetPlan separates selected ids from complete or incomplete all-history scope", async () => {
+test("exportTargetPlan follows the visible checkbox list and ignores unselected entries", async () => {
   const selected = await dashboard._test.exportTargetPlan({
-    exportScope: "selected",
+    language: "en",
+    exportConversationList: [
+      { id: "chat-0001", title: "One" },
+      { id: "chat-0002", title: "Two" },
+      { id: "chat-0003", title: "Three" }
+    ],
     exportSelected: { "chat-0001": true, "chat-0002": false, "chat-0003": true }
   });
   assert.deepEqual(selected.ids, ["chat-0001", "chat-0003"]);
   assert.equal(selected.complete, true);
+});
 
-  const all = await dashboard._test.exportTargetPlan({
-    exportScope: "all",
+test("export requires an explicit list selection and enables formats only after selection", async () => {
+  const state = {
+    language: "en",
+    activeView: "export",
     exportConversationList: [
       { id: "chat-0001", title: "One" },
       { id: "chat-0002", title: "Two" }
     ],
-    exportConversationMeta: {
-      complete: false,
-      warnings: [{ scope: "archived", error: "unavailable" }]
+    exportSelected: { "stale-not-listed": true }
+  };
+
+  const emptyHtml = dashboard.renderActiveView(state, []);
+  assert.match(emptyHtml, /data-export-format="json" disabled/);
+  await assert.rejects(
+    dashboard._test.exportTargetPlan(state),
+    /Select at least one conversation to export/
+  );
+
+  state.exportSelected["chat-0002"] = true;
+  const selectedHtml = dashboard.renderActiveView(state, []);
+  assert.match(selectedHtml, /1 selected/);
+  assert.doesNotMatch(selectedHtml, /data-export-format="json" disabled/);
+  assert.deepEqual((await dashboard._test.exportTargetPlan(state)).ids, ["chat-0002"]);
+});
+
+test("export checkbox changes update only existing controls without rebuilding or scrolling the view", () => {
+  const conversationOne = new DashboardTestElement({ "data-export-conv": "chat-0001" });
+  const conversationTwo = new DashboardTestElement({ "data-export-conv": "chat-0002" });
+  const count = new DashboardTestElement({ selector: ".usage-export-selcount" });
+  const format = new DashboardTestElement({ "data-export-format": "json", disabled: true });
+  const selectAll = new DashboardTestElement({ "data-export-selectall": "" });
+  const selectNone = new DashboardTestElement({ "data-export-selectnone": "" });
+  const nodes = [conversationOne, conversationTwo, count, format, selectAll, selectNone];
+  const originalHtml = "<section>keep-this-view-instance</section>";
+  const container = {
+    innerHTML: originalHtml,
+    scrollTop: 137,
+    querySelector(selector) {
+      if (selector === ".usage-export-selcount") return count;
+      if (selector === "[data-export-selectall]") return selectAll;
+      if (selector === "[data-export-selectnone]") return selectNone;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "[data-export-conv]") return [conversationOne, conversationTwo];
+      if (selector === "[data-export-format]") return [format];
+      if (selector === "[data-export-selectall],[data-export-selectnone]") return [selectAll, selectNone];
+      if (selector === "[data-view-tab]" || selector === "[data-model-toggle]") return [];
+      return nodes.filter((node) => node.getAttribute("selector") === selector);
     }
-  });
-  assert.deepEqual(all.ids, ["chat-0001", "chat-0002"]);
-  assert.equal(all.complete, false);
-  assert.equal(all.warnings.length, 1);
+  };
+  const state = {
+    language: "en",
+    container,
+    options: {},
+    exportConversationList: [
+      { id: "chat-0001", title: "One" },
+      { id: "chat-0002", title: "Two" }
+    ],
+    exportSelected: {},
+    exportBusy: false
+  };
+
+  dashboard._test.bindEvents(state);
+  conversationOne.checked = true;
+  conversationOne.dispatch("change");
+  assert.deepEqual(state.exportSelected, { "chat-0001": true });
+  assert.equal(count.textContent, "1 selected");
+  assert.equal(format.disabled, false);
+  assert.equal(container.innerHTML, originalHtml);
+  assert.equal(container.scrollTop, 137);
+
+  selectAll.dispatch("click");
+  assert.deepEqual(state.exportSelected, { "chat-0001": true, "chat-0002": true });
+  assert.equal(conversationOne.checked, true);
+  assert.equal(conversationTwo.checked, true);
+  assert.equal(count.textContent, "2 selected");
+  assert.equal(container.innerHTML, originalHtml);
+  assert.equal(container.scrollTop, 137);
+
+  selectNone.dispatch("click");
+  assert.deepEqual(state.exportSelected, {});
+  assert.equal(conversationOne.checked, false);
+  assert.equal(conversationTwo.checked, false);
+  assert.equal(count.textContent, "0 selected");
+  assert.equal(format.disabled, true);
+  assert.equal(container.innerHTML, originalHtml);
+  assert.equal(container.scrollTop, 137);
 });
 
 test("export view reports an unavailable account index instead of showing an unexplained empty list", () => {
   const html = dashboard.renderActiveView({
     language: "en",
     activeView: "export",
-    exportScope: "all",
     exportConversationList: [],
     exportConversationMeta: {
       complete: false,
@@ -1544,7 +1904,6 @@ test("export view reports account-read failure when the sidebar fallback is also
   const html = dashboard.renderActiveView({
     language: "en",
     activeView: "export",
-    exportScope: "all",
     exportConversationList: [],
     exportConversationMeta: {
       complete: false,
@@ -1577,7 +1936,6 @@ test("multi-conversation archive contains separate files and a machine-readable 
     }
   });
   const state = {
-    exportScope: "all",
     language: "en",
     container: { querySelector: () => null }
   };
@@ -1596,7 +1954,7 @@ test("multi-conversation archive contains separate files and a machine-readable 
   );
 
   assert.ok(downloaded);
-  assert.match(downloaded.filename, /^chatgpt-all-markdown-\d{4}-\d{2}-\d{2}\.zip$/);
+  assert.match(downloaded.filename, /^chatgpt-conversations-markdown-\d{4}-\d{2}-\d{2}\.zip$/);
   const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
   const entries = {};
   let offset = 0;
@@ -1629,7 +1987,6 @@ test("archive integrity report cannot be complete when collection warnings exist
     }
   });
   const state = {
-    exportScope: "selected",
     language: "en",
     options: { surface: "page" },
     container: { querySelector: () => null }
@@ -1693,7 +2050,6 @@ test("multi-conversation export keeps requested order and never archives an unre
     }
   });
   const state = {
-    exportScope: "selected",
     language: "en",
     options: { surface: "page" },
     container: { querySelector: () => null }
@@ -1732,41 +2088,39 @@ test("multi-conversation export keeps requested order and never archives an unre
   assert.doesNotMatch(buffer.toString("utf8"), /Secret|must not export|Duplicate|duplicate/);
 });
 
-test("multi-page PNG archive keeps part order when blob reads finish out of order", async () => {
+test("multi-conversation PNG archive keeps exactly one PNG per selected conversation", async () => {
   let downloaded = null;
   const previousCollector = globalThis.__chatgptUsageCollectMany;
   const previousDocument = globalThis.document;
   globalThis.document = { createElement() { return {}; } };
   globalThis.__chatgptUsageCollectMany = async () => ({
-    conversations: [{
-      id: "chat-paged",
-      title: "Paged",
-      messages: [{ id: "m1", role: "assistant", text: "long answer" }]
-    }],
+    conversations: [
+      {
+        id: "chat-paged",
+        title: "Paged",
+        messages: [{ id: "m1", role: "assistant", text: "long answer" }]
+      },
+      {
+        id: "chat-second",
+        title: "Second",
+        messages: [{ id: "m2", role: "assistant", text: "second answer" }]
+      }
+    ],
     failures: [],
-    requestedCount: 1,
+    requestedCount: 2,
     complete: true
   });
-  const delayedBlob = (byte, delay) => ({
-    arrayBuffer() {
-      return new Promise((resolve) => {
-        setTimeout(() => resolve(Uint8Array.from([byte]).buffer), delay);
-      });
-    }
-  });
+  let pngBuildCount = 0;
   const archiveExporter = Object.assign({}, exporter, {
-    renderConversationsPngBlobs() {
-      return Promise.resolve([
-        delayedBlob(1, 30),
-        delayedBlob(2, 0)
-      ]);
+    buildPngBlobFromConversations() {
+      pngBuildCount += 1;
+      return Promise.resolve(new Blob([Uint8Array.from([137, 80, 78, 71, pngBuildCount])], { type: "image/png" }));
     },
     downloadBlob(blob, filename) {
       downloaded = { blob, filename };
     }
   });
   const state = {
-    exportScope: "selected",
     language: "en",
     options: { surface: "page" },
     container: { querySelector: () => null }
@@ -1776,7 +2130,7 @@ test("multi-page PNG archive keeps part order when blob reads finish out of orde
     await dashboard._test.downloadConversationArchiveByIds(
       state,
       archiveExporter,
-      { ids: ["chat-paged"], complete: true, warnings: [] },
+      { ids: ["chat-paged", "chat-second"], complete: true, warnings: [] },
       "png"
     );
   } finally {
@@ -1807,10 +2161,11 @@ test("multi-page PNG archive keeps part order when blob reads finish out of orde
   }
 
   assert.deepEqual(names, [
-    "Paged-part-001.png",
-    "Paged-part-002.png",
+    "Paged.png",
+    "Second.png",
     "_export-report.json"
   ]);
+  assert.equal(pngBuildCount, 2);
 });
 
 test("archive filenames use the browser-local calendar date", () => {

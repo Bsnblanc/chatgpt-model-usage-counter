@@ -1110,6 +1110,37 @@ test("memory-safe browser renderers create paged PDF and PNG output directly fro
   });
 });
 
+test("one long selected conversation is streamed into one complete PNG file", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    const longConversation = [{
+      id: "single-long-png",
+      title: "Single long PNG",
+      messages: [{
+        id: "answer",
+        role: "assistant",
+        text: Array.from({ length: 120 }, (_, index) => `Single PNG line ${index + 1}`).join("\n")
+      }]
+    }];
+
+    const blob = await exporter.buildPngBlobFromConversations(longConversation, { pageHeight: 700 });
+    const buffer = await blobBuffer(blob);
+    const dimensions = pngDimensions(buffer);
+    const metadata = pngText(buffer);
+
+    assert.equal(blob.type, exporter.MIME.png);
+    assert.equal(buffer.subarray(0, 8).toString("latin1"), "\x89PNG\r\n\x1A\n");
+    assert.equal(dimensions.width, 860);
+    assert.ok(dimensions.height > 700, "the one PNG should contain the full multi-slice transcript");
+    assert.match(metadata, /Single PNG line 1/);
+    assert.match(metadata, /Single PNG line 120/);
+    assert.equal(
+      drawnText.filter((value) => /^120$/.test(value)).length,
+      1,
+      "the final source line should be painted exactly once"
+    );
+  });
+});
+
 test("createExport docx returns an Office docx ZIP with selected content", async () => {
   const result = await exporter.createExport("docx", conversations);
   const buffer = await blobBuffer(result.blob);
@@ -1126,6 +1157,7 @@ test("createExport docx returns an Office docx ZIP with selected content", async
   assert.ok(entries["word/styles.xml"]);
   assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="Heading2"/);
   assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="ContentLabel"/);
+  assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="PromoFooter"/);
   assert.match(documentXml, /ChatGPT Conversation Export/);
   assert.match(documentXml, /· 4 条消息/);
   assert.match(documentXml, /Escaping &lt;check&gt;/);
@@ -1143,6 +1175,8 @@ test("createExport docx returns an Office docx ZIP with selected content", async
   assert.match(documentXml, /Hello \*\*world\*\*/);
   assert.match(documentXml, /Line &lt;2&gt;/);
   assert.match(documentXml, /Assistant answer with export details\./);
+  assert.match(documentXml, /ChatGPT Model Usage Counter · https:\/\/github\.com\/Bsnblanc\/chatgpt-model-usage-counter/);
+  assert.equal((documentXml.match(/w:pStyle w:val="PromoFooter"/g) || []).length, 1);
   assert.doesNotMatch(documentXml, /Line <2>/);
   assertNoInternalExportFields(documentXml);
 });

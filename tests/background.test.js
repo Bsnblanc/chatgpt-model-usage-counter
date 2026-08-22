@@ -5,6 +5,39 @@ const test = require("node:test");
 const vm = require("node:vm");
 const background = require("../src/background");
 
+function runtimeModelCatalog() {
+  return {
+    observedAt: "2026-08-22T12:00:00.000Z",
+    models: [
+      { slug: "gpt-5-6", title: "GPT-5.6 Luna", reasoning_type: "auto" },
+      { slug: "gpt-5-6-mini", title: "GPT-5.6 Luna", reasoning_type: "none" },
+      { slug: "auto", title: "Auto", reasoning_type: "auto" }
+    ],
+    versions: [
+      {
+        id: "5.6",
+        display_text: "Latest • 5.6",
+        display_text_for_intelligence: "GPT-5.6 Sol",
+        short_display_text_for_intelligence: "5.6 Sol",
+        slugs: ["gpt-5-6"],
+        intelligence_presets: [
+          { title: "Instant", selected_display_title: "Instant", selected_display_version: "5.6", model_slug: "gpt-5-6", lane: "instant" }
+        ]
+      },
+      {
+        id: "auto",
+        display_text_for_intelligence: "Auto",
+        slugs: ["auto"],
+        intelligence_presets: []
+      }
+    ],
+    categories: [
+      { human_category_name: "Instant", human_category_short_name: "5.6 Luna", default_model: "gpt-5-6", supported_models: ["gpt-5-6"] },
+      { human_category_name: "Auto", default_model: "auto", supported_models: [] }
+    ]
+  };
+}
+
 const SUPPORTED_USAGE_FEATURES = ["agent_mode", "audio", "canvas", "deep_research", "image_generation", "realtime", "web_search"];
 const SUPPORTED_USAGE_FEATURE_NAMES = {
   agent_mode: "Agent mode",
@@ -84,6 +117,699 @@ test("applyIncrement updates totals, daily stats, events, and total count", () =
   assert.equal(next.sessionsByModel["gpt-5-thinking"]["123"].count, 1);
   assert.equal(next.sessionsByModel["gpt-5-thinking"]["123"].title, "Conversation title");
   assert.equal(background.totalCount(next), 1);
+});
+
+test("GPT-5.6 Sol is the primary count while gpt-5-6-thinking remains an internal variant", () => {
+  const now = new Date("2026-08-22T12:00:00.000Z");
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      model: "GPT-5.6 Sol",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking", "reasoning.effort": "xhigh" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      source: "enter-key",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/c/gpt56-sol",
+      pageTitle: "GPT-5.6 Sol verification",
+      promptHash: "gpt56-sol",
+      promptLength: 20
+    },
+    now
+  );
+
+  assert.equal(next.totals["GPT-5.6 Sol"], 1);
+  assert.equal(next.totals["gpt-5-6-thinking"], undefined);
+  assert.equal(next.events[0].model, "GPT-5.6 Sol");
+  assert.equal(next.events[0].publicModel, "GPT-5.6 Sol");
+  assert.equal(next.events[0].requestModel, "gpt-5-6-thinking");
+  assert.equal(next.events[0].responseModel, "gpt-5-6-thinking");
+  assert.equal(next.events[0].apiModel, "gpt-5-6-thinking");
+  assert.equal(next.events[0].chatgptModel, "GPT-5.6 Sol");
+  assert.equal(next.events[0].modelMappingStatus, "mapped");
+  assert.equal(next.models["GPT-5.6 Sol"].requestModel, "gpt-5-6-thinking");
+  assert.equal(next.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 1);
+  assert.deepEqual(next.parametersByModel["GPT-5.6 Sol"].fields.model, { "gpt-5-6-thinking": 1 });
+});
+
+test("GPT-5.6 Pro effort counts under Sol while the internal pro slug remains a variant", () => {
+  const now = new Date("2026-08-22T14:55:48.197Z");
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      publicModel: "GPT-5.6 Luna",
+      selectedPublicModel: "GPT-5.6 Luna",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-pro",
+      model: "GPT-5.6 Luna",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      source: "enter-key",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/c/gpt56-pro",
+      pageTitle: "GPT-5.6 Pro verification",
+      promptHash: "gpt56-pro",
+      promptLength: 9
+    },
+    now
+  );
+
+  assert.deepEqual(next.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(next.events[0].model, "GPT-5.6 Sol");
+  assert.equal(next.events[0].publicModel, "GPT-5.6 Sol");
+  assert.equal(next.events[0].requestModel, "gpt-5-6-pro");
+  assert.equal(next.events[0].responseModel, "gpt-5-6-pro");
+  assert.equal(next.events[0].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(next.events[0].selectedPublicModelSource, "request+account-catalog:corrected");
+  assert.equal(next.events[0].modelMode, "pro");
+  assert.equal(next.events[0].publicModelSource, "account-catalog:version-intelligence");
+  assert.equal(next.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+  assert.equal(next.totals["GPT-5.6 Luna"], undefined);
+});
+
+test("a missing selector snapshot is recovered from the exact request and live account catalog", () => {
+  const now = new Date("2026-08-22T14:57:00.000Z");
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-pro",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      source: "enter-key",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/c/inferred-selector",
+      promptHash: "inferred-selector",
+      promptLength: 8
+    },
+    now
+  );
+
+  assert.deepEqual(next.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(next.events[0].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(next.events[0].selectedPublicModelSource, "request+account-catalog");
+});
+
+test("actual response slug overrides the requested route while preserving the request parameter", () => {
+  const base = {
+    runtimeModelCatalog: runtimeModelCatalog(),
+    modelObservedSource: "webRequest",
+    source: "send-button",
+    pageUrl: "https://chatgpt.com/c/response-first",
+    pageTitle: "Response first",
+    submittedAt: "2026-08-22T15:00:00.000Z",
+    promptLength: 8
+  };
+
+  const routedToSol = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      ...base,
+      submissionId: "response-first-sol",
+      model: "GPT-5.6 Luna",
+      publicModel: "GPT-5.6 Luna",
+      selectedPublicModel: "GPT-5.6 Luna",
+      requestModel: "gpt-5-6",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6",
+      modelMode: "",
+      modelParameters: { model: "gpt-5-6" },
+      promptHash: "route-sol"
+    },
+    new Date(base.submittedAt)
+  );
+  assert.deepEqual(routedToSol.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(routedToSol.events[0].requestModel, "gpt-5-6");
+  assert.equal(routedToSol.events[0].responseModel, "gpt-5-6-pro");
+  assert.equal(routedToSol.events[0].modelMode, "pro");
+  assert.equal(routedToSol.events[0].runtimeModelCatalog, undefined);
+  assert.deepEqual(routedToSol.parametersByModel["GPT-5.6 Sol"].fields.model, { "gpt-5-6": 1 });
+  assert.equal(routedToSol.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+
+  const routedToLuna = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      ...base,
+      submissionId: "response-first-luna",
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-mini",
+      apiModel: "gpt-5-6-pro",
+      modelMode: "pro",
+      modelParameters: { model: "gpt-5-6-pro" },
+      promptHash: "route-luna"
+    },
+    new Date(base.submittedAt)
+  );
+  assert.deepEqual(routedToLuna.totals, { "GPT-5.6 Luna": 1 });
+  assert.equal(routedToLuna.events[0].requestModel, "gpt-5-6-pro");
+  assert.equal(routedToLuna.events[0].responseModel, "gpt-5-6-mini");
+  assert.equal(routedToLuna.events[0].modelMode, "");
+  assert.equal(routedToLuna.events[0].runtimeModelCatalog, undefined);
+  assert.equal(routedToLuna.variantsByModel["GPT-5.6 Luna"].variants["gpt-5-6-mini"].count, 1);
+});
+
+test("visible labels and answer text cannot override exact response metadata", () => {
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "body-claim-is-not-evidence",
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-mini",
+      responseModel: "gpt-5-6-mini",
+      apiModel: "gpt-5-6-mini",
+      chatgptModel: "GPT-5.6 Sol",
+      modelMode: "pro",
+      modelParameters: { model: "gpt-5-6-mini" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      modelObservedSource: "webRequest",
+      source: "send-button",
+      pageUrl: "https://chatgpt.com/c/body-claim",
+      pageTitle: "The answer says Sol",
+      submittedAt: "2026-08-22T15:01:00.000Z",
+      promptHash: "body-claim",
+      promptLength: 12
+    },
+    new Date("2026-08-22T15:01:00.000Z")
+  );
+
+  assert.deepEqual(next.totals, { "GPT-5.6 Luna": 1 });
+  assert.equal(next.events[0].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(next.events[0].responseModel, "gpt-5-6-mini");
+  assert.equal(next.events[0].modelIdentitySource, "response-model");
+});
+
+test("Auto remains the selected request route while the actual response decides the primary count", () => {
+  const pending = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "auto-pending",
+      model: "Auto",
+      publicModel: "Auto",
+      selectedPublicModel: "Auto",
+      requestModel: "auto",
+      apiModel: "auto",
+      modelParameters: { model: "auto" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      modelObservedSource: "webRequest",
+      source: "send-button",
+      pageUrl: "https://chatgpt.com/c/auto-pending",
+      submittedAt: "2026-08-22T15:02:00.000Z",
+      promptHash: "auto-pending",
+      promptLength: 4
+    },
+    new Date("2026-08-22T15:02:00.000Z")
+  );
+  assert.deepEqual(pending.totals, { Auto: 1 });
+  assert.equal(pending.events[0].requestModel, "auto");
+  assert.equal(pending.events[0].responseModel, "");
+  assert.equal(pending.events[0].selectedPublicModel, "Auto");
+
+  const resolved = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "auto-routed",
+      model: "Auto",
+      publicModel: "Auto",
+      selectedPublicModel: "Auto",
+      requestModel: "auto",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "auto",
+      modelParameters: { model: "auto" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      modelObservedSource: "webRequest",
+      source: "send-button",
+      pageUrl: "https://chatgpt.com/c/auto-routed",
+      submittedAt: "2026-08-22T15:03:00.000Z",
+      promptHash: "auto-routed",
+      promptLength: 4
+    },
+    new Date("2026-08-22T15:03:00.000Z")
+  );
+  assert.deepEqual(resolved.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(resolved.events[0].selectedPublicModel, "Auto");
+  assert.equal(resolved.events[0].requestModel, "auto");
+  assert.equal(resolved.events[0].responseModel, "gpt-5-6-thinking");
+  assert.deepEqual(resolved.parametersByModel["GPT-5.6 Sol"].fields.model, { auto: 1 });
+  assert.equal(resolved.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 1);
+});
+
+test("an unknown new response slug is preserved exactly and never renamed by stale selector text", () => {
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "future-response",
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "future-family-2027-thinking",
+      apiModel: "gpt-5-6-pro",
+      modelParameters: { model: "gpt-5-6-pro" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      modelObservedSource: "webRequest",
+      source: "send-button",
+      pageUrl: "https://chatgpt.com/c/future-response",
+      submittedAt: "2026-08-22T15:04:00.000Z",
+      promptHash: "future-response",
+      promptLength: 6
+    },
+    new Date("2026-08-22T15:04:00.000Z")
+  );
+
+  assert.deepEqual(next.totals, { "future-family-2027-thinking": 1 });
+  assert.equal(next.events[0].publicModel, "future-family-2027-thinking");
+  assert.equal(next.events[0].chatgptModel, "future-family-2027-thinking");
+  assert.equal(next.events[0].responseModel, "future-family-2027-thinking");
+  assert.equal(next.events[0].modelMappingStatus, "unmapped");
+  assert.equal(next.events[0].publicModelSource, "unmapped-response-slug");
+});
+
+test("late response reconciliation moves one existing count without incrementing total and is idempotent", () => {
+  const submittedAt = "2026-08-22T15:05:00.000Z";
+  const initial = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "late-response",
+      model: "GPT-5.6 Luna",
+      publicModel: "GPT-5.6 Luna",
+      selectedPublicModel: "GPT-5.6 Luna",
+      requestModel: "gpt-5-6-mini",
+      apiModel: "gpt-5-6-mini",
+      modelParameters: { model: "gpt-5-6-mini", "reasoning.effort": "xhigh" },
+      usageFeatures: ["web_search"],
+      runtimeModelCatalog: runtimeModelCatalog(),
+      modelObservedSource: "webRequest",
+      source: "send-button",
+      pageUrl: "https://chatgpt.com/c/late-response",
+      pageTitle: "Late response",
+      submittedAt,
+      promptHash: "late-response",
+      promptLength: 13
+    },
+    new Date(submittedAt)
+  );
+  assert.deepEqual(initial.totals, { "GPT-5.6 Luna": 1 });
+
+  const reconciled = background.applyResponseObservation(
+    initial,
+    {
+      submissionId: "late-response",
+      conversationId: "late-response",
+      responseModel: "gpt-5-6-pro",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-08-22T15:05:20.000Z"
+    },
+    new Date("2026-08-22T15:05:20.000Z")
+  );
+
+  assert.equal(background.totalCount(reconciled), 1);
+  assert.deepEqual(reconciled.totals, { "GPT-5.6 Sol": 1 });
+  assert.deepEqual(reconciled.byDate["2026-08-22"], { "GPT-5.6 Sol": 1 });
+  assert.equal(reconciled.events.length, 1);
+  assert.equal(reconciled.events[0].submissionId, "late-response");
+  assert.equal(reconciled.events[0].requestModel, "gpt-5-6-mini");
+  assert.equal(reconciled.events[0].responseModel, "gpt-5-6-pro");
+  assert.equal(reconciled.events[0].responseObservedSource, "message-dom:model-slug");
+  assert.equal(reconciled.events[0].runtimeModelCatalog, undefined);
+  assert.equal(reconciled.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+  assert.deepEqual(reconciled.parametersByModel["GPT-5.6 Sol"].fields.model, { "gpt-5-6-mini": 1 });
+  assert.equal(reconciled.featuresByModel["GPT-5.6 Sol"].features.web_search.count, 1);
+  assert.equal(reconciled.sessionsByModel["GPT-5.6 Sol"]["late-response"].count, 1);
+  assert.equal(reconciled.totals["GPT-5.6 Luna"], undefined);
+
+  const repeated = background.applyResponseObservation(
+    reconciled,
+    {
+      submissionId: "late-response",
+      responseModel: "gpt-5-6-pro",
+      observedAt: "2026-08-22T15:05:21.000Z"
+    },
+    new Date("2026-08-22T15:05:21.000Z")
+  );
+  assert.equal(background.totalCount(repeated), 1);
+  assert.deepEqual(repeated.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(repeated.events.length, 1);
+  assert.equal(repeated.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+});
+
+test("late response reconciliation updates the tracked event even when older event history is incomplete", () => {
+  const submittedAt = "2026-08-22T15:06:00.000Z";
+  const partial = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "partial-late-response",
+      selectedPublicModel: "GPT-5.6 Luna",
+      requestModel: "gpt-5-6-mini",
+      apiModel: "gpt-5-6-mini",
+      modelParameters: { model: "gpt-5-6-mini" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      modelObservedSource: "webRequest",
+      pageUrl: "https://chatgpt.com/c/partial-history",
+      submittedAt,
+      promptHash: "partial-late",
+      promptLength: 7
+    },
+    new Date(submittedAt)
+  );
+  partial.totals["GPT-5.6 Luna"] += 1;
+  partial.byDate["2026-08-22"]["GPT-5.6 Luna"] += 1;
+  partial.sessionsByModel["GPT-5.6 Luna"]["partial-history"].count += 1;
+  partial.sessionsByModel["GPT-5.6 Luna"]["partial-history"].models["GPT-5.6 Luna"] += 1;
+  // The missing older event already had a confirmed response. The tracked
+  // request is still pending and must not be counted as an actual response.
+  partial.variantsByModel["GPT-5.6 Luna"] = {
+    total: 1,
+    variants: {
+      "gpt-5-6-mini": {
+        name: "gpt-5-6-mini",
+        count: 1,
+        apiModel: "gpt-5-6-mini",
+        lastSubmittedAt: submittedAt
+      }
+    }
+  };
+  partial.parametersByModel["GPT-5.6 Luna"].total += 1;
+  partial.parametersByModel["GPT-5.6 Luna"].combinations[
+    Object.keys(partial.parametersByModel["GPT-5.6 Luna"].combinations)[0]
+  ].count += 1;
+  partial.parametersByModel["GPT-5.6 Luna"].fields.model["gpt-5-6-mini"] += 1;
+
+  const reconciled = background.applyResponseObservation(
+    partial,
+    {
+      submissionId: "partial-late-response",
+      responseModel: "gpt-5-6-thinking",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      observedAt: "2026-08-22T15:06:30.000Z"
+    },
+    new Date("2026-08-22T15:06:30.000Z")
+  );
+
+  assert.equal(background.totalCount(reconciled), 2);
+  assert.deepEqual(reconciled.totals, { "GPT-5.6 Luna": 1, "GPT-5.6 Sol": 1 });
+  assert.deepEqual(reconciled.byDate["2026-08-22"], { "GPT-5.6 Luna": 1, "GPT-5.6 Sol": 1 });
+  assert.equal(reconciled.events.length, 1);
+  assert.equal(reconciled.events[0].model, "GPT-5.6 Sol");
+  assert.equal(reconciled.variantsByModel["GPT-5.6 Luna"].variants["gpt-5-6-mini"].count, 1);
+  assert.equal(reconciled.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 1);
+  assert.equal(reconciled.parametersByModel["GPT-5.6 Luna"].fields.model["gpt-5-6-mini"], 1);
+  assert.equal(reconciled.parametersByModel["GPT-5.6 Sol"].fields.model["gpt-5-6-mini"], 1);
+  assert.equal(reconciled.sessionsByModel["GPT-5.6 Luna"]["partial-history"].count, 1);
+  assert.equal(reconciled.sessionsByModel["GPT-5.6 Sol"]["partial-history"].count, 1);
+});
+
+test("account model catalog remaps existing GPT-5.6 internal counts without losing aggregates", () => {
+  const existing = background.createEmptyStats();
+  existing.totals["gpt-5-6-thinking"] = 2;
+  existing.totals["gpt-5-6"] = 3;
+  existing.byDate["2026-08-22"] = { "gpt-5-6-thinking": 2, "gpt-5-6": 3 };
+  existing.models["gpt-5-6-thinking"] = {
+    label: "gpt-5-6-thinking",
+    apiModel: "gpt-5-6-thinking",
+    chatgptModel: "gpt-5-6-thinking",
+    parameters: { model: "gpt-5-6-thinking" }
+  };
+  existing.models["gpt-5-6"] = {
+    label: "gpt-5-6",
+    apiModel: "gpt-5-6",
+    chatgptModel: "gpt-5-6",
+    parameters: { model: "gpt-5-6" }
+  };
+  existing.variantsByModel["gpt-5-6-thinking"] = {
+    total: 2,
+    variants: {
+      "gpt-5-6-thinking": { name: "gpt-5-6-thinking", count: 2, apiModel: "gpt-5-6-thinking" }
+    }
+  };
+
+  const remapped = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+
+  assert.deepEqual(remapped.totals, { "GPT-5.6 Sol": 5 });
+  assert.deepEqual(remapped.byDate["2026-08-22"], { "GPT-5.6 Sol": 5 });
+  assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 2);
+  assert.equal(remapped.models["GPT-5.6 Sol"].requestModel, "gpt-5-6-thinking");
+  assert.equal(remapped.runtimeModelCatalog.observedAt, "2026-08-22T12:00:00.000Z");
+});
+
+test("complete event history corrects both paid Instant and Pro routes to Sol", () => {
+  const existing = background.createEmptyStats();
+  existing.totals["GPT-5.6 Luna"] = 2;
+  existing.byDate["2026-08-22"] = { "GPT-5.6 Luna": 2 };
+  existing.models["GPT-5.6 Luna"] = {
+    label: "GPT-5.6 Luna",
+    publicModel: "GPT-5.6 Luna",
+    requestModel: "gpt-5-6-pro",
+    responseModel: "gpt-5-6-pro",
+    apiModel: "gpt-5-6-pro",
+    chatgptModel: "GPT-5.6 Luna",
+    observedSource: "webRequest",
+    parameters: { model: "gpt-5-6-pro" }
+  };
+  existing.events = [
+    {
+      model: "GPT-5.6 Luna",
+      publicModel: "GPT-5.6 Luna",
+      selectedPublicModel: "GPT-5.6 Luna",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-pro",
+      chatgptModel: "GPT-5.6 Luna",
+      modelMode: "pro",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      submittedAt: "2026-08-22T14:55:48.197Z",
+      pageUrl: "https://chatgpt.com/c/mixed",
+      pageTitle: "Mixed model conversation",
+      conversationId: "mixed",
+      promptHash: "pro",
+      promptLength: 3,
+      usageFeatures: []
+    },
+    {
+      model: "GPT-5.6 Luna",
+      publicModel: "GPT-5.6 Luna",
+      selectedPublicModel: "GPT-5.6 Luna",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5-6",
+      responseModel: "gpt-5-6",
+      apiModel: "gpt-5-6",
+      chatgptModel: "GPT-5.6 Luna",
+      modelMode: "",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6" },
+      submittedAt: "2026-08-22T14:54:36.493Z",
+      pageUrl: "https://chatgpt.com/c/mixed",
+      pageTitle: "Mixed model conversation",
+      conversationId: "mixed",
+      promptHash: "instant",
+      promptLength: 7,
+      usageFeatures: []
+    }
+  ];
+
+  const remapped = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+
+  assert.deepEqual(remapped.totals, { "GPT-5.6 Sol": 2 });
+  assert.deepEqual(remapped.byDate["2026-08-22"], { "GPT-5.6 Sol": 2 });
+  assert.equal(remapped.events[0].model, "GPT-5.6 Sol");
+  assert.equal(remapped.events[0].requestModel, "gpt-5-6-pro");
+  assert.equal(remapped.events[0].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(remapped.events[0].selectedPublicModelSource, "request+account-catalog:corrected");
+  assert.equal(remapped.events[1].model, "GPT-5.6 Sol");
+  assert.equal(remapped.events[1].requestModel, "gpt-5-6");
+  assert.equal(remapped.events[1].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(remapped.events[1].selectedPublicModelSource, "request+account-catalog:corrected");
+  assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+  assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6"].count, 1);
+  assert.equal(remapped.sessionsByModel["GPT-5.6 Sol"].mixed.count, 2);
+});
+
+test("publishing the live catalog rebuilds stale variant and request-parameter details even when totals already match", () => {
+  const existing = background.createEmptyStats();
+  existing.totals["GPT-5.6 Sol"] = 2;
+  existing.byDate["2026-08-22"] = { "GPT-5.6 Sol": 2 };
+  existing.models["GPT-5.6 Sol"] = {
+    label: "GPT-5.6 Sol",
+    publicModel: "GPT-5.6 Sol",
+    requestModel: "gpt-5-6-pro",
+    responseModel: "gpt-5-6-pro",
+    apiModel: "gpt-5-6-pro",
+    chatgptModel: "GPT-5.6 Sol",
+    observedSource: "webRequest",
+    parameters: { model: "gpt-5-6-pro" }
+  };
+  existing.variantsByModel["GPT-5.6 Sol"] = {
+    total: 2,
+    variants: {
+      "gpt-5-6-pro": { name: "gpt-5-6-pro", count: 2, apiModel: "gpt-5-6-pro", mode: "pro" }
+    }
+  };
+  existing.parametersByModel["GPT-5.6 Sol"] = {
+    total: 2,
+    combinations: {
+      stale: {
+        count: 2,
+        parameters: { model: "gpt-5-6-pro" },
+        firstSubmittedAt: "2026-08-22T16:00:00.000Z",
+        lastSubmittedAt: "2026-08-22T16:01:00.000Z"
+      }
+    },
+    fields: { model: { "gpt-5-6-pro": 2 } }
+  };
+  existing.events = [
+    {
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      chatgptModel: "GPT-5.6 Sol",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-08-22T16:01:00.000Z",
+      pageUrl: "https://chatgpt.com/c/detail-rebuild",
+      conversationId: "detail-rebuild",
+      promptHash: "thinking",
+      promptLength: 8,
+      usageFeatures: []
+    },
+    {
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-pro",
+      chatgptModel: "GPT-5.6 Sol",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      submittedAt: "2026-08-22T16:00:00.000Z",
+      pageUrl: "https://chatgpt.com/c/detail-rebuild",
+      conversationId: "detail-rebuild",
+      promptHash: "pro",
+      promptLength: 3,
+      usageFeatures: []
+    }
+  ];
+
+  const rebuilt = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+
+  assert.deepEqual(rebuilt.totals, { "GPT-5.6 Sol": 2 });
+  assert.equal(rebuilt.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 1);
+  assert.equal(rebuilt.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+  assert.deepEqual(rebuilt.parametersByModel["GPT-5.6 Sol"].fields.model, {
+    "gpt-5-6-pro": 1,
+    "gpt-5-6-thinking": 1
+  });
+});
+
+test("cloning a public-model aggregate preserves every exact request model instead of replacing them with the latest route", () => {
+  const existing = background.createEmptyStats();
+  existing.runtimeModelCatalog = runtimeModelCatalog();
+  existing.totals["GPT-5.6 Sol"] = 2;
+  existing.byDate["2026-08-22"] = { "GPT-5.6 Sol": 2 };
+  existing.models["GPT-5.6 Sol"] = {
+    label: "GPT-5.6 Sol",
+    publicModel: "GPT-5.6 Sol",
+    selectedPublicModel: "GPT-5.6 Sol",
+    requestModel: "gpt-5-6-pro",
+    responseModel: "gpt-5-6-pro",
+    apiModel: "gpt-5-6-pro",
+    chatgptModel: "GPT-5.6 Sol",
+    modelObservedSource: "webRequest",
+    parameters: { model: "gpt-5-6-pro" }
+  };
+  existing.parametersByModel["GPT-5.6 Sol"] = {
+    total: 2,
+    combinations: {
+      thinking: {
+        count: 1,
+        parameters: { model: "gpt-5-6-thinking" },
+        firstSubmittedAt: "2026-08-22T16:00:00.000Z",
+        lastSubmittedAt: "2026-08-22T16:00:00.000Z"
+      },
+      pro: {
+        count: 1,
+        parameters: { model: "gpt-5-6-pro" },
+        firstSubmittedAt: "2026-08-22T16:01:00.000Z",
+        lastSubmittedAt: "2026-08-22T16:01:00.000Z"
+      }
+    },
+    fields: {
+      model: {
+        "gpt-5-6-thinking": 1,
+        "gpt-5-6-pro": 1
+      }
+    }
+  };
+  existing.events = [
+    {
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      apiModel: "gpt-5-6-pro",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      submittedAt: "2026-08-22T16:01:00.000Z",
+      promptHash: "pro-existing",
+      promptLength: 3
+    },
+    {
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-08-22T16:00:00.000Z",
+      promptHash: "thinking-existing",
+      promptLength: 8
+    }
+  ];
+
+  const next = background.applyIncrement(
+    existing,
+    {
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6",
+      responseModel: "gpt-5-6",
+      apiModel: "gpt-5-6",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      submittedAt: "2026-08-22T16:02:00.000Z",
+      promptHash: "instant-new",
+      promptLength: 7
+    },
+    new Date("2026-08-22T16:02:00.000Z")
+  );
+
+  assert.deepEqual(next.parametersByModel["GPT-5.6 Sol"].fields.model, {
+    "gpt-5-6": 1,
+    "gpt-5-6-pro": 1,
+    "gpt-5-6-thinking": 1
+  });
 });
 
 test("applyIncrement dedupes racing observations for the same submitted prompt", () => {
@@ -887,7 +1613,7 @@ test("applyIncrement canonicalizes mixed-case and underscore request model slugs
   assert.equal(next.events[0].apiModel, "gpt-4o");
   assert.equal(next.events[0].chatgptModel, "gpt-4o");
   assert.equal(next.events[0].modelParameters.model, "gpt-4o");
-  assert.equal(next.variantsByModel["gpt-4o"].variants["gpt-4o"].count, 1);
+  assert.equal(next.variantsByModel["gpt-4o"], undefined);
   assert.deepEqual(next.parametersByModel["gpt-4o"].fields.model, { "gpt-4o": 1 });
 });
 
@@ -921,7 +1647,7 @@ test("applyIncrement stores supplied API model parameters", () => {
   assert.equal(next.models["future-family-2026-thinking"].mode, "thinking");
   assert.equal(next.events[0].chatgptModel, "future-family-2026-thinking");
   assert.deepEqual(next.events[0].modelParameters["text.verbosity"], ["low", "medium", "high"]);
-  assert.equal(next.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 1);
+  assert.equal(next.variantsByModel["future-family-2026-thinking"], undefined);
 });
 
 test("applyIncrement stores only model call parameters", () => {
@@ -1655,8 +2381,7 @@ test("applyIncrement aggregates observed parameter values and combinations by mo
   assert.deepEqual(aggregate.fields["text.verbosity"], { medium: 2, high: 1 });
   assert.deepEqual(aggregate.fields.temperature, { "0.2": 3 });
   assert.equal(mediumCombination.parameters.temperature, 0.2);
-  assert.equal(stats.variantsByModel["future-family-2026-thinking"].total, 3);
-  assert.equal(stats.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 3);
+  assert.equal(stats.variantsByModel["future-family-2026-thinking"], undefined);
 });
 
 test("applyIncrement keeps ChatGPT visible mode models as separate counters", () => {
@@ -1708,10 +2433,8 @@ test("applyIncrement keeps ChatGPT visible mode models as separate counters", ()
 
   assert.equal(stats.totals["future-family-2026-thinking"], 2);
   assert.equal(stats.totals["future-family-2026-instant"], 1);
-  assert.equal(stats.variantsByModel["future-family-2026-thinking"].total, 2);
-  assert.equal(stats.variantsByModel["future-family-2026-instant"].total, 1);
-  assert.equal(stats.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 2);
-  assert.equal(stats.variantsByModel["future-family-2026-instant"].variants["future-family-2026-instant"].count, 1);
+  assert.equal(stats.variantsByModel["future-family-2026-thinking"], undefined);
+  assert.equal(stats.variantsByModel["future-family-2026-instant"], undefined);
   assert.equal(stats.parametersByModel["future-family-2026-thinking"].fields.model["future-family-2026-thinking"], 2);
   assert.equal(stats.parametersByModel["future-family-2026-instant"].fields.model["future-family-2026-instant"], 1);
 });
@@ -2032,8 +2755,8 @@ test("applyIncrement canonicalizes stored model labels across every aggregate", 
   assert.deepEqual(next.sessionsByModel["future-family-2026-thinking"]["legacy-conversation"].models, { "future-family-2026-thinking": 3 });
   assert.equal(next.parametersByModel["future-family-2026-thinking"].total, 3);
   assert.equal(next.parametersByModel["future-family-2026-thinking"].fields.model["future-family-2026-thinking"], 3);
-  assert.equal(next.variantsByModel["future-family-2026-thinking"].total, 3);
-  assert.equal(next.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 3);
+  assert.equal(next.variantsByModel["future-family-2026-thinking"].total, 2);
+  assert.equal(next.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 2);
 
   assert.equal(next.totals["future-family-2026-instant"], 1);
   assert.equal(next.parametersByModel["future-family-2026-instant"].total, 1);
@@ -2144,7 +2867,7 @@ test("webRequest observations override DOM metadata with request body parameters
   assert.deepEqual(merged.usageFeatures, ["agent_mode", "deep_research", "image_generation", "web_search"]);
   assert.equal(next.events[0].modelParameters["reasoning.effort"], "xhigh");
   assert.equal(next.events[0].model, "future-family-2026-thinking");
-  assert.equal(next.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 1);
+  assert.equal(next.variantsByModel["future-family-2026-thinking"], undefined);
   assert.deepEqual(next.parametersByModel["future-family-2026-thinking"].fields["text.verbosity"], { high: 1 });
   assert.deepEqual(next.parametersByModel["future-family-2026-thinking"].fields.top_p, { "0.95": 1 });
   assert.deepEqual(next.parametersByModel["future-family-2026-thinking"].fields.max_output_tokens, { "1024": 1 });
@@ -2653,6 +3376,100 @@ test("sanitizeOpenAIStatusPayload aggregates top status from filtered ChatGPT we
     status.components.map((component) => component.name),
     ["ChatGPT", "Conversations"]
   );
+});
+
+test("complete OpenAI status components are merged without truncating ChatGPT web entries", () => {
+  const webNames = [
+    "Login",
+    "Search",
+    "Deep Research",
+    "Agent",
+    "Voice mode",
+    "Connectors/Apps",
+    "File uploads",
+    "GPTs",
+    "Conversations",
+    "Image Generation",
+    "Codex Web",
+    "ChatGPT Work",
+    "Sites"
+  ];
+  const merged = background.mergeOpenAIStatusPayloads(
+    {
+      page: { id: "openai", name: "OpenAI" },
+      status: { indicator: "none" },
+      components: [{ id: "login", name: "Login", status: "operational", position: 1 }]
+    },
+    {
+      page: { id: "openai", name: "OpenAI" },
+      components: webNames.map((name, index) => ({
+        id: `web-${index}`,
+        name,
+        status: "operational",
+        position: index + 1
+      })).concat([{ id: "responses", name: "Responses", status: "major_outage", position: 50 }])
+    }
+  );
+  const status = background.sanitizeOpenAIStatusPayload(merged, "2026-08-22T20:00:00.000Z");
+
+  assert.equal(status.complete, true);
+  assert.deepEqual(status.components.map((component) => component.name), webNames);
+  assert.equal(status.components.length, 13);
+  assert.equal(status.status.indicator, "none");
+});
+
+test("OpenAI status fetch combines summary and full components, reports partial fallback, and fails only when both endpoints fail", async () => {
+  function response(status, payload) {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => payload
+    };
+  }
+  function fetchStatus(fetchImpl) {
+    return new Promise((resolve) => background.fetchOpenAIStatus(resolve, fetchImpl));
+  }
+  const summary = {
+    page: { id: "openai", name: "OpenAI" },
+    status: { indicator: "none" },
+    components: [{ id: "login", name: "Login", status: "operational", position: 1 }]
+  };
+  const components = {
+    page: { id: "openai", name: "OpenAI" },
+    components: [
+      { id: "login", name: "Login", status: "operational", position: 1 },
+      { id: "files", name: "File uploads", status: "operational", position: 2 },
+      { id: "gpts", name: "GPTs", status: "operational", position: 3 },
+      { id: "codex-web", name: "Codex Web", status: "operational", position: 4 },
+      { id: "chatgpt-work", name: "ChatGPT Work", status: "operational", position: 5 }
+    ]
+  };
+
+  const complete = await fetchStatus(async (url) => (
+    String(url).includes("components.json") ? response(200, components) : response(200, summary)
+  ));
+  assert.equal(complete.ok, true);
+  assert.equal(complete.status.complete, true);
+  assert.deepEqual(
+    complete.status.components.map((component) => component.name),
+    ["Login", "File uploads", "GPTs", "Codex Web", "ChatGPT Work"]
+  );
+
+  const partial = await fetchStatus(async (url) => (
+    String(url).includes("components.json") ? response(503, {}) : response(200, summary)
+  ));
+  assert.equal(partial.ok, true);
+  assert.equal(partial.status.complete, false);
+  assert.deepEqual(partial.status.components.map((component) => component.name), ["Login"]);
+  assert.equal(partial.status.warnings.length, 1);
+  assert.match(partial.status.warnings[0], /components HTTP 503/);
+
+  const failed = await fetchStatus(async (url) => (
+    response(String(url).includes("components.json") ? 503 : 502, {})
+  ));
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /summary HTTP 502/);
+  assert.match(failed.error, /components HTTP 503/);
 });
 
 test("isChatGPTUrl accepts only ChatGPT page URLs", () => {

@@ -9,11 +9,16 @@
   "use strict";
 
   var DEFAULT_PAGE_SIZE = 100;
-  var DEFAULT_CONCURRENCY = 4;
+  var DEFAULT_CONCURRENCY = 2;
+  var MAX_CONCURRENCY = 2;
   var MAX_PAGES_PER_SCOPE = 1000;
   var MAX_CONVERSATIONS = 100000;
   var MAX_REQUEST_ATTEMPTS = 3;
-  var BASE_RETRY_DELAY_MS = 400;
+  var BASE_RETRY_DELAY_MS = 1000;
+  var MAX_RETRY_AFTER_MS = 60 * 1000;
+  var DETAIL_TURN_PAGE_SIZE = 100;
+  var nextRequestSlotAt = 0;
+  var requestCooldownUntil = 0;
   var ALLOWED_HOSTS = {
     "chatgpt.com": true,
     "chat.openai.com": true
@@ -89,23 +94,36 @@
         : "";
     } catch (_) {}
     if (/^\d+(?:\.\d+)?$/.test(retryAfter)) {
-      return Math.min(5000, Math.max(0, Number(retryAfter) * 1000));
+      var retrySeconds = Math.max(0, Number(retryAfter) * 1000);
+      return retrySeconds <= MAX_RETRY_AFTER_MS ? retrySeconds : -1;
     }
     var retryDate = Date.parse(retryAfter);
     if (!Number.isNaN(retryDate)) {
-      return Math.min(5000, Math.max(0, retryDate - Date.now()));
+      var retryDateDelay = Math.max(0, retryDate - Date.now());
+      return retryDateDelay <= MAX_RETRY_AFTER_MS ? retryDateDelay : -1;
     }
-    return Math.min(2000, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
+    return Math.min(8000, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
   }
 
   function isTransientStatus(status) {
     return status === 429 || status === 502 || status === 503 || status === 504;
   }
 
-  function requestJson(fetchImpl, url) {
+  function waitForRequestSlot(requestGapMs) {
+    var gap = Math.max(0, Math.min(2000, Number(requestGapMs) || 0));
+    var now = Date.now();
+    var startAt = Math.max(now, requestCooldownUntil, nextRequestSlotAt);
+    if (gap > 0) {
+      nextRequestSlotAt = startAt + gap;
+    }
+    return wait(startAt - now);
+  }
+
+  function requestJson(fetchImpl, url, requestOptions) {
+    var settings = requestOptions && typeof requestOptions === "object" ? requestOptions : {};
     function attempt(index) {
       var response;
-      return Promise.resolve().then(function request() {
+      return waitForRequestSlot(settings.requestGapMs).then(function request() {
         return fetchImpl(url, {
           method: "GET",
           credentials: "include",
@@ -127,7 +145,18 @@
         if (!retryable || index + 1 >= MAX_REQUEST_ATTEMPTS) {
           throw error;
         }
-        return wait(retryDelayMs(response, index)).then(function retry() {
+        var delay = retryDelayMs(response, index);
+        // A long Retry-After means ChatGPT explicitly asked the client to stop
+        // for longer than an interactive export should remain active. End this
+        // item as a visible failure instead of retrying early or hammering the
+        // account endpoint.
+        if (delay < 0) {
+          throw error;
+        }
+        if (status === 429) {
+          requestCooldownUntil = Math.max(requestCooldownUntil, Date.now() + delay);
+        }
+        return wait(delay).then(function retry() {
           return attempt(index + 1);
         });
       });
@@ -141,6 +170,9 @@
     url.searchParams.set("offset", String(offset));
     url.searchParams.set("limit", String(limit));
     url.searchParams.set("order", "updated");
+    // Do not add is_starred=false or hide_snorlax=true here. Both are
+    // exclusion filters: the former can omit starred chats and the latter
+    // removes project/workspace conversations from the account index.
     if (!omitArchivedFilter) {
       url.searchParams.set("is_archived", archived ? "true" : "false");
     }
@@ -148,7 +180,22 @@
   }
 
   function conversationDetailUrl(origin, id) {
+    var url = new URL("/backend-api/conversations/" + encodeURIComponent(id), origin);
+    url.searchParams.set("include_has_versions", "true");
+    url.searchParams.set("num_turns", String(DETAIL_TURN_PAGE_SIZE));
+    return url.href;
+  }
+
+  function legacyConversationDetailUrl(origin, id) {
     return new URL("/backend-api/conversation/" + encodeURIComponent(id), origin).href;
+  }
+
+  function conversationMessagesUrl(origin, id, before) {
+    var url = new URL("/backend-api/conversations/" + encodeURIComponent(id) + "/messages", origin);
+    url.searchParams.set("before", String(before || ""));
+    url.searchParams.set("include_has_versions", "true");
+    url.searchParams.set("num_turns", String(DETAIL_TURN_PAGE_SIZE));
+    return url.href;
   }
 
   function fetchConversationScope(options, archived) {
@@ -305,6 +352,97 @@
     return normalized;
   }
 
+  function messageId(message) {
+    return safeText(message && (message.id || (message.message && message.message.id)), 160);
+  }
+
+  function prependUniqueMessages(existing, older) {
+    var seen = {};
+    (Array.isArray(existing) ? existing : []).forEach(function remember(message) {
+      var id = messageId(message);
+      if (id) seen[id] = true;
+    });
+    var prefix = (Array.isArray(older) ? older : []).filter(function keep(message) {
+      var id = messageId(message);
+      if (!id || seen[id]) {
+        return false;
+      }
+      seen[id] = true;
+      return true;
+    });
+    return prefix.concat(Array.isArray(existing) ? existing : []);
+  }
+
+  function collectModernConversationPages(payload, id, options) {
+    var origin = normalizeOrigin(options.origin);
+    var combined = Object.assign({}, payload || {});
+    combined.messages = Array.isArray(combined.messages) ? combined.messages.slice() : [];
+    var pageInfo = combined.page_info && typeof combined.page_info === "object"
+      ? combined.page_info
+      : {};
+    var hasPrevious = Boolean(pageInfo.has_previous_page);
+    var before = safeText(pageInfo.start_cursor || messageId(combined.messages[0]), 160);
+    var pageCount = 0;
+
+    function nextPage() {
+      if (!hasPrevious) {
+        combined.page_info = Object.assign({}, pageInfo, { has_previous_page: false });
+        return Promise.resolve(combined);
+      }
+      if (!before || pageCount >= MAX_PAGES_PER_SCOPE || combined.messages.length >= MAX_CONVERSATIONS) {
+        return Promise.reject(new Error("Conversation messages exceeded the safe pagination limit."));
+      }
+      var previousBefore = before;
+      return requestJson(
+        options.fetchImpl,
+        conversationMessagesUrl(origin, id, before),
+        { requestGapMs: options.requestGapMs }
+      ).then(function consume(page) {
+        pageCount += 1;
+        var older = page && Array.isArray(page.messages) ? page.messages : [];
+        var oldLength = combined.messages.length;
+        combined.messages = prependUniqueMessages(combined.messages, older);
+        pageInfo = page && page.page_info && typeof page.page_info === "object"
+          ? page.page_info
+          : {};
+        hasPrevious = Boolean(pageInfo.has_previous_page);
+        before = safeText(pageInfo.start_cursor || messageId(older[0]), 160);
+        if (combined.messages.length === oldLength || (hasPrevious && before === previousBefore)) {
+          throw new Error("Conversation message pagination repeated without progress.");
+        }
+        return nextPage();
+      });
+    }
+
+    return nextPage();
+  }
+
+  function fetchConversationPayload(id, options) {
+    var origin = normalizeOrigin(options.origin);
+    return requestJson(
+      options.fetchImpl,
+      conversationDetailUrl(origin, id),
+      { requestGapMs: options.requestGapMs }
+    )
+      .then(function collectPages(payload) {
+        if (!payload || !Array.isArray(payload.messages)) {
+          return payload;
+        }
+        return collectModernConversationPages(payload, id, options);
+      })
+      .catch(function legacyFallback(error) {
+        var status = Number(error && error.status) || 0;
+        if ([401, 403, 404, 405].indexOf(status) === -1) {
+          throw error;
+        }
+        return requestJson(
+          options.fetchImpl,
+          legacyConversationDetailUrl(origin, id),
+          { requestGapMs: options.requestGapMs }
+        );
+      });
+  }
+
   function fetchConversationById(id, options) {
     options = options || {};
     var cleanId = safeText(id, 160);
@@ -314,8 +452,7 @@
     if (typeof options.fetchImpl !== "function") {
       return Promise.reject(new Error("ChatGPT history fetch is unavailable."));
     }
-    var origin = normalizeOrigin(options.origin);
-    return requestJson(options.fetchImpl, conversationDetailUrl(origin, cleanId)).then(function normalize(payload) {
+    return fetchConversationPayload(cleanId, options).then(function normalize(payload) {
       return normalizeFetchedConversation(payload, cleanId, options);
     });
   }
@@ -335,7 +472,10 @@
   function collectConversations(ids, options) {
     options = options || {};
     var targets = uniqueConversationIds(ids);
-    var concurrency = Math.max(1, Math.min(8, Number(options.concurrency) || DEFAULT_CONCURRENCY));
+    // Account-history detail reads are intentionally capped. Export is a
+    // user-initiated archive operation, not a crawler; two paced workers keep
+    // large selections responsive without creating a burst of account traffic.
+    var concurrency = Math.max(1, Math.min(MAX_CONCURRENCY, Number(options.concurrency) || DEFAULT_CONCURRENCY));
     var results = new Array(targets.length);
     var failures = new Array(targets.length);
     var cursor = 0;
@@ -385,6 +525,7 @@
     collectAllConversations: collectAllConversations,
     collectConversations: collectConversations,
     conversationDetailUrl: conversationDetailUrl,
+    conversationMessagesUrl: conversationMessagesUrl,
     conversationListUrl: conversationListUrl,
     extractConversationItems: extractConversationItems,
     fetchConversationById: fetchConversationById,

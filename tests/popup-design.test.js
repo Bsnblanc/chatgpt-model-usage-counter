@@ -83,16 +83,16 @@ test("export tab is wired with all five conversation formats", () => {
   assert.match(dashboard, /exportFormatDocx/);
 });
 
-test("export supports current, selected, and all scopes and routes PNG+PDF via Canvas", () => {
+test("export keeps the conversation checkbox list and routes PNG+PDF via Canvas", () => {
   const dashboard = dashboardSource();
-  // 多对话选择列表 + 全选
+  // 用户从同一个列表明确选择一个或多个对话；全选/清空只是辅助操作。
   assert.match(dashboard, /data-export-conv/);
   assert.match(dashboard, /data-export-selectall/);
-  assert.match(dashboard, /collectConversationsForExport/);
-  assert.match(dashboard, /data-export-scope/);
-  assert.match(dashboard, /exportScopeCurrent/);
-  assert.match(dashboard, /exportScopeSelected/);
-  assert.match(dashboard, /exportScopeAll/);
+  assert.match(dashboard, /data-export-selectnone/);
+  assert.doesNotMatch(dashboard, /data-export-scope/);
+  assert.doesNotMatch(dashboard, /exportScopeCurrent/);
+  assert.doesNotMatch(dashboard, /exportScopeSelected/);
+  assert.doesNotMatch(dashboard, /exportScopeAll/);
   assert.match(dashboard, /collectConversationChunk/);
   assert.match(dashboard, /chunkSize = 6/);
   assert.match(dashboard, /buildZip/);

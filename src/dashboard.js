@@ -170,6 +170,8 @@
       openaiStatusView: "OpenAI 状态",
       parameterCombinations: "参数",
       parameterLatest: "最新参数",
+      requestModels: "请求型号",
+      responsePending: "待确认实际回复",
       range: "范围",
       recentRecords: "最近记录",
       realtimeService: "Realtime 服务",
@@ -233,6 +235,8 @@
       openaiStatusView: "OpenAI status",
       parameterCombinations: "Parameters",
       parameterLatest: "Latest parameters",
+      requestModels: "Request model",
+      responsePending: "Response pending",
       range: "Range",
       recentRecords: "Recent records",
       realtimeService: "Realtime service",
@@ -265,17 +269,12 @@
     all: "全选",
     chartView: "统计",
     exportView: "导出",
-    exportSubtitle: "导出当前、选中或全部对话；多条自动打包为 ZIP",
+    exportSubtitle: "从对话列表中选择一个或多个，再导出为所选格式",
     exportFormatJson: "JSON",
     exportFormatMarkdown: "Markdown",
     exportFormatPdf: "PDF",
-    exportFormatPng: "图片",
-    exportFormatDocx: "Word",
-    exportScopeCurrent: "当前",
-    exportScopeSelected: "选中",
-    exportScopeAll: "全部",
-    exportCurrentHint: "导出当前打开的完整对话。",
-    exportAllHint: "导出账号历史中的全部 {count} 个对话，包括可读取的已归档对话。",
+    exportFormatPng: "PNG",
+    exportFormatDocx: "Word (DOCX)",
     exportAllLoading: "正在读取账号对话索引…",
     exportListIncomplete: "账号历史读取不完整；只能导出当前列表中已读取到的对话。",
     exportListUnavailable: "无法读取账号对话索引；请确认当前标签页已登录 ChatGPT，然后重试。",
@@ -292,9 +291,12 @@
     exportSelectAll: "全选",
     exportSelectNone: "清空",
     exportSelectedCount: "已选 {count} 个",
+    exportSelectionHint: "单选直接下载一个文件；多选下载一个 ZIP，每段对话一个独立文件。",
+    exportArchived: "已归档",
+    exportUpdated: "更新于 {time}",
     exportListEmpty: "未找到可导出的账号对话。",
     exportNoSelection: "请先勾选要导出的对话。",
-    exportProgressCurrent: "正在读取当前完整对话…",
+    exportProgressSelected: "正在读取所选对话…",
     conversationIndex: "对话",
     countTimes: "{count} 次",
     customRange: "自定义日期",
@@ -320,10 +322,13 @@
     noModelRecords: "暂无模型记录。",
     none: "清空",
     openaiStatusSubtitle: "status.openai.com",
+    openaiStatusIncomplete: "完整组件列表暂时不可用；当前显示的是官方摘要中的可用条目。",
     openaiStatusTitle: "ChatGPT 网页状态",
     openaiStatusView: "状态",
     parameterCombinations: "参数",
     parameterLatest: "最新参数",
+    requestModels: "请求型号",
+    responsePending: "待确认实际回复",
     refresh: "刷新",
     selected: "已选择 {count} 个模型",
     startDate: "开始",
@@ -337,23 +342,18 @@
     todayOnly: "今日 {today}",
     total: "{count} 次总计",
     unableStatus: "无法读取 OpenAI 状态。",
-    variants: "调用型号"
+    variants: "实际回复型号"
   });
 
   I18N.en = Object.assign({}, I18N.en, {
     chartView: "Usage",
     exportView: "Export",
-    exportSubtitle: "Export the current, selected, or complete account history; multiple chats are zipped",
+    exportSubtitle: "Choose one or more conversations from the list, then export them in the selected format",
     exportFormatJson: "JSON",
     exportFormatMarkdown: "Markdown",
     exportFormatPdf: "PDF",
-    exportFormatPng: "Image",
-    exportFormatDocx: "Word",
-    exportScopeCurrent: "Current",
-    exportScopeSelected: "Selected",
-    exportScopeAll: "All",
-    exportCurrentHint: "Export the complete conversation currently open.",
-    exportAllHint: "Export all {count} conversations in account history, including readable archived chats.",
+    exportFormatPng: "PNG",
+    exportFormatDocx: "Word (DOCX)",
     exportAllLoading: "Reading the account conversation index…",
     exportListIncomplete: "Account history was incomplete; only conversations already present in this list can be exported.",
     exportListUnavailable: "The account conversation index could not be read. Confirm that the active tab is signed in to ChatGPT, then retry.",
@@ -370,9 +370,12 @@
     exportSelectAll: "Select all",
     exportSelectNone: "Clear",
     exportSelectedCount: "{count} selected",
+    exportSelectionHint: "One selection downloads one file. Multiple selections download one ZIP with one file per conversation.",
+    exportArchived: "Archived",
+    exportUpdated: "Updated {time}",
     exportListEmpty: "No account conversations are available to export.",
     exportNoSelection: "Select at least one conversation to export.",
-    exportProgressCurrent: "Reading the complete current conversation…",
+    exportProgressSelected: "Reading selected conversations…",
     customRange: "Custom dates",
     endDate: "End",
     all: "All",
@@ -389,12 +392,16 @@
     languageToggleZh: "中文",
     errorChromeMessaging: "Chrome runtime messaging is unavailable.",
     errorOpenAIStatus: "OpenAI status request failed.",
+    openaiStatusIncomplete: "The complete component list is temporarily unavailable; available items from the official summary are shown.",
     openaiStatusTitle: "ChatGPT web status",
     openaiStatusView: "Status",
     parameterCombinations: "Parameters",
     parameterLatest: "Latest parameters",
+    requestModels: "Request model",
+    responsePending: "Response pending",
     startDate: "Start",
-    todayOnly: "Today {today}"
+    todayOnly: "Today {today}",
+    variants: "Response model"
   });
 
   function normalizeLanguage(value) {
@@ -818,12 +825,7 @@
       if (!event || event.model !== model) {
         return;
       }
-      var name = String(
-        (event.modelParameters && event.modelParameters.model) ||
-          event.chatgptModel ||
-          event.apiModel ||
-          ""
-      ).replace(/\s+/g, " ").trim();
+      var name = String(event.responseModel || "").replace(/\s+/g, " ").trim();
       if (!name) {
         return;
       }
@@ -832,7 +834,7 @@
           name: name,
           count: 0,
           mode: event.modelMode || "",
-          apiModel: event.apiModel || "",
+          apiModel: event.responseModel || event.apiModel || "",
           lastSubmittedAt: ""
         };
       }
@@ -860,6 +862,85 @@
         return b.count - a.count || String(b.lastSubmittedAt).localeCompare(String(a.lastSubmittedAt));
       })
       .slice(0, limit || variants.length);
+  }
+
+  function eventRequestModels(stats, model, events) {
+    var groups = {};
+    (events || stats.events || []).forEach(function collect(event) {
+      if (!event || event.model !== model) {
+        return;
+      }
+      var name = String(
+        event.requestModel ||
+          (event.modelParameters && event.modelParameters.model) ||
+          event.apiModel ||
+          ""
+      ).replace(/\s+/g, " ").trim();
+      if (!name) {
+        return;
+      }
+      if (!groups[name]) {
+        groups[name] = {
+          name: name,
+          count: 0,
+          lastSubmittedAt: ""
+        };
+      }
+      groups[name].count += 1;
+      if (String(event.submittedAt || "") > groups[name].lastSubmittedAt) {
+        groups[name].lastSubmittedAt = String(event.submittedAt || "");
+      }
+    });
+    return Object.keys(groups).map(function toValue(key) {
+      return groups[key];
+    });
+  }
+
+  function storedRequestModels(stats, model) {
+    var fields = stats && stats.parametersByModel && stats.parametersByModel[model] &&
+      stats.parametersByModel[model].fields;
+    var models = fields && fields.model;
+    if (!models || typeof models !== "object") {
+      return [];
+    }
+    return Object.keys(models).map(function toValue(name) {
+      return {
+        name: name,
+        count: Number(models[name]) || 0,
+        lastSubmittedAt: ""
+      };
+    }).filter(function positive(row) {
+      return row.name && row.count > 0;
+    });
+  }
+
+  function modelRequestModels(stats, model, limit, events) {
+    stats = sanitizeDashboardStats(stats || {});
+    var hasEventRows = Array.isArray(events) && events.length > 0;
+    var hasEventArgument = Array.isArray(events);
+    var requests = hasEventRows
+      ? eventRequestModels(stats, model, events)
+      : storedRequestModels(stats, model);
+    if (!requests.length && !hasEventArgument) {
+      requests = eventRequestModels(stats, model);
+    }
+    return requests
+      .sort(function byCountThenRecent(a, b) {
+        return b.count - a.count || String(b.lastSubmittedAt).localeCompare(String(a.lastSubmittedAt));
+      })
+      .slice(0, limit || requests.length);
+  }
+
+  function pendingResponseCount(model, events) {
+    return (Array.isArray(events) ? events : []).reduce(function countPending(total, event) {
+      return total + (
+        event &&
+        event.model === model &&
+        !String(event.responseModel || "").trim()
+          ? 1
+          : 0
+      );
+    }, 0);
   }
 
   function featureLabel(state, id) {
@@ -1171,26 +1252,31 @@
   function ensureSelection(state) {
     state.stats = sanitizeDashboardStats(state.stats || {});
     state.selectedModels = state.selectedModels && typeof state.selectedModels === "object" ? state.selectedModels : {};
-    var models = eligibleModelsInRange(state);
-    var eligible = {};
-    models.forEach(function markEligible(model) {
-      eligible[model] = true;
+    state.knownModels = state.knownModels && typeof state.knownModels === "object" ? state.knownModels : {};
+    var models = Object.keys(state.stats.totals || {}).filter(function hasUsage(model) {
+      return Number(state.stats.totals[model] || 0) > 0;
     });
-    Object.keys(state.selectedModels).forEach(function removeStale(model) {
-      if (!eligible[model]) {
+    var current = {};
+    models.forEach(function selectNewModel(model) {
+      current[model] = true;
+      if (!state.modelSelectionInitialized || !state.knownModels[model]) {
+        if (!(model in state.selectedModels)) {
+          state.selectedModels[model] = true;
+        }
+      }
+      state.knownModels[model] = true;
+    });
+    Object.keys(state.knownModels).forEach(function removeMissingKnownModel(model) {
+      if (!current[model]) {
+        delete state.knownModels[model];
+      }
+    });
+    Object.keys(state.selectedModels).forEach(function removeMissingSelection(model) {
+      if (!current[model]) {
         delete state.selectedModels[model];
       }
     });
-    if (!models.some(function isSelected(model) { return state.selectedModels[model]; })) {
-      models.slice(0, 5).forEach(function select(model) {
-        state.selectedModels[model] = true;
-      });
-    }
-    models.forEach(function keepKnown(model) {
-      if (!(model in state.selectedModels)) {
-        state.selectedModels[model] = false;
-      }
-    });
+    state.modelSelectionInitialized = true;
   }
 
   function chartSeries(stats, models, startDate, endDate) {
@@ -1395,6 +1481,7 @@
         : "";
       var summary = [
         renderModelVariants(stats, row.model, state),
+        renderRequestModels(stats, row.model, state),
         renderParameterCombinations(stats, row.model, state),
         renderFeatureSummary(stats, row.model, state),
         '<div class="usage-session-summary usage-session-block"><span class="usage-record-label">' + escapeHtml(text(state, "conversationIndex")) + '</span><div class="usage-record-sessions">' + renderModelSessions(stats, row.model, state) + "</div></div>"
@@ -1553,11 +1640,13 @@
   }
 
   function renderModelVariants(stats, model, state) {
-    var variants = modelVariants(stats, model, 3, rangeEvents(stats, state, model)).filter(function notSameAsRow(variant) {
+    var events = rangeEvents(stats, state, model);
+    var variants = modelVariants(stats, model, 3, events).filter(function notSameAsRow(variant) {
       // 变体与行模型同名时纯属重复("调用型号 gpt-5-5-thinking" 又写一遍),不再显示。
       return variant && variant.name && variant.name !== model;
     });
-    if (!variants.length) {
+    var pending = pendingResponseCount(model, events);
+    if (!variants.length && !pending) {
       return "";
     }
 
@@ -1571,6 +1660,24 @@
           variant.apiModel ? text(state, "api") + " " + variant.apiModel : ""
         ].filter(Boolean).join(text(state, "separator"));
         return '<div class="usage-variant-row"><b>' + escapeHtml(text(state, "countTimes", { count: variant.count })) + '</b><span title="' + escapeHtml(details) + '">' + escapeHtml(variant.name) + "</span></div>";
+      }).join(""),
+      pending
+        ? '<div class="usage-variant-row pending"><b>' + escapeHtml(text(state, "countTimes", { count: pending })) + '</b><span>' + escapeHtml(text(state, "responsePending")) + "</span></div>"
+        : "",
+      "</div>"
+    ].join("");
+  }
+
+  function renderRequestModels(stats, model, state) {
+    var requests = modelRequestModels(stats, model, 3, rangeEvents(stats, state, model));
+    if (!requests.length) {
+      return "";
+    }
+    return [
+      '<div class="usage-variant-list usage-request-model-list">',
+      '<span class="usage-record-label">' + escapeHtml(text(state, "requestModels")) + "</span>",
+      requests.map(function requestHtml(request) {
+        return '<div class="usage-variant-row"><b>' + escapeHtml(text(state, "countTimes", { count: request.count })) + '</b><span>' + escapeHtml(request.name) + "</span></div>";
       }).join(""),
       "</div>"
     ].join("");
@@ -1624,12 +1731,13 @@
 
   function renderModelRecordSummary(stats, model, state) {
     var variants = renderModelVariants(stats, model, state);
+    var requests = renderRequestModels(stats, model, state);
     var parameters = renderParameterCombinations(stats, model, state);
     var features = renderFeatureSummary(stats, model, state);
-    if (!variants && !parameters && !features) {
+    if (!variants && !requests && !parameters && !features) {
       return "";
     }
-    return '<div class="usage-record-summary">' + variants + parameters + features + "</div>";
+    return '<div class="usage-record-summary">' + variants + requests + parameters + features + "</div>";
   }
 
   function renderModelTextList(stats, state) {
@@ -1737,7 +1845,8 @@
     if (/\b(api|sora|playground|labs|billing|platform)\b|\bfine[-\s]?tuning\b/.test(name)) {
       return false;
     }
-    return /\bchatgpt\b|\bconversations?\b|\bagents?\b|\bdeep research\b|\bimage generation\b|\bvoice mode\b|\bsearch\b|\bgpts\b|\bconnectors?\b|\bapps?\b|\bfile uploads?\b|\blogin\b|\bauth(?:entication)?\b/.test(name);
+    return /\bchatgpt\b|\bconversations?\b|\bagents?\b|\bdeep research\b|\bimage generation\b|\bvoice mode\b|\bsearch\b|\bgpts\b|\bconnectors?\b|\bapps?\b|\bfile uploads?\b|\blogin\b|\bauth(?:entication)?\b/.test(name) ||
+      /^(?:codex web|sites)$/.test(name);
   }
 
   function renderStatusSourceLink(state, status) {
@@ -1784,6 +1893,9 @@
         '<div class="usage-openai-section"><div class="usage-openai-components">' + components.map(function componentHtml(component) { return renderStatusComponent(state, component, false); }).join("") + "</div></div>"
       );
     }
+    if (status.complete === false) {
+      sections.push('<p class="usage-export-warning">' + escapeHtml(text(state, "openaiStatusIncomplete")) + "</p>");
+    }
 
     sections.push("</section>");
     return sections.join("");
@@ -1824,32 +1936,56 @@
     { id: "docx", labelKey: "exportFormatDocx" }
   ];
 
+  function selectedExportConversationIds(state) {
+    var selected = state.exportSelected || {};
+    return (Array.isArray(state.exportConversationList) ? state.exportConversationList : [])
+      .filter(function selectedConversation(conversation) {
+        return conversation && conversation.id && selected[conversation.id];
+      })
+      .map(function id(conversation) { return conversation.id; });
+  }
+
+  function syncExportSelectionUi(state) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    var selected = state.exportSelected || {};
+    var selectedCount = selectedExportConversationIds(state).length;
+    var countNode = typeof state.container.querySelector === "function"
+      ? state.container.querySelector(".usage-export-selcount")
+      : null;
+    if (countNode) {
+      countNode.textContent = text(state, "exportSelectedCount", { count: selectedCount });
+    }
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-conv]"), function syncConversation(input) {
+      input.checked = Boolean(selected[input.getAttribute("data-export-conv")]);
+      input.disabled = Boolean(state.exportBusy);
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-format]"), function syncFormat(button) {
+      button.disabled = Boolean(state.exportBusy || selectedCount === 0);
+    });
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-export-selectall],[data-export-selectnone]"),
+      function syncBulkButton(button) {
+        button.disabled = Boolean(state.exportBusy);
+      }
+    );
+  }
+
   function renderExportPanel(state) {
     var list = Array.isArray(state.exportConversationList) ? state.exportConversationList : null;
     var selected = state.exportSelected || {};
-    var scope = state.exportScope === "selected" || state.exportScope === "all" ? state.exportScope : "current";
-    var selectedCount = Object.keys(selected).filter(function (k) { return selected[k]; }).length;
+    var selectedCount = selectedExportConversationIds(state).length;
+    var formatsDisabled = selectedCount === 0;
     var buttons = EXPORT_FORMATS.map(function formatButton(fmt) {
-      return '<button type="button" class="usage-export-btn" data-export-format="' + fmt.id + '">' +
+      return '<button type="button" class="usage-export-btn" data-export-format="' + fmt.id + '"' +
+        (formatsDisabled ? " disabled" : "") + ">" +
         escapeHtml(text(state, fmt.labelKey)) + "</button>";
-    }).join("");
-
-    var scopeButtons = [
-      { id: "current", label: text(state, "exportScopeCurrent") },
-      { id: "selected", label: text(state, "exportScopeSelected") },
-      { id: "all", label: text(state, "exportScopeAll") }
-    ].map(function scopeButton(item) {
-      var active = item.id === scope;
-      return '<button type="button" class="usage-export-tab' + (active ? " active" : "") +
-        '" data-export-scope="' + item.id + '" aria-pressed="' + (active ? "true" : "false") + '">' +
-        escapeHtml(item.label) + "</button>";
     }).join("");
 
     var listHtml = "";
     var selectbar = "";
-    if (scope === "current") {
-      listHtml = '<p class="usage-export-hint">' + escapeHtml(text(state, "exportCurrentHint")) + "</p>";
-    } else if (list === null) {
+    if (list === null) {
       listHtml = '<p class="usage-export-hint">' + escapeHtml(text(state, "exportAllLoading")) + "</p>";
     } else if (!list.length) {
       var emptyMeta = state.exportConversationMeta || {};
@@ -1868,13 +2004,6 @@
           ? '<br><span class="usage-export-warning">' + escapeHtml(emptyWarningText) + "</span>"
           : "") +
         "</p>";
-    } else if (scope === "all") {
-      listHtml = '<p class="usage-export-hint">' +
-        escapeHtml(text(state, "exportAllHint", { count: list.length })) +
-        (state.exportConversationMeta && state.exportConversationMeta.complete === false
-          ? '<br><span class="usage-export-warning">' + escapeHtml(text(state, "exportListIncomplete")) + "</span>"
-          : "") +
-        "</p>";
     } else {
       selectbar =
         '<div class="usage-export-selectbar">' +
@@ -1882,17 +2011,29 @@
           '<button type="button" class="usage-export-mini" data-export-selectnone>' + escapeHtml(text(state, "exportSelectNone")) + "</button>" +
           '<span class="usage-export-selcount">' + escapeHtml(text(state, "exportSelectedCount", { count: selectedCount })) + "</span>" +
         "</div>";
-      listHtml = '<div class="usage-export-conv-list">' + list.map(function (c) {
+      var listWarning = state.exportConversationMeta && state.exportConversationMeta.complete === false
+        ? '<p class="usage-export-hint usage-export-warning">' + escapeHtml(text(state, "exportListIncomplete")) + "</p>"
+        : "";
+      listHtml = listWarning + '<div class="usage-export-conv-list">' + list.map(function (c) {
         var ck = selected[c.id] ? " checked" : "";
-        return '<label class="usage-export-conv"><input type="checkbox" data-export-conv="' + escapeHtml(c.id) + '"' + ck + "><span>" + escapeHtml(c.title) + "</span></label>";
+        var title = c.title || c.id;
+        var updated = formatDateTime(c.updateTime || c.createTime);
+        var archived = c.archived
+          ? '<small class="usage-export-conv-badge">' + escapeHtml(text(state, "exportArchived")) + "</small>"
+          : "";
+        return '<label class="usage-export-conv"><input type="checkbox" data-export-conv="' + escapeHtml(c.id) +
+          '" aria-label="' + escapeHtml(title) + '"' + ck + '><span class="usage-export-conv-copy"><b>' +
+          escapeHtml(title) + "</b>" +
+          (updated ? "<small>" + escapeHtml(text(state, "exportUpdated", { time: updated })) + "</small>" : "") +
+          "</span>" + archived + "</label>";
       }).join("") + "</div>";
     }
 
     return [
       '<section class="usage-export-panel">',
-      '<div class="usage-export-scope" role="group" aria-label="' + escapeHtml(text(state, "exportView")) + '">' + scopeButtons + "</div>",
       selectbar,
       listHtml,
+      '<p class="usage-export-hint">' + escapeHtml(text(state, "exportSelectionHint")) + "</p>",
       '<div class="usage-export-actions">' + buttons + "</div>",
       '<p class="usage-export-status" data-export-status aria-live="polite"></p>',
       "</section>"
@@ -2343,39 +2484,33 @@
         exportConversations(state, button.getAttribute("data-export-format"));
       });
     });
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-scope]"), function bindExportScope(button) {
-      button.addEventListener("click", function changeExportScope() {
-        state.exportScope = button.getAttribute("data-export-scope");
-        if ((state.exportScope === "selected" || state.exportScope === "all") && !Array.isArray(state.exportConversationList)) {
-          loadExportConversationList(state);
-        }
-        render(state);
-      });
-    });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-conv]"), function bindConv(input) {
       input.addEventListener("change", function toggleConv() {
         if (!state.exportSelected) { state.exportSelected = {}; }
-        state.exportSelected[input.getAttribute("data-export-conv")] = input.checked;
-        var countNode = state.container.querySelector(".usage-export-selcount");
-        if (countNode) {
-          var n = Object.keys(state.exportSelected).filter(function (k) { return state.exportSelected[k]; }).length;
-          countNode.textContent = text(state, "exportSelectedCount", { count: n });
+        var id = input.getAttribute("data-export-conv");
+        if (input.checked) {
+          state.exportSelected[id] = true;
+        } else {
+          delete state.exportSelected[id];
         }
+        syncExportSelectionUi(state);
       });
     });
     var selectAllBtn = state.container.querySelector("[data-export-selectall]");
     if (selectAllBtn) {
       selectAllBtn.addEventListener("click", function selectAll() {
-        state.exportSelected = state.exportSelected || {};
-        (state.exportConversationList || []).forEach(function (c) { state.exportSelected[c.id] = true; });
-        render(state);
+        state.exportSelected = {};
+        (state.exportConversationList || []).forEach(function (c) {
+          if (c && c.id) { state.exportSelected[c.id] = true; }
+        });
+        syncExportSelectionUi(state);
       });
     }
     var selectNoneBtn = state.container.querySelector("[data-export-selectnone]");
     if (selectNoneBtn) {
       selectNoneBtn.addEventListener("click", function selectNone() {
         state.exportSelected = {};
-        render(state);
+        syncExportSelectionUi(state);
       });
     }
     bindTooltip(state);
@@ -2434,6 +2569,14 @@
     var list = Array.isArray(result) ? result : result && result.conversations;
     state.exportConversationList = Array.isArray(list) ? list : [];
     state.exportConversationMeta = Array.isArray(result) ? { complete: false, source: "sidebar" } : (result || {});
+    var previousSelection = state.exportSelected || {};
+    var nextSelection = {};
+    state.exportConversationList.forEach(function keepExistingSelection(conversation) {
+      if (conversation && conversation.id && previousSelection[conversation.id]) {
+        nextSelection[conversation.id] = true;
+      }
+    });
+    state.exportSelected = nextSelection;
     render(state);
     return state.exportConversationMeta;
   }
@@ -2476,53 +2619,18 @@
     return Promise.resolve(root[helperName].apply(root, args || [])).then(normalizeConversationCollection);
   }
 
-  // 用户进入导出页后才读取。账号历史走 ChatGPT 同源接口并自动带当前登录会话；
-  // 不读取 cookie、令牌或请求头。接口不可用时，内容脚本回退到已渲染页面和侧边栏。
-  function collectConversationsForExport(state) {
-    setExportStatus(state, text(state, "exportProgressCurrent"));
-    var direct = directPageCollection(state, "__chatgptUsageCollectCurrent");
-    if (direct) {
-      return direct;
-    }
-    return tabsSendMessage({ type: "conversation.collect" }).then(function (resp) {
-      if (!resp || !resp.ok) { throw new Error((resp && resp.error) || text(state, "exportOpenPage")); }
-      return normalizeConversationCollection(resp);
-    });
-  }
-
   function exportTargetPlan(state) {
-    var scope = state.exportScope === "selected" || state.exportScope === "all" ? state.exportScope : "current";
-    if (scope === "current") {
-      return Promise.resolve({ scope: scope, current: true, ids: [], complete: true, warnings: [] });
+    var selectedIds = selectedExportConversationIds(state);
+    if (!selectedIds.length) {
+      return Promise.reject(new Error(text(state, "exportNoSelection")));
     }
-    if (scope === "selected") {
-      var selectedIds = Object.keys(state.exportSelected || {}).filter(function selected(id) { return state.exportSelected[id]; });
-      if (!selectedIds.length) {
-        return Promise.reject(new Error(text(state, "exportNoSelection")));
-      }
-      return Promise.resolve({ scope: scope, current: false, ids: selectedIds, complete: true, warnings: [] });
-    }
-
-    function fromState() {
-      var list = Array.isArray(state.exportConversationList) ? state.exportConversationList : [];
-      var meta = state.exportConversationMeta || {};
-      return {
-        scope: scope,
-        current: false,
-        ids: list.map(function id(item) { return item.id; }).filter(Boolean),
-        complete: meta.complete !== false,
-        warnings: Array.isArray(meta.warnings) ? meta.warnings : [],
-        source: meta.source || ""
-      };
-    }
-
-    if (Array.isArray(state.exportConversationList)) {
-      return Promise.resolve(fromState());
-    }
-    if (!state.exportConversationListRequest) {
-      loadExportConversationList(state);
-    }
-    return Promise.resolve(state.exportConversationListRequest).then(fromState);
+    return Promise.resolve({
+      scope: "selected",
+      current: false,
+      ids: selectedIds,
+      complete: true,
+      warnings: []
+    });
   }
 
   function collectConversationChunk(state, ids) {
@@ -2562,17 +2670,12 @@
           return [{ blob: blob, filename: base + ".pdf" }];
         });
       }
-      if ((format === "png" || format === "image") && typeof exporter.renderConversationsPngBlobs === "function") {
-        return exporter.renderConversationsPngBlobs(valid, { filenameBase: base, pageHeight: 14000 }).then(function (blobs) {
-          return blobs.map(function pngPage(blob, index) {
-            var suffix = blobs.length > 1 ? "-part-" + String(index + 1).padStart(3, "0") : "";
-            return { blob: blob, filename: base + suffix + ".png" };
-          });
+      if ((format === "png" || format === "image") && typeof exporter.buildPngBlobFromConversations === "function") {
+        return exporter.buildPngBlobFromConversations(valid, { filenameBase: base, pageHeight: 14000 }).then(function (blob) {
+          return [{ blob: blob, filename: base + ".png" }];
         });
       }
-      var pages = typeof exporter.renderConversationsCanvasPages === "function"
-        ? exporter.renderConversationsCanvasPages(valid, { filenameBase: base, pageHeight: format === "pdf" ? 1216 : 14000 })
-        : [exporter.renderConversationsCanvas(valid, { filenameBase: base })];
+      var pages = [exporter.renderConversationsCanvas(valid, { filenameBase: base })];
       if (format === "pdf") {
         var pdfPromise = typeof exporter.buildPdfBlobFromCanvases === "function"
           ? exporter.buildPdfBlobFromCanvases(pages, {})
@@ -2581,12 +2684,9 @@
           return [{ blob: blob, filename: base + ".pdf" }];
         });
       }
-      return Promise.all(pages.map(function pngPage(canvas, index) {
-        return exporter.canvasToPngBlob(canvas).then(function (blob) {
-          var suffix = pages.length > 1 ? "-part-" + String(index + 1).padStart(3, "0") : "";
-          return { blob: blob, filename: base + suffix + ".png" };
-        });
-      }));
+      return exporter.canvasToPngBlob(pages[0]).then(function pngFile(blob) {
+        return [{ blob: blob, filename: base + ".png" }];
+      });
     }
     // Word 走渲染版(Markdown→Word 结构),其余(Markdown/JSON)走原始同步导出。
     if (format === "docx" && typeof exporter.buildDocxRenderedBlob === "function") {
@@ -2600,8 +2700,12 @@
     if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
       return;
     }
+    if (!disabled) {
+      syncExportSelectionUi(state);
+      return;
+    }
     Array.prototype.forEach.call(
-      state.container.querySelectorAll("[data-export-format],[data-export-scope],[data-export-selectall],[data-export-selectnone],[data-export-conv]"),
+      state.container.querySelectorAll("[data-export-format],[data-export-selectall],[data-export-selectnone],[data-export-conv]"),
       function toggle(control) {
         control.disabled = Boolean(disabled);
       }
@@ -2621,19 +2725,11 @@
     setExportControlsDisabled(state, true);
     setExportStatus(state, text(state, "exportRunning"));
     return exportTargetPlan(state).then(function executePlan(plan) {
-      if (plan.current) {
-        return collectConversationsForExport(state).then(function currentResult(collection) {
-          var current = (collection.conversations || []).filter(function valid(c) { return c && Array.isArray(c.messages) && c.messages.length; });
-          if (!current.length) {
-            throw new Error((collection.failures[0] && collection.failures[0].error) || text(state, "exportEmpty"));
-          }
-          return downloadSingleConversation(state, exporter, current[0], format, collection);
-        });
-      }
       if (!plan.ids.length) {
         throw new Error(plan.warnings.length ? text(state, "exportListUnavailable") : text(state, "exportEmpty"));
       }
-      if (plan.ids.length === 1 && plan.complete && !plan.warnings.length) {
+      setExportStatus(state, text(state, "exportProgressSelected"));
+      if (plan.ids.length === 1) {
         return collectConversationChunk(state, plan.ids).then(function singleSelected(collection) {
           var targetId = plan.ids[0];
           var conversation = (collection.conversations || []).find(function exactTarget(item) {
@@ -2773,34 +2869,15 @@
   function downloadSingleConversation(state, exporter, conversation, format, collection) {
     var base = uniqueConversationBases(exporter, [conversation])[0];
     return buildExportArtifacts(exporter, [conversation], format, base).then(function (artifacts) {
-      if (artifacts.length === 1) {
-        return downloadOneFile(state, exporter, artifacts[0].blob, artifacts[0].filename).then(function () {
-          if (collection && (collection.complete === false || (collection.warnings || []).length)) {
-            setExportStatus(state, text(state, "exportSingleIncomplete", { name: artifacts[0].filename }), true);
-          } else {
-            setExportStatus(state, text(state, "exportDone", { name: artifacts[0].filename }));
-          }
-        });
+      if (artifacts.length !== 1) {
+        throw new Error("One selected conversation must produce exactly one file.");
       }
-      return Promise.all(artifacts.map(function toArchiveFile(artifact) {
-        return blobToBytes(artifact.blob).then(function bytes(content) {
-          return { name: artifact.filename, content: content };
-        });
-      })).then(function archiveLongImage(files) {
-        return finishConversationArchive(
-          state,
-          exporter,
-          files,
-          format,
-          {
-            requestedCount: 1,
-            complete: !collection || collection.complete !== false,
-            failures: collection && collection.failures || [],
-            warnings: collection && collection.warnings || []
-          },
-          1,
-          []
-        );
+      return downloadOneFile(state, exporter, artifacts[0].blob, artifacts[0].filename).then(function () {
+        if (collection && (collection.complete === false || (collection.warnings || []).length)) {
+          setExportStatus(state, text(state, "exportSingleIncomplete", { name: artifacts[0].filename }), true);
+        } else {
+          setExportStatus(state, text(state, "exportDone", { name: artifacts[0].filename }));
+        }
       });
     });
   }
@@ -2840,6 +2917,9 @@
     function convertConversation(conversation, position) {
       var base = nextUniqueConversationBase(exporter, conversation, position, seenBases);
       return buildExportArtifacts(exporter, [conversation], format, base).then(function (artifacts) {
+        if (artifacts.length !== 1) {
+          throw new Error("Each selected conversation must produce exactly one file.");
+        }
         return Promise.all(artifacts.map(function convertArtifact(artifact) {
           return blobToBytes(artifact.blob).then(function addFile(bytes) {
             return { name: artifact.filename, content: bytes };
@@ -2957,8 +3037,7 @@
       files: files.map(function filename(file) { return file.name; })
     };
     files.push({ name: "_export-report.json", content: JSON.stringify(report, null, 2) + "\n" });
-    var scope = state.exportScope === "all" ? "all" : state.exportScope === "current" ? "current" : "selected";
-    var archiveName = "chatgpt-" + scope + "-" + format + "-" + localExportDateStamp() + ".zip";
+    var archiveName = "chatgpt-conversations-" + format + "-" + localExportDateStamp() + ".zip";
     var zipBlob = new Blob([exporter.buildZip(files)], { type: (exporter.MIME && exporter.MIME.zip) || "application/zip" });
     // ZIP 本身只有一次下载。弹窗使用 chrome.downloads + Blob URL，页面内面板直接下载 Blob；
     // 两条路径都避免把大型归档转成 base64 后跨扩展消息传输。
@@ -3028,8 +3107,15 @@
     });
 
     var openaiStatus = isActiveStatusView(state) ? ensureOpenAIStatus(state, true) : Promise.resolve(null);
+    // Refresh means refresh the data visible in the active view. The export
+    // conversation index is account data rather than part of usage stats, so
+    // retaining the previous array here leaves the UI permanently stale after
+    // account history, archived state, or the page-side source changes.
+    var exportConversations = state.activeView === "export"
+      ? loadExportConversationList(state)
+      : Promise.resolve(null);
 
-    return Promise.all([core, openaiStatus]).then(function done() {
+    return Promise.all([core, openaiStatus, exportConversations]).then(function done() {
       return state;
     });
   }
@@ -3095,28 +3181,27 @@
       ".usage-export-panel{padding:6px 2px 4px;display:flex;flex-direction:column;gap:8px}",
       ".usage-export-title{margin:0;font-size:13px;font-weight:600;color:var(--usage-text-primary)}",
       ".usage-export-hint{margin:0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary)}",
-      ".usage-export-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}",
+      ".usage-export-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}",
       ".usage-export-btn{border:1px solid var(--usage-border-panel);background:var(--usage-surface-panel);color:var(--usage-text-primary);border-radius:6px;padding:7px 8px;font-size:12px;font-weight:600;cursor:pointer;transition:background .12s ease,border-color .12s ease}",
       ".usage-export-btn:hover{background:var(--usage-surface-track);border-color:var(--usage-accent-strong,var(--usage-text-secondary))}",
       ".usage-export-btn:focus-visible{outline:2px solid var(--usage-accent-strong,var(--usage-text-secondary));outline-offset:2px}",
       ".usage-export-btn:active{transform:translateY(1px)}",
-      ".usage-export-btn:disabled,.usage-export-tab:disabled,.usage-export-mini:disabled{opacity:.55;cursor:wait;transform:none}",
+      ".usage-export-btn:disabled,.usage-export-mini:disabled{opacity:.55;cursor:wait;transform:none}",
       ".usage-export-status{margin:2px 0 0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary);min-height:14px}",
       ".usage-export-status.error{color:var(--usage-error-status-text,#dc2626)}",
       ".usage-export-warning{color:var(--usage-warning-text,#b45309)}",
-      ".usage-export-scope{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}",
-      ".usage-export-tab{border:1px solid var(--usage-border-panel);background:var(--usage-surface-panel);color:var(--usage-text-secondary);border-radius:6px;padding:5px;font-size:12px;cursor:pointer}",
-      ".usage-export-tab.active{background:var(--usage-surface-track);color:var(--usage-text-primary);font-weight:600;border-color:var(--usage-accent-link,var(--usage-text-secondary))}",
-      ".usage-export-tab:focus-visible{outline:2px solid var(--usage-accent-link,#10a37f);outline-offset:1px}",
       ".usage-export-selectbar{display:flex;align-items:center;gap:6px}",
       ".usage-export-mini{border:1px solid var(--usage-border-panel);background:transparent;color:var(--usage-text-secondary);border-radius:5px;padding:3px 8px;font-size:11px;cursor:pointer}",
       ".usage-export-mini:hover{background:var(--usage-surface-track)}",
       ".usage-export-selcount{margin-left:auto;font-size:11px;color:var(--usage-text-muted)}",
-      ".usage-export-conv-list{max-height:180px;overflow:auto;border:1px solid var(--usage-border-panel);border-radius:6px;padding:4px;display:flex;flex-direction:column;gap:2px}",
+      ".usage-export-conv-list{max-height:240px;overflow:auto;border:1px solid var(--usage-border-panel);border-radius:6px;padding:4px;display:flex;flex-direction:column;gap:2px}",
       ".usage-export-conv{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:4px;cursor:pointer;font-size:12px}",
       ".usage-export-conv:hover{background:var(--usage-surface-track)}",
-      ".usage-export-conv span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}",
+      ".usage-export-conv-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}",
+      ".usage-export-conv-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600;color:var(--usage-text-primary)}",
+      ".usage-export-conv-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--usage-text-muted)}",
       ".usage-export-conv input{flex:0 0 auto}",
+      ".usage-export-conv-badge{margin-left:auto;flex:0 0 auto;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:10px}",
       // —— 视觉优化:键盘焦点可见、交互态、溢出处理、减少动画 ——
       ".usage-dashboard button:focus-visible,.usage-dashboard select:focus-visible,.usage-dashboard input:focus-visible{outline:2px solid var(--usage-accent-link,#10a37f);outline-offset:1px}",
       ".usage-view-tab{cursor:pointer;border-radius:5px;transition:background .12s ease,color .12s ease}",
@@ -3251,6 +3336,8 @@
       startDate: "",
       endDate: "",
       selectedModels: {},
+      knownModels: {},
+      modelSelectionInitialized: false,
       openaiStatus: null,
       openaiStatusError: "",
       openaiStatusLoaded: false,
@@ -3261,7 +3348,6 @@
       statusText: "",
       statusError: false,
       statusScope: "global",
-      exportScope: "current",
       exportConversationList: null,
       exportConversationMeta: null,
       exportSelected: {},
@@ -3284,6 +3370,7 @@
     chartSeries: chartSeries,
     flattenSessions: flattenSessions,
     init: init,
+    modelRequestModels: modelRequestModels,
     modelVariants: modelVariants,
     parameterCombinations: parameterCombinations,
     renderActiveView: renderActiveView,
@@ -3293,6 +3380,8 @@
     _test: {
       detectPageTheme: detectPageTheme,
       render: render,
+      bindEvents: bindEvents,
+      ensureSelection: ensureSelection,
       applyPopupThemeVariables: applyPopupThemeVariables,
       buildExportArtifacts: buildExportArtifacts,
       downloadConversationArchiveByIds: downloadConversationArchiveByIds,
@@ -3300,6 +3389,7 @@
       finishConversationArchive: finishConversationArchive,
       localExportDateStamp: localExportDateStamp,
       normalizeConversationCollection: normalizeConversationCollection,
+      syncExportSelectionUi: syncExportSelectionUi,
       uniqueConversationBases: uniqueConversationBases
     }
   };

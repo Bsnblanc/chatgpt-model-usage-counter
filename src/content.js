@@ -55,16 +55,24 @@
   var MESSAGE_MATCH_WINDOW_MS = 60000;
   var COMPOSER_POLL_MS = 500;
   var MODEL_OBSERVATION_WAIT_MS = 12000;
+  var FINAL_RESPONSE_MODEL_WAIT_MS = 1500;
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var STATUS_KEY = "chatgptModelUsageOpenAIStatus.v1";
   var lastSubmission = null;
   var lastDirectSubmission = null;
   var lastComposerSnapshot = null;
   var lastObservedModelInfo = null;
+  var runtimeModelCatalog = null;
+  var runtimeModelCatalogPromise = null;
   var pendingSubmissions = [];
   var pendingSubmissionTimer = null;
+  var pendingResponseObservations = [];
+  var submissionSequence = 0;
   var seenUserMessages = new Set();
   var seenAssistantModelMessages = new Set();
+  var pendingAssistantModelCandidate = null;
+  var pendingAssistantModelTimer = null;
+  var ensureUsagePanelMounted = null;
 
   function setDiagnostic(name, value) {
     if (!document.documentElement || typeof document.documentElement.setAttribute !== "function") {
@@ -126,6 +134,74 @@
       .replace(/[\u200b-\u200f\u2060]/g, "")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function sanitizeRuntimeModelCatalog(value) {
+    if (!modelCatalog || typeof modelCatalog.sanitizeRuntimeModelCatalog !== "function") {
+      return null;
+    }
+    return modelCatalog.sanitizeRuntimeModelCatalog(value);
+  }
+
+  function runtimeCatalogSnapshot(payload) {
+    var source = payload && typeof payload === "object" ? payload : {};
+    return sanitizeRuntimeModelCatalog({
+      observedAt: new Date().toISOString(),
+      models: source.models,
+      versions: source.versions,
+      categories: source.categories
+    });
+  }
+
+  function publishRuntimeModelCatalog(catalog) {
+    var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
+    if (!catalog || !runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
+      return;
+    }
+    try {
+      runtime.sendMessage({ type: "usage.catalog", catalog: catalog }, function ignoreCatalogResponse() {
+        void runtime.lastError;
+      });
+    } catch (error) {
+      if (/context invalidated|Extension context/i.test(String((error && error.message) || error || ""))) {
+        handleExtensionContextInvalidated();
+      }
+    }
+  }
+
+  function refreshRuntimeModelCatalog() {
+    if (runtimeModelCatalogPromise) {
+      return runtimeModelCatalogPromise;
+    }
+    if (!modelCatalog || typeof modelCatalog.sanitizeRuntimeModelCatalog !== "function" || typeof fetch !== "function") {
+      return Promise.resolve(null);
+    }
+    runtimeModelCatalogPromise = fetch("/backend-api/models?history_and_training_disabled=false", {
+      credentials: "include",
+      cache: "no-store"
+    }).then(function parseCatalogResponse(response) {
+      if (!response || !response.ok || typeof response.json !== "function") {
+        throw new Error("model-catalog-http-" + (response && response.status));
+      }
+      return response.json();
+    }).then(function rememberCatalog(payload) {
+      var catalog = runtimeCatalogSnapshot(payload);
+      if (!catalog) {
+        throw new Error("model-catalog-empty");
+      }
+      runtimeModelCatalog = catalog;
+      setDiagnostic("model-catalog-status", "ok");
+      setDiagnostic("model-catalog-observed-at", catalog.observedAt || "");
+      publishRuntimeModelCatalog(catalog);
+      return catalog;
+    }).catch(function catalogFailed(error) {
+      setDiagnostic("model-catalog-status", "error:" + String((error && error.message) || error || "unknown").slice(0, 80));
+      return null;
+    }).then(function allowFutureRefresh(result) {
+      runtimeModelCatalogPromise = null;
+      return result;
+    });
+    return runtimeModelCatalogPromise;
   }
 
   function hashText(value) {
@@ -253,6 +329,14 @@
       (hasGenericRequestModelEvidence(normalized) ||
         (/(?=.*[a-z])(?=.*\d)(?=.*[-_.])^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+$/i.test(clean) &&
           !/^(?:model|reasoning|text|tools?|temperature|max|response|request|conversation|metadata|stream|protocol|transport|endpoint|session)(?:[-_.]|$)/i.test(clean)));
+  }
+
+  function isChatGPTRouteSlug(value) {
+    var clean = canonicalRequestModelSlug(value);
+    if (modelCatalog && typeof modelCatalog.isChatGPTRouteSlug === "function") {
+      return modelCatalog.isChatGPTRouteSlug(clean);
+    }
+    return clean === "auto" || isActualRequestModelSlug(clean);
   }
 
   function hasKnownRequestModelPrefix(value) {
@@ -674,7 +758,7 @@
       if (!safeKey || value === "" || value == null) {
         return false;
       }
-      if (/^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel)$/.test(safeKey) && typeof value === "string" && !isActualRequestModelSlug(value)) {
+      if (/^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel)$/.test(safeKey) && typeof value === "string" && !isChatGPTRouteSlug(value)) {
         return false;
       }
       if (/^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel)$/.test(safeKey) && typeof value === "string") {
@@ -693,7 +777,7 @@
 
   function resolveModelText(value, source, observedAt) {
     var clean = canonicalRequestModelSlug(value);
-    if (isRequestModelSource(source) && isActualRequestModelSlug(clean)) {
+    if (isRequestModelSource(source) && isChatGPTRouteSlug(clean)) {
       var requestInfo = typeof detector.resolveModelInfo === "function" ? detector.resolveModelInfo(clean) : null;
       return {
         label: (requestInfo && requestInfo.label) || clean,
@@ -735,6 +819,9 @@
     if (observedParameters && observedParameters.model && isActualRequestModelSlug(observedParameters.model)) {
       info.chatgptModel = canonicalRequestModelSlug(observedParameters.model);
     }
+    if (/^message-dom:model-slug/i.test(String(source || ""))) {
+      info.responseModel = canonicalRequestModelSlug(value);
+    }
     info.usageFeatures = normalizeUsageFeatures(observedFeatures);
     lastObservedModelInfo = info;
     if (shouldFlush !== false) {
@@ -753,8 +840,18 @@
       info.parameters = actualModelParameters({ model: info.apiModel }, info.apiModel);
       info.observedSource = info.observedSource || "message-dom:dom";
       info.chatgptModel = info.chatgptModel || info.apiModel;
+      if (
+        runtimeModelCatalog &&
+        modelCatalog &&
+        typeof modelCatalog.selectedPublicModelFromText === "function"
+      ) {
+        info.publicModel = modelCatalog.selectedPublicModelFromText(info.selectedText || "", runtimeModelCatalog) || info.publicModel || "";
+      }
+      info.selectedPublicModel = info.publicModel || "";
+      info.selectedPublicModelSource = info.selectedPublicModel ? "selector-dom" : "";
       setDiagnostic("detected-model", info.label);
       setDiagnostic("detected-api-model", info.apiModel);
+      setDiagnostic("detected-public-model", info.selectedPublicModel);
       setDiagnostic("detected-model-source", info.observedSource);
       return info;
     }
@@ -791,13 +888,121 @@
     return null;
   }
 
-  function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures) {
+  function conversationIdFromCurrentLocation() {
+    var match = String(location && location.href || "").match(/\/c\/([^/?#]+)/i);
+    return match ? match[1] : "";
+  }
+
+  function createSubmissionId(now, promptHash) {
+    submissionSequence += 1;
+    return [
+      "usage",
+      Number(now || Date.now()).toString(36),
+      submissionSequence.toString(36),
+      String(promptHash || "").slice(0, 12)
+    ].join("-");
+  }
+
+  function removePendingResponseObservation(submissionId) {
+    var id = String(submissionId || "");
+    pendingResponseObservations = pendingResponseObservations.filter(function keep(item) {
+      return item.submissionId !== id;
+    });
+  }
+
+  function prunePendingResponseObservations(now) {
+    var current = Number(now || Date.now());
+    pendingResponseObservations = pendingResponseObservations.filter(function keep(item) {
+      return current - Number(item.submittedAt || 0) <= 60 * 60 * 1000;
+    });
+  }
+
+  function rememberPendingResponseObservation(submissionId, submittedAt, pageUrl) {
+    if (!submissionId) {
+      return;
+    }
+    removePendingResponseObservation(submissionId);
+    prunePendingResponseObservations(submittedAt);
+    pendingResponseObservations.push({
+      submissionId: submissionId,
+      submittedAt: Number(submittedAt || Date.now()),
+      conversationId: conversationIdFromCurrentLocation(),
+      pageUrl: String(pageUrl || location.href || "")
+    });
+  }
+
+  function clearOlderPendingResponsesForConversation(submittedAt) {
+    var conversationId = conversationIdFromCurrentLocation();
+    pendingResponseObservations = pendingResponseObservations.filter(function keep(item) {
+      return item.conversationId !== conversationId || Number(item.submittedAt || 0) > Number(submittedAt || 0);
+    });
+  }
+
+  function sendResponseObservation(responseModel, observedSource, observedAt) {
+    var model = canonicalRequestModelSlug(responseModel);
+    if (!isActualRequestModelSlug(model)) {
+      return false;
+    }
+    prunePendingResponseObservations(observedAt);
+    var conversationId = conversationIdFromCurrentLocation();
+    var matchIndex = -1;
+    for (var index = pendingResponseObservations.length - 1; index >= 0; index -= 1) {
+      if (!conversationId || pendingResponseObservations[index].conversationId === conversationId) {
+        matchIndex = index;
+        break;
+      }
+    }
+    if (matchIndex < 0) {
+      return false;
+    }
+
+    var pending = pendingResponseObservations.splice(matchIndex, 1)[0];
+    var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
+    if (!runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
+      return false;
+    }
+    try {
+      runtime.sendMessage({
+        type: "usage.response",
+        payload: {
+          submissionId: pending.submissionId,
+          conversationId: pending.conversationId,
+          responseModel: model,
+          runtimeModelCatalog: runtimeModelCatalog,
+          pageUrl: pending.pageUrl || location.href,
+          observedSource: String(observedSource || "message-dom:model-slug").slice(0, 64),
+          observedAt: new Date(Number(observedAt || Date.now())).toISOString()
+        }
+      }, function responseObserved(response) {
+        if (runtime.lastError || !response || !response.ok) {
+          setDiagnostic("last-response-status", "error");
+          return;
+        }
+        setDiagnostic("last-response-status", response.updated ? "updated" : "unchanged");
+        setDiagnostic("last-response-model", model);
+      });
+    } catch (error) {
+      if (/context invalidated|Extension context/i.test(String((error && error.message) || error || ""))) {
+        handleExtensionContextInvalidated();
+      }
+      return false;
+    }
+    return true;
+  }
+
+  function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures, submissionId) {
     var resolved = hasResolvedModel(modelInfo);
     var model = resolved ? modelInfo.label : "";
     var apiModel = resolved ? modelInfo.apiModel : "";
     var chatgptModel = resolved ? modelInfo.chatgptModel || "" : "";
     var modelMode = resolved ? modelInfo.mode || "" : "";
     var modelParameters = resolved ? modelInfo.parameters : {};
+    var publicModel = resolved ? modelInfo.selectedPublicModel || modelInfo.publicModel || "" : "";
+    var selectedPublicModelSource = resolved
+      ? modelInfo.selectedPublicModelSource || (publicModel ? "selector-dom" : "")
+      : "";
+    var requestModel = resolved ? modelInfo.requestModel || modelParameters.model || apiModel : "";
+    var responseModel = resolved ? modelInfo.responseModel || "" : "";
     var observedSource = resolved ? modelInfo.observedSource || "page" : "pending-webRequest";
     var usageFeatures = resolved ? normalizeUsageFeatures(modelInfo.usageFeatures) : normalizeUsageFeatures(pendingUsageFeatures);
     var duplicateKey = model || "pending-webRequest";
@@ -831,6 +1036,11 @@
       // 已知扩展上下文失效(扩展被重载/更新),不再尝试发送,避免重复抛错。
       return false;
     }
+    if (responseModel) {
+      clearOlderPendingResponsesForConversation(now);
+    } else {
+      rememberPendingResponseObservation(submissionId, now, location.href);
+    }
 
     try {
     runtime.sendMessage(
@@ -838,12 +1048,19 @@
         type: "usage.increment",
         payload: {
           model: model,
+          publicModel: publicModel,
+          selectedPublicModel: publicModel,
+          selectedPublicModelSource: selectedPublicModelSource,
           apiModel: apiModel,
           chatgptModel: chatgptModel,
+          requestModel: requestModel,
+          responseModel: responseModel,
           modelMode: modelMode,
           modelParameters: modelParameters,
+          runtimeModelCatalog: runtimeModelCatalog,
           usageFeatures: usageFeatures,
           modelObservedSource: observedSource,
+          submissionId: submissionId,
           source: source,
           pageUrl: location.href,
           pageTitle: document.title,
@@ -854,20 +1071,24 @@
       },
       function recordResponse(response) {
         if (runtime.lastError) {
+          removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "error:" + runtime.lastError.message);
           return;
         }
         if (!response || !response.ok) {
+          removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "error");
           return;
         }
 
         if (!response.recorded && response.duplicate) {
+          removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "duplicate");
           return;
         }
 
         if (!response.recorded) {
+          removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "blocked:no-request-model");
           return;
         }
@@ -896,6 +1117,7 @@
     );
     } catch (sendError) {
       var sendErrorMessage = sendError && sendError.message ? sendError.message : "send-failed";
+      removePendingResponseObservation(submissionId);
       setDiagnostic("last-record-status", "error:" + sendErrorMessage);
       if (/context invalidated|Extension context/i.test(sendErrorMessage)) {
         handleExtensionContextInvalidated();
@@ -920,12 +1142,23 @@
 
     items.forEach(function flushPendingItem(item) {
       var observed = freshObservedModel(Date.now(), item.time - 250);
-      var modelInfo = hasResolvedModel(observed) ? observed : null;
-      if (!modelInfo && hasResolvedModel(item.domModelInfo)) {
-        modelInfo = item.domModelInfo;
+      var modelInfo = hasResolvedModel(item.domModelInfo) ? Object.assign({}, item.domModelInfo) : null;
+      if (hasResolvedModel(observed)) {
+        if (!modelInfo) {
+          modelInfo = Object.assign({}, observed);
+        } else {
+          modelInfo.apiModel = observed.apiModel || modelInfo.apiModel;
+          modelInfo.chatgptModel = observed.chatgptModel || modelInfo.chatgptModel;
+          modelInfo.mode = observed.mode || modelInfo.mode;
+          modelInfo.parameters = actualModelParameters(observed.parameters, observed.apiModel);
+          modelInfo.observedSource = observed.observedSource || modelInfo.observedSource;
+        }
+        if (observed.responseModel) {
+          modelInfo.responseModel = observed.responseModel;
+        }
       }
       modelInfo = withSubmissionUsageFeatures(modelInfo, item.usageFeatures);
-      sendUsage(item.source, item.promptText, modelInfo, item.time, item.usageFeatures);
+      sendUsage(item.source, item.promptText, modelInfo, item.time, item.usageFeatures, item.submissionId);
     });
     return true;
   }
@@ -974,6 +1207,7 @@
     }
 
     pendingSubmissions.push({
+      submissionId: createSubmissionId(now, hash),
       source: source,
       promptText: promptText,
       domModelInfo: hasResolvedModel(domModelInfo) ? domModelInfo : null,
@@ -1099,7 +1333,8 @@
       found.push({
         element: element,
         key: assistantModelKey(element, model),
-        model: normalizePromptText(model)
+        model: normalizePromptText(model),
+        contentLength: getElementText(element).length
       });
     });
 
@@ -1137,22 +1372,70 @@
     });
   }
 
+  function commitAssistantModelCandidate(message) {
+    if (!message || !message.model) {
+      return false;
+    }
+    if (pendingAssistantModelTimer) {
+      clearTimeout(pendingAssistantModelTimer);
+      pendingAssistantModelTimer = null;
+    }
+    pendingAssistantModelCandidate = null;
+    var observedAt = Date.now();
+    rememberObservedModel(
+      message.model,
+      "message-dom:model-slug",
+      observedAt,
+      true,
+      { model: message.model },
+      []
+    );
+    return sendResponseObservation(message.model, "message-dom:model-slug", observedAt);
+  }
+
+  function scheduleAssistantModelCandidate(message) {
+    pendingAssistantModelCandidate = message;
+    if (pendingAssistantModelTimer || typeof setTimeout !== "function") {
+      return;
+    }
+    pendingAssistantModelTimer = setTimeout(function commitDelayedAssistantModel() {
+      pendingAssistantModelTimer = null;
+      var candidate = pendingAssistantModelCandidate;
+      pendingAssistantModelCandidate = null;
+      commitAssistantModelCandidate(candidate);
+    }, FINAL_RESPONSE_MODEL_WAIT_MS);
+  }
+
   function scanNewAssistantModelMessages() {
+    var unseen = [];
     collectAssistantModelMessages().forEach(function inspect(message) {
       if (seenAssistantModelMessages.has(message.key)) {
         return;
       }
 
       seenAssistantModelMessages.add(message.key);
-      rememberObservedModel(
-        message.model,
-        "message-dom:model-slug",
-        Date.now(),
-        true,
-        { model: message.model },
-        []
-      );
+      unseen.push(message);
     });
+    if (!unseen.length) {
+      return;
+    }
+
+    // Reasoning and final assistant nodes can be rendered as separate elements.
+    // The reasoning node may arrive first and can even carry a different slug.
+    // Prefer the content-bearing final node; only use a metadata-only node after
+    // a short settlement window when no final node appears.
+    var finalCandidate = null;
+    for (var index = unseen.length - 1; index >= 0; index -= 1) {
+      if (Number(unseen[index].contentLength || 0) > 0) {
+        finalCandidate = unseen[index];
+        break;
+      }
+    }
+    if (finalCandidate) {
+      commitAssistantModelCandidate(finalCandidate);
+      return;
+    }
+    scheduleAssistantModelCandidate(unseen[unseen.length - 1]);
   }
 
   function installUsagePanel() {
@@ -1201,6 +1484,7 @@
     var dashboard = null;
     var currentPanelLanguage = "zh";
     var currentStatusRecord = null;
+    var lastMountedLocation = "";
 
     function hasDarkClass(element) {
       return Boolean(element && /(^|\s)dark(\s|$)/i.test(String(element.className || "")));
@@ -1704,6 +1988,7 @@
         } else {
           host.classList.remove("is-main-top");
         }
+        lastMountedLocation = String(location && location.href || "");
         return true;
       }
 
@@ -1713,14 +1998,29 @@
       host.classList.add("is-fallback");
       host.classList.remove("is-embedded");
       host.classList.remove("is-main-top");
+      lastMountedLocation = String(location && location.href || "");
       return false;
+    }
+
+    function hostIsConnected() {
+      return typeof host.isConnected === "boolean" ? host.isConnected : Boolean(host.parentNode);
+    }
+
+    function maintainPanelMount() {
+      var currentLocation = String(location && location.href || "");
+      if (!hostIsConnected() || currentLocation !== lastMountedLocation) {
+        attachHost();
+      }
     }
 
     function observePanelMount() {
       if (typeof MutationObserver !== "function") {
         return;
       }
-      var root = document.body || document.documentElement;
+      // Observe <html>, not the current <body>: some ChatGPT routes replace the
+      // whole body during SPA navigation. An observer attached to the old body
+      // would then stop seeing changes and leave the entry inside detached DOM.
+      var root = document.documentElement || document.body;
       if (!root) {
         return;
       }
@@ -1728,7 +2028,7 @@
       // 会把入口从 DOM 里移除,之前 attach 成功就 disconnect 导致入口一去不返(用户:导出后统计入口消失)。
       // 现在只要入口掉了(host 不在文档里)就立刻重新挂回去;平时挂着只读一个布尔值,几乎零开销。
       var observer = new MutationObserver(function retryAttach() {
-        if (!host.isConnected) {
+        if (!hostIsConnected()) {
           attachHost();
         }
       });
@@ -1770,11 +2070,19 @@
     }
 
     attachHost();
+    ensureUsagePanelMounted = maintainPanelMount;
     // 始终观察并在入口掉了时重挂(过去只在初次落到 fallback 才观察,导致已嵌入标题栏的入口
     // 在 ChatGPT 重渲染标题栏后——尤其多对话导出逐个切换对话时——掉了就再也回不来)。
     observePanelMount();
 
     toggleButton.addEventListener("click", function toggle() {
+      if (extensionContextLost || extensionContextSeemsLost()) {
+        handleExtensionContextInvalidated();
+        if (location && typeof location.reload === "function") {
+          location.reload();
+        }
+        return;
+      }
       if (panel.hidden) {
         openPanel();
         return;
@@ -1809,6 +2117,9 @@
         if (extensionContextSeemsLost()) {
           handleExtensionContextInvalidated();
           return;
+        }
+        if (typeof ensureUsagePanelMounted === "function") {
+          ensureUsagePanelMounted();
         }
         refreshComposerSnapshot();
         scanNewAssistantModelMessages();
@@ -1894,6 +2205,7 @@
   document.addEventListener("input", deferComposerRefresh, true);
   document.addEventListener("keyup", refreshComposerSnapshot, true);
   readDomModel();
+  refreshRuntimeModelCatalog();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startMessageObserver, { once: true });
@@ -2053,6 +2365,95 @@
       });
     };
 
+    var accountHistoryAuthPromise = null;
+    var accountHistoryAuthClearTimer = null;
+    var ACCOUNT_HISTORY_AUTH_IDLE_MS = 30 * 1000;
+
+    function clearAccountHistoryAuth() {
+      accountHistoryAuthPromise = null;
+      if (accountHistoryAuthClearTimer && typeof clearTimeout === "function") {
+        clearTimeout(accountHistoryAuthClearTimer);
+      }
+      accountHistoryAuthClearTimer = null;
+    }
+
+    function scheduleAccountHistoryAuthClear() {
+      if (accountHistoryAuthClearTimer && typeof clearTimeout === "function") {
+        clearTimeout(accountHistoryAuthClearTimer);
+      }
+      accountHistoryAuthClearTimer = typeof setTimeout === "function"
+        ? setTimeout(function clearIdleAccountHistoryAuth() {
+            clearAccountHistoryAuth();
+          }, ACCOUNT_HISTORY_AUTH_IDLE_MS)
+        : null;
+    }
+
+    function loadAccountHistoryAuth(forceRefresh) {
+      if (accountHistoryAuthPromise && !forceRefresh) {
+        return accountHistoryAuthPromise;
+      }
+      accountHistoryAuthPromise = window.fetch("/api/auth/session", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { accept: "application/json" }
+      }).then(function parseSession(response) {
+        if (!response || !response.ok || typeof response.json !== "function") {
+          throw new Error("ChatGPT account session is unavailable.");
+        }
+        return response.json();
+      }).then(function validateSession(session) {
+        var token = String(session && (session.accessToken || session.access_token) || "");
+        var accountId = String(
+          session && session.account && session.account.id ||
+          session && (session.accountId || session.account_id) ||
+          ""
+        );
+        if (!token || !accountId) {
+          throw new Error("ChatGPT account authorization is unavailable.");
+        }
+        // Authentication values remain only in this content-script memory.
+        // They are never persisted, logged, exported, or sent off ChatGPT.
+        return { token: token, accountId: accountId };
+      }).catch(function allowFutureAuthRetry(error) {
+        clearAccountHistoryAuth();
+        throw error;
+      });
+      return accountHistoryAuthPromise;
+    }
+
+    function accountHistoryFetch(url, init, refreshed) {
+      return loadAccountHistoryAuth(Boolean(refreshed)).then(function authorizedFetch(auth) {
+        scheduleAccountHistoryAuthClear();
+        var options = Object.assign({}, init || {});
+        var headers;
+        if (typeof Headers === "function") {
+          headers = new Headers(options.headers || {});
+          headers.set("accept", "application/json");
+          headers.set("authorization", "Bearer " + auth.token);
+          headers.set("chatgpt-account-id", auth.accountId);
+        } else {
+          headers = Object.assign({}, options.headers || {}, {
+            accept: "application/json",
+            authorization: "Bearer " + auth.token,
+            "chatgpt-account-id": auth.accountId
+          });
+        }
+        options.headers = headers;
+        options.credentials = "include";
+        options.cache = "no-store";
+        return window.fetch(url, options);
+      }).then(function refreshExpiredSession(response) {
+        if (response && (response.status === 401 || response.status === 403)) {
+          clearAccountHistoryAuth();
+          if (!refreshed) {
+            return accountHistoryFetch(url, init, true);
+          }
+        }
+        return response;
+      });
+    }
+
     function accountSourceOptions() {
       var source = window.ChatGPTConversationSource;
       var exporter = window.ChatGPTUsageExporter;
@@ -2062,12 +2463,13 @@
       return {
         source: source,
         options: {
-          fetchImpl: window.fetch.bind(window),
+          fetchImpl: accountHistoryFetch,
           exporter: exporter,
           origin: location.origin,
           includeArchived: true,
           pageSize: 100,
-          concurrency: 4
+          concurrency: 2,
+          requestGapMs: 150
         }
       };
     }
@@ -2194,9 +2596,33 @@
         });
       }
       return account.source.listAccountConversations(account.options).then(function accountList(result) {
+        var accountConversations = result.conversations || [];
+        if (!accountConversations.length) {
+          return listAllDomConversations().then(function useVisibleSidebarWhenAccountIndexIsEmpty(sidebarConversations) {
+            if (!sidebarConversations.length) {
+              return {
+                conversations: [],
+                total: 0,
+                complete: Boolean(result.complete),
+                source: "account",
+                warnings: result.warnings || []
+              };
+            }
+            return {
+              conversations: sidebarConversations,
+              total: sidebarConversations.length,
+              complete: false,
+              source: "sidebar",
+              warnings: (result.warnings || []).concat([{
+                scope: "account",
+                error: "The account history endpoint returned an empty index; showing the loaded sidebar conversations instead."
+              }])
+            };
+          });
+        }
         return {
-          conversations: result.conversations || [],
-          total: (result.conversations || []).length,
+          conversations: accountConversations,
+          total: accountConversations.length,
           complete: Boolean(result.complete),
           source: "account",
           warnings: result.warnings || []
