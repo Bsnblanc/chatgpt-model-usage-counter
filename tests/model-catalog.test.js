@@ -7,7 +7,7 @@ test("catalog derives metadata from exact slugs without hardcoded model inventor
   assert.equal(thinking.label, "future-family-2026-thinking");
   assert.equal(thinking.apiModel, "future-family-2026-thinking");
   assert.equal(thinking.mode, "thinking");
-  assert.deepEqual(thinking.parameters["reasoning.effort"], ["none", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(thinking.parameters, { model: "future-family-2026-thinking" });
 
   const instant = catalog.resolveModelInfo("future-family-2027-instant");
   assert.equal(instant.label, "future-family-2027-instant");
@@ -20,7 +20,7 @@ test("catalog derives metadata from exact slugs without hardcoded model inventor
   assert.equal(chatgptThinking.label, "gpt-5-thinking");
   assert.equal(chatgptThinking.apiModel, "gpt-5-thinking");
   assert.equal(chatgptThinking.mode, "thinking");
-  assert.deepEqual(chatgptThinking.parameters["reasoning.effort"], ["none", "low", "medium", "high", "xhigh"]);
+  assert.deepEqual(chatgptThinking.parameters, { model: "gpt-5-thinking" });
 
   const exactChatGPTSlug = catalog.resolveModelInfo("gpt-5-5-thinking");
   assert.equal(exactChatGPTSlug.label, "gpt-5-5-thinking");
@@ -31,7 +31,7 @@ test("catalog derives metadata from exact slugs without hardcoded model inventor
   assert.equal(catalog.resolveModelInfo("gpt-5-4-thinking").label, "gpt-5-4-thinking");
   assert.equal(catalog.resolveModelInfo("gpt-4-7-pro").label, "gpt-4-7-pro");
   assert.equal(catalog.resolveModelInfo("gpt_5_5_thinking").label, "gpt-5-5-thinking");
-  assert.equal(catalog.resolveModelInfo("GPT-5.5 Thinking"), null);
+  assert.equal(catalog.resolveModelInfo("GPT-5.5 Thinking").label, "gpt-5.5-thinking");
   assert.equal(catalog.resolveModelInfo("gptLastUsedModel"), null);
 
   const realtime = catalog.resolveModelInfo("gpt-realtime-2");
@@ -55,9 +55,9 @@ test("catalog derives metadata from exact slugs without hardcoded model inventor
   assert.equal(audioPreview.apiModel, "gpt-4o-audio-preview");
 
   assert.equal(catalog.resolveModelInfo("Auto"), null);
-  assert.equal(catalog.resolveModelInfo("gpt-5-5").label, "gpt-5-5-instant");
+  assert.equal(catalog.resolveModelInfo("gpt-5-5").label, "gpt-5-5");
   assert.equal(catalog.resolveModelInfo("gpt-5-5-preview").label, "gpt-5-5-preview");
-  assert.equal(catalog.resolveModelInfo("gpt_5_5").label, "gpt-5-5-instant");
+  assert.equal(catalog.resolveModelInfo("gpt_5_5").label, "gpt-5-5");
   assert.equal(catalog.resolveModelInfo("gpt_5_5_preview").label, "gpt-5-5-preview");
   assert.equal(catalog.MODELS.length, 0);
 });
@@ -142,15 +142,16 @@ test("catalog does not classify model parameters or feature ids as models", () =
   });
 });
 
-test("catalog keeps real ChatGPT dash-versioned model slugs distinct (live /backend-api/models)", () => {
+test("catalog keeps exact ChatGPT dash-versioned model slugs distinct", () => {
   // 取自真实账号 /backend-api/models 的当前模型 slug —— 次版本号决定模型身份,必须各自独立计数。
-  // 裸基座(gpt-5-5)= Instant 变体 → 计入 gpt-5-5-instant;其余 slug 原样保留,次版本独立。
+  // Exact request slugs are identities. A bare slug is not rewritten to an
+  // invented mode suffix.
   const expected = {
-    "gpt-5-3": "gpt-5-3-instant",
+    "gpt-5-3": "gpt-5-3",
     "gpt-5-3-instant": "gpt-5-3-instant",
     "gpt-5-4-thinking": "gpt-5-4-thinking",
     "gpt-5-4-pro": "gpt-5-4-pro",
-    "gpt-5-5": "gpt-5-5-instant",
+    "gpt-5-5": "gpt-5-5",
     "gpt-5-5-instant": "gpt-5-5-instant",
     "gpt-5-5-thinking": "gpt-5-5-thinking",
     "gpt-5-5-pro": "gpt-5-5-pro",
@@ -165,13 +166,53 @@ test("catalog keeps real ChatGPT dash-versioned model slugs distinct (live /back
     assert.equal(info.label, expected[slug], slug);
     assert.equal(info.apiModel, slug);
   });
-  // 次版本/模式必须分开;裸基座与显式 instant 归一;instant != thinking
+  // Minor versions and explicit modes remain separate identities.
   assert.notEqual(catalog.resolveModelInfo("gpt-5-4-thinking").label, catalog.resolveModelInfo("gpt-5-5-thinking").label);
   assert.notEqual(catalog.resolveModelInfo("gpt-5-3-instant").label, catalog.resolveModelInfo("gpt-5-5-instant").label);
   assert.notEqual(catalog.resolveModelInfo("gpt-5-5").label, catalog.resolveModelInfo("gpt-5-5-thinking").label);
-  assert.equal(catalog.resolveModelInfo("gpt-5-5").label, catalog.resolveModelInfo("gpt-5-5-instant").label);
-  // 功能名仍不是模型;句点展示标签仍被拒绝(ChatGPT 不使用句点形式)
+  assert.notEqual(catalog.resolveModelInfo("gpt-5-5").label, catalog.resolveModelInfo("gpt-5-5-instant").label);
+  // Feature names remain excluded; public dotted labels remain valid.
   assert.equal(catalog.resolveModelInfo("research"), null);
   assert.equal(catalog.resolveModelInfo("agent-mode"), null);
-  assert.equal(catalog.resolveModelInfo("GPT-5.5"), null);
+  assert.equal(catalog.resolveModelInfo("GPT-5.5").label, "gpt-5.5");
+});
+
+test("catalog accepts current public labels and unknown future GPT versions", () => {
+  [
+    ["GPT-5.6 Sol", "gpt-5.6-sol"],
+    ["GPT-5.6 Sol Pro", "gpt-5.6-sol-pro"],
+    ["GPT-5.6 Luna", "gpt-5.6-luna"],
+    ["GPT-5.6 Luna Max", "gpt-5.6-luna-max"],
+    ["GPT-5.6 Terra", "gpt-5.6-terra"],
+    ["GPT-5.6 Terra Max", "gpt-5.6-terra-max"],
+    ["GPT-6.1 Aurora", "gpt-6.1-aurora"],
+    ["o5 hyper", "o5-hyper"],
+    ["gpt-6-1-aurora", "gpt-6-1-aurora"]
+  ].forEach(([input, expected]) => {
+    const info = catalog.resolveModelInfo(input);
+    assert.ok(info, input);
+    assert.equal(info.label, expected, input);
+    assert.equal(info.apiModel, expected, input);
+    assert.deepEqual(info.parameters, { model: expected }, input);
+  });
+});
+
+test("catalog accepts unknown versioned slugs only with explicit model-field evidence", () => {
+  assert.equal(catalog.isModelSlug("aurora-7"), false);
+  assert.equal(catalog.isRequestModelSlug("aurora-7"), true);
+  assert.equal(catalog.resolveModelInfo("aurora-7"), null);
+  assert.equal(catalog.resolveRequestModelInfo("aurora-7").label, "aurora-7");
+  assert.equal(catalog.resolveModelInfo('{"model":"aurora-7"}').label, "aurora-7");
+
+  [
+    "model-v2",
+    "temperature-v2",
+    "conversation-2026",
+    "request-v3",
+    "image-generation-v4",
+    "deepsearch-v2"
+  ].forEach((value) => {
+    assert.equal(catalog.isRequestModelSlug(value), false, value);
+    assert.equal(catalog.resolveRequestModelInfo(value), null, value);
+  });
 });

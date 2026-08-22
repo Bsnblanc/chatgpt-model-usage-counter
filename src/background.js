@@ -34,8 +34,23 @@
   var MAX_PARAMETER_FIELD_VALUES = 120;
   var MAX_VARIANTS_PER_MODEL = 120;
   var NETWORK_OBSERVATION_WINDOW_MS = 60000;
+  var NETWORK_MATCH_EARLY_MS = 750;
+  var NETWORK_MATCH_LATE_MS = 15000;
+  var NETWORK_MESSAGE_DOM_EARLY_MS = 15000;
+  // Agent/research turns can emit several model-bearing requests before the
+  // delayed content-script submission is flushed. Keep enough observations
+  // to retain the original request while still bounding memory per tab.
+  var MAX_NETWORK_OBSERVATIONS_PER_TAB = 64;
   var USAGE_DEDUPE_WINDOW_MS = 2500;
   var CHATGPT_URL_PATTERNS = ["https://chatgpt.com/*", "https://chat.openai.com/*"];
+  var ISOLATED_CONTENT_SCRIPT_FILES = [
+    "src/model-catalog.js",
+    "src/detector.js",
+    "src/exporter.js",
+    "src/conversation-source.js",
+    "src/dashboard.js",
+    "src/content.js"
+  ];
   var OPENAI_STATUS_SUMMARY_URL = "https://status.openai.com/api/v2/summary.json";
   var OPENAI_STATUS_PAGE_URL = "https://status.openai.com/";
   var recentNetworkObservationsByTab = {};
@@ -43,8 +58,10 @@
   var usageIncrementQueue = Promise.resolve();
   var NETWORK_MODEL_FIELD_RE = /^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel)$/i;
   var NETWORK_SKIP_FIELD_RE = /^(message|messages|mapping|content|contents|parts|inputs?|instructions?|attachments?|files?|file_data|image_url|metadata|variables|conversation|conversation_id|parent_message_id|timezone|history_and_training_disabled|force_paragen|paragen|stream|stream_options|protocol|transport|connection|endpoint|path|url|headers|authorization|cookie|client_secret|access_token|session_id|request_id|event_id)$/i;
-  var CHATGPT_MODE_SLUG_RE = /^gpt-(?:(?:\d+(?:[-_.]\d+)*)|4o|4\.5|4\.1|4|3\.5)[-_.](thinking|instant|fast|auto|pro)$/i;
-  var CHATGPT_INTERNAL_FAMILY_RE = /^gpt-\d+-\d+(?:[-_.][a-z0-9][a-z0-9._-]*)?$/i;
+  var CONVERSATION_MODE_MODELS = {
+    "research": { label: "Deep research", feature: "deep_research" },
+    "agent-mode": { label: "Agent mode", feature: "agent_mode" }
+  };
 
   function createEmptyStats() {
     return {
@@ -305,8 +322,7 @@
     var key = clean.replace(/[^a-z0-9]+/g, "");
     return !clean ||
       /^(unknown|unknownmodel|unresolved|unresolvedmodel)$/.test(key) ||
-      /^(?:gpt)?lastusedmodel$/.test(key) ||
-      /^gpt-5\.\d+(?:$|[-_.])/.test(clean);
+      /^(?:gpt)?lastusedmodel$/.test(key);
   }
 
   function hasDeniedStoredModelName(model) {
@@ -366,10 +382,8 @@
   }
 
   function isAmbiguousChatGPTFamilySlug(model) {
-    // gpt-5-5 / gpt-5-3 / gpt-5-5-preview 等「短横线+次版本号」是 ChatGPT 的真实模型
-    // (见 /backend-api/models),不再当作内部歧义 slug 丢弃 —— 否则用户这些模型会统计不到。
-    // 真正的非模型(auto/unknown/功能名/句点 gpt-5.x)仍由 isDeniedStoredModelName /
-    // isFeatureOnlyModelName 拦截。
+    // Versioned request slugs and public dotted GPT labels are both valid
+    // identities. Placeholders and feature-only names are filtered elsewhere.
     return false;
   }
 
@@ -386,28 +400,28 @@
     return Boolean(clean && !isDeniedStoredModelName(clean) && !isFeatureOnlyModelName(clean) && isModelSlug(clean) && !isAmbiguousChatGPTFamilySlug(clean));
   }
 
-  function hasExactModeSuffix(model) {
-    return /(?:[-\s](thinking|instant|fast|auto|pro))$/i.test(String(model || "").trim());
-  }
-
   function isModelSlug(value) {
     var clean = String(value || "").trim();
+    if (modelCatalog && typeof modelCatalog.isRequestModelSlug === "function") {
+      return modelCatalog.isRequestModelSlug(clean);
+    }
+    if (modelCatalog && typeof modelCatalog.isModelSlug === "function" && modelCatalog.isModelSlug(clean)) {
+      return true;
+    }
     return /^[a-z][a-z0-9._-]{1,95}$/i.test(clean) &&
       /[a-z]/i.test(clean) &&
       !isFeatureOnlyModelName(clean) &&
       !isFeatureNamedSlug(clean) &&
       !/^(auto|default|none|null|undefined|chatgpt)$/i.test(clean) &&
-      hasGenericModelSlugEvidence(clean);
+      (hasGenericModelSlugEvidence(clean) ||
+        (/(?=.*[a-z])(?=.*\d)(?=.*[-_.])^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+$/i.test(clean) &&
+          !/^(?:model|reasoning|text|tools?|temperature|max|response|request|conversation|metadata|stream|protocol|transport|endpoint|session)(?:[-_.]|$)/i.test(clean)));
   }
 
   function exactModelCandidate(first, second) {
-    if (hasExactModeSuffix(first)) {
-      return first;
-    }
-    if (hasExactModeSuffix(second)) {
-      return second;
-    }
-    return first || second || "";
+    // parameters.model comes from the current request and is authoritative.
+    // Never let an older DOM/metadata mode suffix override that exact value.
+    return second || first || "";
   }
 
   function modelParametersFromMetadata(metadata) {
@@ -496,15 +510,15 @@
       return false;
     }
 
-    return true;
+    // Stored aggregates may contain false positives created by an older DOM
+    // detector (for example ordinary buttons such as "Share"). Keep only a
+    // model identity that still has model-shaped evidence after
+    // canonicalization. Conversation-mode rows are handled explicitly above.
+    return isActualRequestModel(model);
   }
 
-  // 裸 gpt-N-M(无 thinking/instant 等模式后缀)即 ChatGPT 的 Instant 变体。此兜底与 model-catalog
-  // 的判定一致,但不依赖 modelCatalog——Service Worker 里若 modelCatalog 缺失或陈旧(importScripts
-  // 在 SW 安装期缓存,旧 SW 会用旧 catalog),否则会把 instant 错存成裸 "gpt-5-5"。
-  function instantLabelFallback(slug) {
-    var s = sanitizeModelName(slug);
-    return /^gpt-\d+-\d+$/.test(s) ? s + "-instant" : s;
+  function exactLabelFallback(slug) {
+    return sanitizeModelName(slug);
   }
 
   function canonicalStoredModelName(model, metadata) {
@@ -522,7 +536,7 @@
           return sanitizeModelName(exactResolved.label);
         }
       }
-      return instantLabelFallback(exactModel);
+      return exactLabelFallback(exactModel);
     }
 
     var apiModel = sanitizeChatGPTModel(metadata && metadata.apiModel);
@@ -537,7 +551,7 @@
           return sanitizeModelName(apiResolved.label);
         }
       }
-      return instantLabelFallback(apiModel);
+      return exactLabelFallback(apiModel);
     }
 
     var candidates = [
@@ -555,7 +569,7 @@
       }
     }
 
-    return instantLabelFallback(rawModel);
+    return exactLabelFallback(rawModel);
   }
 
   function resolveStoredModelMetadata(canonicalModel, metadata) {
@@ -717,9 +731,7 @@
     if (modelCatalog && typeof modelCatalog.canonicalizeChatGPTModeSlug === "function") {
       return modelCatalog.canonicalizeChatGPTModeSlug(clean);
     }
-    var slug = clean.toLowerCase().replace(/[\u2010-\u2015]/g, "-").replace(/_/g, "-");
-    var numberedMode = slug.match(/^gpt-(\d+)-\d+[-_.](thinking|instant|fast|auto|pro)$/i);
-    return numberedMode ? "gpt-" + numberedMode[1] + "-" + numberedMode[2].toLowerCase() : slug;
+    return clean.toLowerCase().replace(/[\u2010-\u2015]/g, "-").replace(/_/g, "-");
   }
 
   function sanitizeModelMode(mode) {
@@ -1820,7 +1832,7 @@
     var clean = sanitizeModelParameters({ [canonicalKey]: parameterValue }, "");
     if (Object.prototype.hasOwnProperty.call(clean, canonicalKey)) {
       if (isModelField) {
-        if (!isActualRequestModel(clean[canonicalKey])) {
+        if (!isActualRequestModel(clean[canonicalKey]) && !CONVERSATION_MODE_MODELS[clean[canonicalKey]]) {
           return;
         }
         var currentPriority = Number(parameters.__modelFieldPriority || 0);
@@ -1976,12 +1988,15 @@
   function observationFromNetworkParameters(parameters, observedAt) {
     var cleanParameters = sanitizeModelParameters(parameters, "");
     var requestModel = sanitizeChatGPTModel(cleanParameters.model);
-    if (!isActualRequestModel(requestModel)) {
+    var conversationMode = CONVERSATION_MODE_MODELS && CONVERSATION_MODE_MODELS[requestModel];
+    if (!isActualRequestModel(requestModel) && !conversationMode) {
       return null;
     }
 
     var resolved = null;
-    if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
+    if (modelCatalog && typeof modelCatalog.resolveRequestModelInfo === "function") {
+      resolved = modelCatalog.resolveRequestModelInfo(requestModel);
+    } else if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
       resolved = modelCatalog.resolveModelInfo(requestModel);
     }
 
@@ -1992,13 +2007,20 @@
       apiModel: requestModel,
       chatgptModel: requestModel,
       modelMode: (resolved && resolved.mode) || "",
-      usageFeatures: normalizeUsageFeatures(parameters && parameters.__usageFeatures, cleanParameters, requestModel),
+      usageFeatures: normalizeUsageFeatures([].concat(
+        parameters && parameters.__usageFeatures || [],
+        conversationMode ? [conversationMode.feature] : []
+      ), cleanParameters, requestModel),
       modelParameters: cleanParameters
     };
   }
 
   function observeNetworkRequest(details, nowDate) {
     if (!details || typeof details.tabId !== "number" || details.tabId < 0) {
+      return null;
+    }
+    var method = String(details.method || "").toUpperCase();
+    if (method && !/^(POST|PUT|PATCH)$/.test(method)) {
       return null;
     }
 
@@ -2008,21 +2030,18 @@
       return null;
     }
 
-    recentNetworkObservationsByTab[details.tabId] = observation;
+    var observations = Array.isArray(recentNetworkObservationsByTab[details.tabId])
+      ? recentNetworkObservationsByTab[details.tabId]
+      : [];
+    observations = observations.filter(function keepRecent(item) {
+      return observedAt - Number(item && item.observedAt || 0) <= NETWORK_OBSERVATION_WINDOW_MS;
+    });
+    observations.push(observation);
+    if (observations.length > MAX_NETWORK_OBSERVATIONS_PER_TAB) {
+      observations = observations.slice(observations.length - MAX_NETWORK_OBSERVATIONS_PER_TAB);
+    }
+    recentNetworkObservationsByTab[details.tabId] = observations;
     return observation;
-  }
-
-  // GPT-5.x 的请求体 model 字段常是裸基座(gpt-5-5),而真实运行的模型(thinking/instant/pro)
-  // 在助手消息的 data-message-model-slug 上。content 已据此给出更具体的模型,网络观测不应把它
-  // 覆盖回裸基座,否则同一份用量会被拆到 gpt-5-5 与 gpt-5-5-thinking 两个桶("instant 没统计对")。
-  function isBareGptFamilyBase(model) {
-    return /^gpt-\d+(?:-\d+)?$/.test(String(model || "").toLowerCase().replace(/_/g, "-"));
-  }
-
-  function isMoreSpecificGptVariant(specific, base) {
-    var s = String(specific || "").toLowerCase().replace(/_/g, "-");
-    var b = String(base || "").toLowerCase().replace(/_/g, "-");
-    return Boolean(b) && s !== b && s.indexOf(b + "-") === 0 && /-(thinking|instant|fast|auto|pro)$/.test(s);
   }
 
   function mergeRecentNetworkObservation(payload, sender, nowDate) {
@@ -2031,26 +2050,86 @@
       return payload || {};
     }
 
-    var observation = recentNetworkObservationsByTab[tabId];
-    if (!observation) {
+    var observations = Array.isArray(recentNetworkObservationsByTab[tabId])
+      ? recentNetworkObservationsByTab[tabId]
+      : [];
+    if (!observations.length) {
       return payload || {};
     }
 
     var nowMs = nowDate instanceof Date ? nowDate.getTime() : Date.now();
-    if (nowMs - Number(observation.observedAt || 0) > NETWORK_OBSERVATION_WINDOW_MS) {
+    var submittedMs = new Date(payload && payload.submittedAt || "").getTime();
+    if (Number.isNaN(submittedMs)) {
+      submittedMs = nowMs;
+    }
+    var messageDomSubmission = String(payload && payload.source || "") === "message-dom";
+    var earlyWindow = messageDomSubmission ? NETWORK_MESSAGE_DOM_EARLY_MS : NETWORK_MATCH_EARLY_MS;
+    observations = observations.filter(function keepCandidate(item) {
+      var observedAt = Number(item && item.observedAt || 0);
+      return observedAt > 0 &&
+        nowMs - observedAt <= NETWORK_OBSERVATION_WINDOW_MS &&
+        observedAt >= submittedMs - earlyWindow;
+    });
+    if (!observations.length) {
       delete recentNetworkObservationsByTab[tabId];
       return payload || {};
     }
 
-    delete recentNetworkObservationsByTab[tabId];
+    var observationIndex = -1;
+    if (messageDomSubmission) {
+      for (var messageIndex = observations.length - 1; messageIndex >= 0; messageIndex -= 1) {
+        var messageObservedAt = Number(observations[messageIndex].observedAt || 0);
+        if (messageObservedAt <= submittedMs && messageObservedAt >= submittedMs - earlyWindow) {
+          observationIndex = messageIndex;
+          break;
+        }
+      }
+    } else {
+      for (var i = 0; i < observations.length; i += 1) {
+        var observedAt = Number(observations[i].observedAt || 0);
+        if (observedAt >= submittedMs && observedAt <= submittedMs + NETWORK_MATCH_LATE_MS) {
+          observationIndex = i;
+          break;
+        }
+      }
+    }
+    if (observationIndex < 0) {
+      if (messageDomSubmission) {
+        for (var afterIndex = 0; afterIndex < observations.length; afterIndex += 1) {
+          var afterTime = Number(observations[afterIndex].observedAt || 0);
+          if (afterTime >= submittedMs && afterTime <= submittedMs + NETWORK_MATCH_LATE_MS) {
+            observationIndex = afterIndex;
+            break;
+          }
+        }
+      } else {
+        for (var beforeIndex = observations.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
+          var beforeTime = Number(observations[beforeIndex].observedAt || 0);
+          if (beforeTime >= submittedMs - earlyWindow && beforeTime < submittedMs) {
+            observationIndex = beforeIndex;
+            break;
+          }
+        }
+      }
+    }
+    if (observationIndex < 0) {
+      recentNetworkObservationsByTab[tabId] = observations;
+      return payload || {};
+    }
+
+    var observation = observations[observationIndex];
+    observations.splice(observationIndex, 1);
+    if (observations.length) {
+      recentNetworkObservationsByTab[tabId] = observations;
+    } else {
+      delete recentNetworkObservationsByTab[tabId];
+    }
     var mergedUsageFeatures = normalizeUsageFeatures([].concat(
       Array.isArray(payload && payload.usageFeatures) ? payload.usageFeatures : [],
       Array.isArray(observation.usageFeatures) ? observation.usageFeatures : []
     ), observation.modelParameters, observation.model);
-    // 网络只给裸基座、而 content 已有更具体的真实模型 → 保留具体模型(只并入功能信号)。
-    if (isBareGptFamilyBase(observation.model) && isMoreSpecificGptVariant(payload && payload.model, observation.model)) {
-      return Object.assign({}, payload || {}, { usageFeatures: mergedUsageFeatures });
-    }
+    // The request body's model field identifies the submitted request. A DOM
+    // label may be stale after the user switches models, so it must not win.
     return Object.assign({}, payload || {}, {
       model: observation.model,
       apiModel: observation.apiModel,
@@ -2065,11 +2144,6 @@
   // ChatGPT 的「深度研究 / 代理模式」在模型选择器里是可选项,请求的 model 字段会直接是
   // research / agent-mode。它们不是基础模型,但确实是用户的一次会话选择 —— 记成同名条目并
   // 标记对应功能,避免整条提交被丢弃(否则深度研究/代理模式的用量会完全统计不到)。
-  var CONVERSATION_MODE_MODELS = {
-    "research": { label: "Deep research", feature: "deep_research" },
-    "agent-mode": { label: "Agent mode", feature: "agent_mode" }
-  };
-
   function conversationModeModelInfo(payload, requestSource) {
     if (!isTrustedRequestModelSource(requestSource)) {
       return null;
@@ -2106,7 +2180,9 @@
     }
     var resolved = null;
 
-    if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
+    if (modelCatalog && typeof modelCatalog.resolveRequestModelInfo === "function") {
+      resolved = modelCatalog.resolveRequestModelInfo(exactModel);
+    } else if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
       resolved = modelCatalog.resolveModelInfo(exactModel);
     }
 
@@ -2683,7 +2759,7 @@
     chrome.scripting.executeScript(
       {
         target: { tabId: tabId },
-        files: ["src/model-catalog.js", "src/detector.js", "src/exporter.js", "src/dashboard.js", "src/content.js"]
+        files: ISOLATED_CONTENT_SCRIPT_FILES.slice()
       },
       function ignoreIsolatedInjectionResult() {
         void chrome.runtime.lastError;
@@ -2893,9 +2969,8 @@
     return false;
   }
 
-  // 由后台(扩展)发起下载:浏览器对“页面在一次手势里下载多个文件”有拦截/弹窗,
-  // 而扩展用 chrome.downloads 发起不受此限,从而让“多对话各存一个文件”稳定连续下载。
-  // 内容脚本把每个文件转成 data: URL 传进来,这里逐个落盘;失败由内容脚本回退到 a.click。
+  // 旧环境的单文件下载回退：内容脚本把 data: URL 交给后台 chrome.downloads。
+  // 当前弹窗通常直接使用 Blob URL；多对话导出只下载一个 ZIP。
   function downloadViaApi(message, sendResponse) {
     try {
       if (typeof chrome === "undefined" || !chrome.downloads || typeof chrome.downloads.download !== "function") {
@@ -2966,6 +3041,7 @@
     STATUS_ALARM_NAME: STATUS_ALARM_NAME,
     STATUS_ALARM_PERIOD_MINUTES: STATUS_ALARM_PERIOD_MINUTES,
     STATUS_KEY: STATUS_KEY,
+    ISOLATED_CONTENT_SCRIPT_FILES: ISOLATED_CONTENT_SCRIPT_FILES.slice(),
     applyIncrement: applyIncrement,
     badgeText: badgeText,
     computeBadgeCount: computeBadgeCount,

@@ -315,7 +315,7 @@ test("applyIncrement refuses unknown and ambiguous GPT family records", () => {
   });
 });
 
-test("applyIncrement removes stored invalid ChatGPT family model keys from every aggregate", () => {
+test("applyIncrement normalizes stored public dotted GPT labels across every aggregate", () => {
   const now = new Date("2026-05-23T12:00:00.000Z");
   const existingStats = {
     version: 1,
@@ -420,10 +420,18 @@ test("applyIncrement removes stored invalid ChatGPT family model keys from every
   assert.equal(next.variantsByModel["GPT-5.5"], undefined);
   assert.equal(next.featuresByModel["GPT-5.5"], undefined);
   assert.equal(next.events.some((event) => event.model === "GPT-5.5"), false);
+  assert.equal(next.totals["gpt-5.5"], 31);
+  assert.equal(next.byDate["2026-05-23"]["gpt-5.5"], 31);
+  assert.equal(next.models["gpt-5.5"].label, "gpt-5.5");
+  assert.equal(next.sessionsByModel["gpt-5.5"].dirty.count, 31);
+  assert.equal(next.parametersByModel["gpt-5.5"].total, 31);
+  assert.equal(next.variantsByModel["gpt-5.5"].total, 31);
+  assert.equal(next.featuresByModel["gpt-5.5"].total, 31);
+  assert.equal(next.events.some((event) => event.model === "gpt-5.5"), true);
   assert.equal(next.totals["future-family-2026-thinking"], 2);
 });
 
-test("applyIncrement does not remap invalid historical keys through valid metadata", () => {
+test("applyIncrement migrates public historical labels through exact request metadata", () => {
   const now = new Date("2026-05-23T12:00:00.000Z");
   const invalidModels = ["GPT-5.5", "gpt-5.5", "Unknown model", "gptLastUsedModel"];
   const existingStats = background.createEmptyStats();
@@ -496,10 +504,11 @@ test("applyIncrement does not remap invalid historical keys through valid metada
     assert.equal(next.events.some((event) => event.model === model), false, model);
     assert.equal(JSON.stringify(next).includes(model), false, model);
   });
-  assert.equal(next.totals["gpt-5-thinking"], 1);
+  assert.equal(next.totals["gpt-5-thinking"], 4);
   assert.equal(next.totals.thinking, undefined);
   assert.equal(next.events[0].model, "gpt-5-thinking");
   assert.equal(next.events[0].modelParameters.model, "gpt-5-thinking");
+  assert.equal(next.events.length, 3);
 });
 
 test("applyIncrement removes feature-only model keys from stored aggregates", () => {
@@ -710,6 +719,40 @@ test("applyIncrement removes feature-only model keys from stored aggregates", ()
   assert.equal(next.totals["future-family-2026-thinking"], 2);
   assert.equal(next.events.length, 2);
   assert.equal(next.featuresByModel["future-family-2026-thinking"].features.agent_mode.count, 2);
+});
+
+test("applyIncrement removes legacy ordinary UI labels that have no model evidence", () => {
+  const now = new Date("2026-08-22T12:00:00.000Z");
+  const existing = background.createEmptyStats();
+  existing.totals.Share = 4;
+  existing.totals["New chat"] = 3;
+  existing.byDate["2026-08-21"] = { Share: 4, "New chat": 3 };
+  existing.models.Share = { label: "Share" };
+  existing.models["New chat"] = { label: "New chat" };
+  existing.events = [
+    { model: "Share", submittedAt: "2026-08-21T10:00:00.000Z" },
+    { model: "New chat", submittedAt: "2026-08-21T11:00:00.000Z" }
+  ];
+
+  const next = background.applyIncrement(
+    existing,
+    {
+      model: "gpt-5.6-sol",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5.6-sol" },
+      submittedAt: now.toISOString(),
+      promptHash: "valid-after-cleanup",
+      promptLength: 12
+    },
+    now
+  );
+
+  assert.equal(next.totals.Share, undefined);
+  assert.equal(next.totals["New chat"], undefined);
+  assert.equal(next.models.Share, undefined);
+  assert.equal(next.models["New chat"], undefined);
+  assert.equal(next.events.some((event) => event.model === "Share" || event.model === "New chat"), false);
+  assert.equal(next.totals["gpt-5.6-sol"], 1);
 });
 
 test("applyIncrement accepts exact request model slugs across model families", () => {
@@ -1809,13 +1852,13 @@ test("applyIncrement migrates and cleans stored parameter aggregates", () => {
   assert.equal(next.parametersByModel.unknown, undefined);
   assert.equal(next.events.some((event) => event.model === "Unknown model"), false);
   assert.equal(next.events.some((event) => event.model === "unknown"), false);
-  assert.equal(aggregate.total, 1);
-  assert.equal(combinations.length, 1);
-  assert.equal(lowCombination, undefined);
+  assert.equal(aggregate.total, 3);
+  assert.equal(combinations.length, 2);
+  assert.equal(lowCombination.count, 2);
   assert.equal(highCombination.count, 1);
   assert.equal(aggregate.fields.model["gpt-5.5"], undefined);
-  assert.deepEqual(aggregate.fields.model, { "future-family-2026-thinking": 1 });
-  assert.deepEqual(aggregate.fields["reasoning.effort"], { high: 1 });
+  assert.deepEqual(aggregate.fields.model, { "future-family-2026-thinking": 3 });
+  assert.deepEqual(aggregate.fields["reasoning.effort"], { low: 2, high: 1 });
 });
 
 test("applyIncrement canonicalizes stored model labels across every aggregate", () => {
@@ -1981,20 +2024,20 @@ test("applyIncrement canonicalizes stored model labels across every aggregate", 
   assert.equal(next.events.some((event) => event.modelParameters && event.modelParameters.model === "gpt-5.5"), false);
   assert.equal(next.totals["GPT-5.5"], undefined);
 
-  assert.equal(next.totals["future-family-2026-thinking"], 1);
-  assert.equal(next.byDate["2026-05-23"]["future-family-2026-thinking"], 1);
+  assert.equal(next.totals["future-family-2026-thinking"], 3);
+  assert.equal(next.byDate["2026-05-23"]["future-family-2026-thinking"], 3);
   assert.equal(next.models["future-family-2026-thinking"].label, "future-family-2026-thinking");
   assert.equal(next.models["future-family-2026-thinking"].apiModel, "future-family-2026-thinking");
-  assert.equal(next.sessionsByModel["future-family-2026-thinking"]["legacy-conversation"].count, 1);
-  assert.deepEqual(next.sessionsByModel["future-family-2026-thinking"]["legacy-conversation"].models, { "future-family-2026-thinking": 1 });
-  assert.equal(next.parametersByModel["future-family-2026-thinking"].total, 1);
-  assert.equal(next.parametersByModel["future-family-2026-thinking"].fields.model["future-family-2026-thinking"], 1);
-  assert.equal(next.variantsByModel["future-family-2026-thinking"].total, 1);
-  assert.equal(next.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 1);
+  assert.equal(next.sessionsByModel["future-family-2026-thinking"]["legacy-conversation"].count, 3);
+  assert.deepEqual(next.sessionsByModel["future-family-2026-thinking"]["legacy-conversation"].models, { "future-family-2026-thinking": 3 });
+  assert.equal(next.parametersByModel["future-family-2026-thinking"].total, 3);
+  assert.equal(next.parametersByModel["future-family-2026-thinking"].fields.model["future-family-2026-thinking"], 3);
+  assert.equal(next.variantsByModel["future-family-2026-thinking"].total, 3);
+  assert.equal(next.variantsByModel["future-family-2026-thinking"].variants["future-family-2026-thinking"].count, 3);
 
-  assert.equal(next.totals["future-family-2026-instant"], undefined);
-  assert.equal(next.parametersByModel["future-family-2026-instant"], undefined);
-  assert.equal(next.variantsByModel["future-family-2026-instant"], undefined);
+  assert.equal(next.totals["future-family-2026-instant"], 1);
+  assert.equal(next.parametersByModel["future-family-2026-instant"].total, 1);
+  assert.equal(next.variantsByModel["future-family-2026-instant"].total, 1);
 });
 
 test("applyIncrement canonicalizes event-only request model metadata", () => {
@@ -2039,7 +2082,7 @@ test("applyIncrement canonicalizes event-only request model metadata", () => {
     now
   );
 
-  assert.equal(next.events.length, 1);
+  assert.equal(next.events.length, 2);
   assert.equal(next.events.some((event) => event.model === "GPT-5.5"), false);
   assert.equal(next.events.some((event) => event.apiModel === "gpt-5.5"), false);
   assert.equal(next.events[0].model, "future-family-2026-thinking");
@@ -2111,6 +2154,36 @@ test("webRequest observations override DOM metadata with request body parameters
   assert.equal(next.featuresByModel["future-family-2026-thinking"].features.web_search.count, 1);
 });
 
+test("webRequest observations preserve explicit research and agent conversation modes", () => {
+  const base = new Date("2026-08-22T12:00:00.000Z");
+  [
+    ["research", "Deep research", "deep_research"],
+    ["agent-mode", "Agent mode", "agent_mode"]
+  ].forEach(([requestModel, storedModel, feature], index) => {
+    const observedAt = new Date(base.getTime() + index * 1000);
+    const observed = background.observeNetworkRequest({
+      tabId: 180 + index,
+      method: "POST",
+      requestBody: {
+        raw: [{ bytes: Buffer.from(JSON.stringify({ model: requestModel }), "utf8") }]
+      }
+    }, observedAt);
+    const merged = background.mergeRecentNetworkObservation({
+      source: "send-button",
+      submittedAt: observedAt.toISOString(),
+      promptHash: `mode-${index}`,
+      promptLength: 10
+    }, { tab: { id: 180 + index } }, new Date(observedAt.getTime() + 200));
+    const stats = background.applyIncrement(background.createEmptyStats(), merged, observedAt);
+
+    assert.ok(observed, requestModel);
+    assert.equal(merged.modelParameters.model, requestModel);
+    assert.ok(merged.usageFeatures.includes(feature));
+    assert.equal(stats.totals[storedModel], 1);
+    assert.equal(stats.featuresByModel[storedModel].features[feature].count, 1);
+  });
+});
+
 test("webRequest observations read model parameters from request URLs", () => {
   const now = new Date("2026-05-23T12:00:00.000Z");
   const observed = background.observeNetworkRequest(
@@ -2137,6 +2210,34 @@ test("webRequest observations read model parameters from request URLs", () => {
   assert.equal(merged.modelParameters["reasoning.effort"], "high");
   assert.equal(merged.modelParameters.temperature, "0.2");
   assert.equal(next.byDate["2026-05-23"]["future-family-2026-thinking"], 1);
+});
+
+test("webRequest observations accept a future versioned model family from the exact model field", () => {
+  const now = new Date("2026-08-22T12:00:00.000Z");
+  const observed = background.observeNetworkRequest(
+    {
+      tabId: 118,
+      requestBody: {
+        raw: [{ bytes: Buffer.from(JSON.stringify({ model: "aurora-7" }), "utf8") }]
+      }
+    },
+    now
+  );
+
+  assert.ok(observed);
+  assert.equal(observed.model, "aurora-7");
+  assert.equal(observed.modelParameters.model, "aurora-7");
+
+  const rejected = background.observeNetworkRequest(
+    {
+      tabId: 119,
+      requestBody: {
+        raw: [{ bytes: Buffer.from(JSON.stringify({ model: "temperature-v2" }), "utf8") }]
+      }
+    },
+    now
+  );
+  assert.equal(rejected, null);
 });
 
 test("webRequest observations are consumed once per tab", () => {
@@ -2174,6 +2275,106 @@ test("webRequest observations are consumed once per tab", () => {
   assert.equal(first.modelObservedSource, "webRequest");
   assert.equal(second.model, "GPT-5.5");
   assert.equal(second.modelObservedSource, "message-dom");
+});
+
+test("webRequest observations match the submitted request instead of a stale prior request", () => {
+  const submitted = new Date("2026-08-22T12:00:00.000Z");
+  background.observeNetworkRequest({
+    tabId: 120,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5-5" }), "utf8") }]
+    }
+  }, new Date(submitted.getTime() - 5000));
+  background.observeNetworkRequest({
+    tabId: 120,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol" }), "utf8") }]
+    }
+  }, new Date(submitted.getTime() + 40));
+
+  const merged = background.mergeRecentNetworkObservation(
+    {
+      model: "gpt-5-5",
+      modelObservedSource: "message-dom:model-slug",
+      modelParameters: { model: "gpt-5-5" },
+      submittedAt: submitted.toISOString()
+    },
+    { tab: { id: 120 } },
+    new Date(submitted.getTime() + 1000)
+  );
+
+  assert.equal(merged.model, "gpt-5.6-sol");
+});
+
+test("webRequest observations choose the first model-bearing request after submission", () => {
+  const submitted = new Date("2026-08-22T12:10:00.000Z");
+  background.observeNetworkRequest({
+    tabId: 121,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-luna" }), "utf8") }]
+    }
+  }, new Date(submitted.getTime() + 25));
+  background.observeNetworkRequest({
+    tabId: 121,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-terra" }), "utf8") }]
+    }
+  }, new Date(submitted.getTime() + 900));
+
+  const merged = background.mergeRecentNetworkObservation(
+    { submittedAt: submitted.toISOString() },
+    { tab: { id: 121 } },
+    new Date(submitted.getTime() + 1200)
+  );
+
+  assert.equal(merged.model, "gpt-5.6-luna");
+});
+
+test("message DOM fallback matches the closest request before the rendered message", () => {
+  const renderedAt = new Date("2026-08-22T12:15:05.000Z");
+  background.observeNetworkRequest({
+    tabId: 123,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol" }), "utf8") }]
+    }
+  }, new Date(renderedAt.getTime() - 4500));
+  background.observeNetworkRequest({
+    tabId: 123,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-luna" }), "utf8") }]
+    }
+  }, new Date(renderedAt.getTime() - 900));
+  background.observeNetworkRequest({
+    tabId: 123,
+    method: "POST",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-terra" }), "utf8") }]
+    }
+  }, new Date(renderedAt.getTime() + 100));
+
+  const merged = background.mergeRecentNetworkObservation(
+    { source: "message-dom", submittedAt: renderedAt.toISOString() },
+    { tab: { id: 123 } },
+    new Date(renderedAt.getTime() + 500)
+  );
+
+  assert.equal(merged.model, "gpt-5.6-luna");
+});
+
+test("webRequest ignores read-only URL probes with model query parameters", () => {
+  const observed = background.observeNetworkRequest({
+    tabId: 122,
+    method: "GET",
+    url: "https://chatgpt.com/backend-api/models?model=gpt-5.6-terra"
+  }, new Date("2026-08-22T12:20:00.000Z"));
+
+  assert.equal(observed, null);
 });
 
 test("applyIncrement stores daily counts using submittedAt date", () => {
@@ -2506,6 +2707,12 @@ test("service worker script registers available chrome events without requiring 
   assert.equal(alarms[0].options.periodInMinutes, background.STATUS_ALARM_PERIOD_MINUTES);
 });
 
+test("runtime reinjection loads the same complete content-script stack as the manifest", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
+  assert.deepEqual(background.ISOLATED_CONTENT_SCRIPT_FILES, manifest.content_scripts[0].js);
+  assert.ok(background.ISOLATED_CONTENT_SCRIPT_FILES.includes("src/conversation-source.js"));
+});
+
 test("status alarm stores latest OpenAI status and updates toolbar abnormal state", async () => {
   const listeners = [];
   const stored = {};
@@ -2682,7 +2889,7 @@ test("usage.increment message path dedupes root submissions across webRequest an
   assert.equal(badgeTexts[badgeTexts.length - 1], "1");
 });
 
-test("mergeRecentNetworkObservation keeps the specific DOM model over a bare GPT base", () => {
+test("mergeRecentNetworkObservation lets the current request model replace stale DOM metadata", () => {
   const now = new Date("2026-06-26T12:00:00.000Z");
   // 网络请求体只给裸基座 gpt-5-5(GPT-5.5 的 /f/conversation 实测如此)
   background.observeNetworkRequest({
@@ -2695,14 +2902,15 @@ test("mergeRecentNetworkObservation keeps the specific DOM model over a bare GPT
     { tab: { id: 71 } },
     now
   );
-  assert.equal(merged.model, "gpt-5-5-thinking", "bare base must not overwrite the specific variant");
+  assert.equal(merged.model, "gpt-5-5");
 
-  // 落库后确实记到具体模型,不被拆到 gpt-5-5
+  // The submitted request is stored exactly, even when the previous assistant
+  // message still carries a more specific stale DOM slug.
   const next = background.applyIncrement(background.createEmptyStats(), Object.assign({
     modelObservedSource: "message-dom:model-slug", source: "send-button", submittedAt: now.toISOString(), promptHash: "p1", promptLength: 5
   }, merged), now);
-  assert.equal(next.totals["gpt-5-5-thinking"], 1);
-  assert.equal(next.totals["gpt-5-5"], undefined);
+  assert.equal(next.totals["gpt-5-5"], 1);
+  assert.equal(next.totals["gpt-5-5-thinking"], undefined);
 });
 
 test("mergeRecentNetworkObservation still lets a specific network model override a DOM base", () => {

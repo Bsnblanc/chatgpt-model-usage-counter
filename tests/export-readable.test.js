@@ -227,9 +227,6 @@ function exportSurfaces(conversations, options = {}) {
 
 function assertNoInvalidModelNames(format, text) {
   assert.doesNotMatch(text, /\bUnknown model\b/i, `${format} leaked Unknown model`);
-  assert.doesNotMatch(text, /\bGPT-5\.5\b/i, `${format} leaked GPT-5.5`);
-  assert.doesNotMatch(text, /\bGPT-5 5\b/i, `${format} leaked GPT-5 5`);
-  assert.doesNotMatch(text, /\bgpt[-_]5[-_]5(?![-_]thinking\b)(?:\b|[-_]preview\b)/i, `${format} leaked ambiguous gpt-5-5 model`);
 }
 
 test("all public export formats are readable and hide internal export artifacts", () => {
@@ -286,7 +283,7 @@ test("flattened ChatGPT markdown is restored into readable export lines", () => 
   }
 });
 
-test("all public export formats drop invalid model metadata and keep real thinking slugs", () => {
+test("all public export formats keep exact and public model identities", () => {
   const conversations = [
     {
       id: "model-readable",
@@ -333,7 +330,7 @@ test("all public export formats drop invalid model metadata and keep real thinki
 
   assert.equal(messages[0].model, "gpt-5-thinking");
   assert.equal(messages[0].parameters.model, undefined);
-  assert.equal(messages[1].model, "gpt-5-thinking");
+  assert.equal(messages[1].model, "gpt-5.5");
   assert.equal(messages[1].parameters.model, undefined);
   assert.equal(messages[1].parameters["reasoning.effort"], "medium");
   assert.equal(messages[2].model, "gpt-5-5-thinking");
@@ -342,6 +339,7 @@ test("all public export formats drop invalid model metadata and keep real thinki
 
   for (const [format, text] of Object.entries(surfaces)) {
     assert.match(text, /gpt-5-thinking/, `${format} should keep the valid thinking slug`);
+    assert.match(text, /gpt-5\.5/, `${format} should keep the public dotted model label`);
     assert.match(text, /gpt-5-5-thinking/, `${format} should keep the exact dash-versioned model slug`);
     assertNoInvalidModelNames(format, text);
   }

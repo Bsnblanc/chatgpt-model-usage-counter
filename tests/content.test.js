@@ -811,6 +811,88 @@ test("content script sends one usage.increment message for a send click", () => 
   assert.equal(usageMessages(messages).length, 1);
 });
 
+test("content script counts an intentional repeated prompt outside the direct-event dedupe window", () => {
+  const listeners = {};
+  const messages = [];
+  const timers = [];
+  let now = 1_000;
+  class FakeDate extends Date {
+    static now() {
+      return now;
+    }
+  }
+  const modelButton = new FakeElement({
+    innerText: "GPT-5.6 Sol",
+    attributes: { "data-testid": "model-switcher-dropdown-button", "aria-haspopup": "menu" }
+  });
+  const sendButton = new FakeElement({
+    attributes: { "data-testid": "send-button", "aria-label": "Send prompt" }
+  });
+  const textarea = new FakeElement({
+    tagName: "TEXTAREA",
+    value: "Repeat this exact prompt.",
+    rect: { top: 720, left: 24, width: 560, height: 80, right: 584, bottom: 800 }
+  });
+  const document = {
+    title: "ChatGPT",
+    addEventListener(type, listener) {
+      listeners[type] = listener;
+    },
+    querySelectorAll(selector) {
+      if (selector.includes("model-switcher")) return [modelButton];
+      if (selector.includes("data-message-author-role")) return [];
+      if (selector.includes("button") || selector.includes("[role='button']") || selector.includes('[role="button"]')) {
+        return [modelButton, sendButton];
+      }
+      if (selector.includes("textarea")) return [textarea];
+      return [];
+    }
+  };
+  const context = {
+    window: { ChatGPTUsageDetector: detector },
+    document,
+    location: { href: "https://chatgpt.com/c/repeated-prompt" },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          messages.push(message);
+          if (callback) callback({ ok: true, recorded: true, event: { model: message.payload.model }, stats: { totals: {} } });
+        }
+      }
+    },
+    setTimeout(fn, ms) {
+      timers.push({ fn, ms });
+      return timers.length;
+    },
+    clearTimeout() {},
+    Date: FakeDate,
+    Math,
+    String,
+    Number
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+
+  listeners.click({ target: sendButton });
+  now = 1_100;
+  listeners.click({ target: sendButton }); // duplicate browser event, ignored
+  now = 5_000;
+  listeners.click({ target: sendButton }); // intentional second submission
+
+  const flush = timers.filter((timer) => timer.ms === 12_000).at(-1);
+  assert.ok(flush);
+  flush.fn();
+
+  const usage = usageMessages(messages);
+  assert.equal(usage.length, 2);
+  assert.equal(usage[0].payload.promptHash, usage[1].payload.promptHash);
+  assert.equal(usage[0].payload.model, "gpt-5.6-sol");
+  assert.equal(usage[1].payload.model, "gpt-5.6-sol");
+});
+
 test("content script records Enter submission even when send button markup changes", () => {
   const listeners = {};
   const messages = [];
@@ -1741,3 +1823,186 @@ test("content script does not map bare Search or Live controls without tool cont
   }
 });
 
+test("current export falls back to the already-rendered chat when account history fails and no sidebar link exists", async () => {
+  const listeners = {};
+  const currentConversation = {
+    id: "shared-chat-0001",
+    title: "Shared conversation",
+    messages: [
+      { id: "u1", role: "user", text: "Question" },
+      { id: "a1", role: "assistant", text: "Answer" }
+    ]
+  };
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: {
+      getAttribute() {
+        return null;
+      }
+    },
+    addEventListener(type, listener) {
+      listeners[type] = listener;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: {
+        collectConversationFromDom() {
+          return currentConversation;
+        }
+      },
+      ChatGPTConversationSource: {
+        collectConversations() {
+          return Promise.reject(new Error("history unavailable"));
+        }
+      },
+      fetch() {
+        return Promise.reject(new Error("not called directly"));
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/c/shared-chat-0001",
+      origin: "https://chatgpt.com",
+      pathname: "/c/shared-chat-0001"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          if (callback) callback({ ok: true });
+        },
+        onMessage: {
+          addListener(listener) {
+            listeners.runtimeMessage = listener;
+          }
+        }
+      }
+    },
+    Date,
+    Math,
+    String,
+    Number,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  const result = await context.window.__chatgptUsageCollectCurrent();
+
+  assert.equal(result.complete, false);
+  assert.equal(result.failures.length, 0);
+  assert.ok(result.warnings.length >= 1);
+  assert.equal(result.warnings.some((warning) => warning.scope === "rendered-page-fallback"), true);
+  assert.deepEqual(Array.from(result.conversations, (conversation) => conversation.id), ["shared-chat-0001"]);
+
+  const messageResult = await new Promise((resolve) => {
+    listeners.runtimeMessage({ type: "conversation.collect" }, {}, resolve);
+  });
+  assert.equal(messageResult.ok, true);
+  assert.equal(messageResult.complete, false);
+  assert.equal(messageResult.warnings.some((warning) => warning.scope === "rendered-page-fallback"), true);
+});
+
+test("all export preserves rendered-page fallback warnings and stays incomplete", async () => {
+  const listeners = {};
+  const currentConversation = {
+    id: "chat-0001",
+    title: "Recovered conversation",
+    messages: [
+      { id: "u1", role: "user", text: "Question" },
+      { id: "a1", role: "assistant", text: "Answer" }
+    ]
+  };
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: {
+      getAttribute() {
+        return null;
+      }
+    },
+    addEventListener(type, listener) {
+      listeners[type] = listener;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: {
+        collectConversationFromDom() {
+          return currentConversation;
+        }
+      },
+      ChatGPTConversationSource: {
+        collectAllConversations() {
+          return Promise.resolve({
+            index: [{ id: "chat-0001", title: "Recovered conversation" }],
+            conversations: [],
+            failures: [{ id: "chat-0001", error: "history detail unavailable" }],
+            warnings: [],
+            requestedCount: 1,
+            indexComplete: true,
+            complete: false
+          });
+        }
+      },
+      fetch() {
+        return Promise.reject(new Error("not called directly"));
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/c/chat-0001",
+      origin: "https://chatgpt.com",
+      pathname: "/c/chat-0001"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          if (callback) callback({ ok: true });
+        },
+        onMessage: {
+          addListener(listener) {
+            listeners.runtimeMessage = listener;
+          }
+        }
+      }
+    },
+    Date,
+    Math,
+    String,
+    Number,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  const result = await context.window.__chatgptUsageCollectAll();
+
+  assert.equal(result.complete, false);
+  assert.equal(result.failures.length, 0);
+  assert.deepEqual(Array.from(result.conversations, (conversation) => conversation.id), ["chat-0001"]);
+  assert.equal(result.warnings.some((warning) => warning.scope === "rendered-page-fallback"), true);
+});

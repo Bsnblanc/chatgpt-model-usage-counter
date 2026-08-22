@@ -8,14 +8,12 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function exporterFactory(root) {
   "use strict";
 
-  // Conversation export is disabled at runtime. These format generators remain
-  // test-only so scripts/verify-release.mjs can validate historical fixtures.
-
   var JSON_MIME = "application/json;charset=utf-8";
   var MD_MIME = "text/markdown;charset=utf-8";
   var DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   var PDF_MIME = "application/pdf";
   var PNG_MIME = "image/png";
+  var ZIP_MIME = "application/zip";
   var SVG_MIME = "image/svg+xml;charset=utf-8";
   var PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   var MIME = {
@@ -29,11 +27,18 @@
     svg: SVG_MIME,
     image: PNG_MIME,
     png: PNG_MIME,
-    pdf: PDF_MIME
+    pdf: PDF_MIME,
+    zip: ZIP_MIME
   };
-  var CHATGPT_MODE_SLUG_RE = /^gpt-(?:(?:\d+(?:[-_.]\d+)*)|4o|4\.5|4\.1|4|3\.5)[-_.](thinking|instant|fast|auto|pro)$/i;
-  var CHATGPT_INTERNAL_FAMILY_RE = /^gpt-\d+-\d+(?:[-_.][a-z0-9][a-z0-9._-]*)?$/i;
   var FEATURE_ONLY_MODEL_RE = /^(agent[_-]?mode|deep[_-]?(?:research|search)|image[_-]?generation|web[_-]?search|search|realtime|audio|voice|canvas)(?:[_-]?v\d+)?$/i;
+  var modelCatalog = root.ChatGPTModelCatalog;
+  if (!modelCatalog && typeof require === "function") {
+    try {
+      modelCatalog = require("./model-catalog");
+    } catch (_) {
+      modelCatalog = null;
+    }
+  }
 
   function normalizeText(value) {
     return String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
@@ -69,13 +74,15 @@
     if (/^unknown(?:[-_ ]?model)?$/.test(clean) || clean === "unresolved-model" || /^(?:gpt-)?lastusedmodel$/.test(clean)) {
       return false;
     }
-    if (/^gpt-5\.\d+(?:$|[-_.])/.test(clean)) {
-      return false;
-    }
     if (FEATURE_ONLY_MODEL_RE.test(clean)) {
       return false;
     }
-    // gpt-5-5 / gpt-5-5-preview 等短横线+次版本号是真实模型,不再当作内部歧义 slug 丢弃。
+    if (modelCatalog && typeof modelCatalog.isRequestModelSlug === "function") {
+      return modelCatalog.isRequestModelSlug(clean);
+    }
+    if (modelCatalog && typeof modelCatalog.isModelSlug === "function") {
+      return modelCatalog.isModelSlug(clean);
+    }
     if (/^(?:gpt|o\d+|chat-latest|future-family)/.test(clean)) {
       return true;
     }
@@ -98,10 +105,20 @@
 
   function safeName(value) {
     var clean = String(value || "chatgpt-export")
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
       .replace(/[\\/:*?"<>|]+/g, "-")
       .replace(/\s+/g, " ")
-      .trim();
-    return (clean || "chatgpt-export").slice(0, 80);
+      .trim()
+      .replace(/[. ]+$/g, "")
+      .slice(0, 80)
+      .replace(/[. ]+$/g, "");
+    if (!clean || /^\.+$/.test(clean)) {
+      return "chatgpt-export";
+    }
+    if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(clean)) {
+      clean = "_" + clean;
+    }
+    return clean;
   }
 
   function escapeHtml(value) {
@@ -352,11 +369,27 @@
     return true;
   }
 
-  function mappingMessages(mapping) {
+  function mappingNodeIds(mapping, currentNodeId) {
+    var current = String(currentNodeId || "");
+    if (!current || !mapping[current]) {
+      return Object.keys(mapping);
+    }
+    var ids = [];
+    var seen = {};
+    while (current && mapping[current] && !seen[current]) {
+      seen[current] = true;
+      ids.push(current);
+      current = String((mapping[current] && mapping[current].parent) || "");
+    }
+    return ids.reverse();
+  }
+
+  function mappingMessages(mapping, currentNodeId) {
     if (!mapping || typeof mapping !== "object") {
       return [];
     }
-    return Object.keys(mapping)
+    var followsCurrentBranch = Boolean(currentNodeId && mapping[String(currentNodeId)]);
+    return mappingNodeIds(mapping, currentNodeId)
       .map(function fromNode(nodeId, index) {
         var node = mapping[nodeId] || {};
         var message = node.message || {};
@@ -384,6 +417,9 @@
       })
       .filter(shouldExportTranscriptMessage)
       .sort(function byTime(a, b) {
+        if (followsCurrentBranch) {
+          return a.orderIndex - b.orderIndex;
+        }
         var timeOrder = String(a.createdAt).localeCompare(String(b.createdAt));
         return timeOrder || a.orderIndex - b.orderIndex;
       })
@@ -395,7 +431,7 @@
 
   function normalizeConversation(conversation) {
     var messages = conversation && conversation.mapping
-      ? mappingMessages(conversation.mapping)
+      ? mappingMessages(conversation.mapping, conversation.current_node || conversation.currentNode)
       : Array.isArray(conversation && conversation.messages)
         ? conversation.messages.map(function normalizeMessage(message, index) {
             var text = sanitizeTranscriptText(messageText(message));
@@ -677,6 +713,14 @@
         }
       });
     }
+    if (message && Array.isArray(message.usageFeatures)) {
+      message.usageFeatures.forEach(function addUsageFeature(feature) {
+        var clean = normalizeExportFeatureId(feature);
+        if (clean) {
+          features[clean] = true;
+        }
+      });
+    }
     var metadata = (message && message.metadata && typeof message.metadata === "object") ? message.metadata : {};
     var messageParameters = (message && message.parameters && typeof message.parameters === "object") ? message.parameters : {};
     var modelParameters = (message && message.modelParameters && typeof message.modelParameters === "object") ? message.modelParameters : {};
@@ -684,6 +728,10 @@
       message && message.model,
       message && message.modelSlug,
       message && message.model_slug,
+      message && message.apiModel,
+      message && message.api_model,
+      message && message.chatgptModel,
+      message && message.chatgpt_model,
       metadata.model_slug,
       metadata.modelSlug,
       metadata.modelslug,
@@ -1942,6 +1990,7 @@
     if (opts.bold) rpr += "<w:b/>";
     if (opts.italic) rpr += "<w:i/>";
     if (opts.code) rpr += '<w:shd w:val="clear" w:color="auto" w:fill="EEF1F4"/><w:color w:val="B3261E"/>';
+    if (opts.link) rpr += '<w:color w:val="1F6FEB"/><w:u w:val="single"/>';
     rpr += "</w:rPr>";
     var parts = String(text == null ? "" : text).split("\n").map(function (p) {
       return '<w:t xml:space="preserve">' + escapeXml(p) + "</w:t>";
@@ -1949,13 +1998,49 @@
     return "<w:r>" + rpr + parts + "</w:r>";
   }
 
-  function docxInlineRuns(spans) {
+  function createDocxLinkRegistry() {
+    var ids = {};
+    var relationships = [];
+    return {
+      idFor: function idFor(url) {
+        var normalized = String(url || "").trim();
+        if (!/^https?:\/\//i.test(normalized)) {
+          return "";
+        }
+        if (ids[normalized]) {
+          return ids[normalized];
+        }
+        var id = "rIdLink" + (relationships.length + 1);
+        ids[normalized] = id;
+        relationships.push(
+          '<Relationship Id="' + id +
+            '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"' +
+            ' Target="' + escapeXml(normalized) + '" TargetMode="External"/>'
+        );
+        return id;
+      },
+      xml: function xml() {
+        return relationships.join("");
+      }
+    };
+  }
+
+  function docxInlineRuns(spans, links) {
     return (spans || []).map(function (s) {
-      return docxRun(s.t, { bold: s.bold, italic: s.italic, code: s.code });
+      var run = docxRun(s.t, {
+        bold: s.bold,
+        italic: s.italic,
+        code: s.code,
+        link: Boolean(s.link)
+      });
+      var relationshipId = s.link && links ? links.idFor(s.link) : "";
+      return relationshipId
+        ? '<w:hyperlink r:id="' + relationshipId + '">' + run + "</w:hyperlink>"
+        : run;
     }).join("");
   }
 
-  function docxTable(rows) {
+  function docxTable(rows, links) {
     if (!rows || !rows.length) return "";
     var cols = rows[0].length || 1;
     var pctEach = Math.floor(5000 / cols);
@@ -1968,7 +2053,10 @@
       tbl += "<w:tr>";
       row.forEach(function (cell) {
         var shd = ri === 0 ? '<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>' : "";
-        tbl += '<w:tc><w:tcPr><w:tcW w:w="' + pctEach + '" w:type="pct"/>' + shd + '</w:tcPr><w:p><w:pPr><w:spacing w:after="0"/></w:pPr>' + docxRun(cell, { bold: ri === 0 }) + "</w:p></w:tc>";
+        var cellSpans = cvParseInline(cell).map(function tableStyle(span) {
+          return ri === 0 ? Object.assign({}, span, { bold: true }) : span;
+        });
+        tbl += '<w:tc><w:tcPr><w:tcW w:w="' + pctEach + '" w:type="pct"/>' + shd + '</w:tcPr><w:p><w:pPr><w:spacing w:after="0"/></w:pPr>' + docxInlineRuns(cellSpans, links) + "</w:p></w:tc>";
       });
       tbl += "</w:tr>";
     });
@@ -1976,27 +2064,27 @@
     return tbl + '<w:p><w:pPr><w:spacing w:after="0"/></w:pPr></w:p>';
   }
 
-  function docxMarkdownParagraphs(text) {
+  function docxMarkdownParagraphs(text, links) {
     var blocks = cvParseBlocks(text);
     var out = [];
     blocks.forEach(function (b) {
       if (b.type === "heading") {
         var style = b.level <= 1 ? "Heading1" : b.level === 2 ? "Heading2" : b.level === 3 ? "Heading3" : "Heading4";
-        out.push('<w:p><w:pPr><w:pStyle w:val="' + style + '"/></w:pPr>' + docxInlineRuns(b.spans.map(function (s) { return Object.assign({}, s, { bold: true }); })) + "</w:p>");
+        out.push('<w:p><w:pPr><w:pStyle w:val="' + style + '"/></w:pPr>' + docxInlineRuns(b.spans.map(function (s) { return Object.assign({}, s, { bold: true }); }), links) + "</w:p>");
       } else if (b.type === "para") {
-        out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/></w:pPr>' + docxInlineRuns(b.spans) + "</w:p>");
+        out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/></w:pPr>' + docxInlineRuns(b.spans, links) + "</w:p>");
       } else if (b.type === "list") {
         b.items.forEach(function (item, idx) {
           var prefix = b.ordered ? (idx + 1) + ". " : "• ";
-          out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/><w:ind w:left="360" w:hanging="360"/></w:pPr>' + docxRun(prefix) + docxInlineRuns(item) + "</w:p>");
+          out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/><w:ind w:left="360" w:hanging="360"/></w:pPr>' + docxRun(prefix) + docxInlineRuns(item, links) + "</w:p>");
         });
       } else if (b.type === "code") {
         var codeRuns = String(b.code).split("\n").map(function (line) { return '<w:t xml:space="preserve">' + escapeXml(line) + "</w:t>"; }).join("<w:br/>");
         out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/><w:shd w:val="clear" w:color="auto" w:fill="F6F8FA"/><w:spacing w:before="60" w:after="60"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:eastAsia="Microsoft YaHei"/><w:sz w:val="20"/></w:rPr>' + codeRuns + "</w:r></w:p>");
       } else if (b.type === "quote") {
-        out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/><w:ind w:left="360"/></w:pPr>' + docxInlineRuns(b.spans.map(function (s) { return Object.assign({}, s, { italic: true }); })) + "</w:p>");
+        out.push('<w:p><w:pPr><w:pStyle w:val="MsgBody"/><w:ind w:left="360"/></w:pPr>' + docxInlineRuns(b.spans.map(function (s) { return Object.assign({}, s, { italic: true }); }), links) + "</w:p>");
       } else if (b.type === "table") {
-        out.push(docxTable(b.rows));
+        out.push(docxTable(b.rows, links));
       } else if (b.type === "hr") {
         out.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="E6E9EF"/></w:pBdr></w:pPr></w:p>');
       }
@@ -2007,6 +2095,7 @@
 
   function buildDocxBytes(conversations, options) {
     var paragraphs = [];
+    var links = createDocxLinkRegistry();
     var renderMd = !!(options && options.renderMarkdown);
     var list = normalizeConversations(conversations);
     var messageCount = list.reduce(function countMessages(total, conversation) {
@@ -2033,7 +2122,7 @@
         // renderMarkdown 时按 Markdown 渲染成 Word 结构(标题/加粗/行内代码/代码块/列表/表格);
         // 否则保留原始文本分段(单测与机器可读路径走这条,保证结构化内容逐字保留)。
         if (renderMd) {
-          docxMarkdownParagraphs(message.text || message.content || " ").forEach(function appendBlock(block) {
+          docxMarkdownParagraphs(message.text || message.content || " ", links).forEach(function appendBlock(block) {
             paragraphs.push(block);
           });
         } else {
@@ -2055,7 +2144,7 @@
 
     var documentXml =
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>' +
       paragraphs.join("") +
       '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:cols w:space="720"/></w:sectPr>' +
       "</w:body></w:document>";
@@ -2091,6 +2180,7 @@
           '<?xml version="1.0" encoding="UTF-8"?>' +
           '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
           '<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+          links.xml() +
           "</Relationships>"
       },
       {
@@ -2914,13 +3004,14 @@
   function cvParseInline(text) {
     var s = String(text == null ? "" : text);
     var spans = [];
-    var re = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*\s][^*]*?)\*)/g;
+    var re = /(\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*\s][^*]*?)\*)/g;
     var last = 0, m;
     while ((m = re.exec(s))) {
       if (m.index > last) spans.push({ t: s.slice(last, m.index) });
-      if (m[2] != null) spans.push({ t: m[2], bold: true });
-      else if (m[3] != null) spans.push({ t: m[3], code: true });
-      else if (m[4] != null) spans.push({ t: m[4], italic: true });
+      if (m[2] != null) spans.push({ t: m[2] + " (" + m[3] + ")", link: m[3] });
+      else if (m[4] != null) spans.push({ t: m[4], bold: true });
+      else if (m[5] != null) spans.push({ t: m[5], code: true });
+      else if (m[6] != null) spans.push({ t: m[6], italic: true });
       last = re.lastIndex;
     }
     if (last < s.length) spans.push({ t: s.slice(last) });
@@ -2988,16 +3079,16 @@
       String(sp.t).split(/(\s+|\n)/).forEach(function (p) {
         if (p === "") return;
         if (p === "\n") { tokens.push({ nl: true }); return; }
-        if (/^\s+$/.test(p)) { tokens.push({ t: " ", sp: true, bold: sp.bold, code: sp.code, italic: sp.italic }); return; }
+        if (/^\s+$/.test(p)) { tokens.push({ t: " ", sp: true, bold: sp.bold, code: sp.code, italic: sp.italic, link: sp.link }); return; }
         var buf = "";
         for (var k = 0; k < p.length; k++) {
           var ch = p[k];
           if (/[⺀-鿿豈-﫿＀-￯　-〿぀-ヿ]/.test(ch)) {
-            if (buf) { tokens.push({ t: buf, bold: sp.bold, code: sp.code, italic: sp.italic }); buf = ""; }
-            tokens.push({ t: ch, bold: sp.bold, code: sp.code, italic: sp.italic });
+            if (buf) { tokens.push({ t: buf, bold: sp.bold, code: sp.code, italic: sp.italic, link: sp.link }); buf = ""; }
+            tokens.push({ t: ch, bold: sp.bold, code: sp.code, italic: sp.italic, link: sp.link });
           } else buf += ch;
         }
-        if (buf) tokens.push({ t: buf, bold: sp.bold, code: sp.code, italic: sp.italic });
+        if (buf) tokens.push({ t: buf, bold: sp.bold, code: sp.code, italic: sp.italic, link: sp.link });
       });
     });
     function fontFor(tok) { return (tok.bold ? "700 " : tok.italic ? "italic " : "") + sizePx + "px " + (tok.code ? CV_MONO : CV_FONT); }
@@ -3007,8 +3098,35 @@
       ctx.font = fontFor(tok);
       var w = ctx.measureText(tok.t).width;
       if (tok.sp && curW === 0) return;
-      if (curW + w > maxW && curW > 0 && !tok.sp) { lines.push(cur); cur = []; curW = 0; }
-      tok.w = w; cur.push(tok); curW += w;
+      var pieces = [];
+      if (w <= maxW || tok.sp) {
+        pieces.push(Object.assign({}, tok, { w: w }));
+      } else {
+        var pieceText = "";
+        var pieceWidth = 0;
+        Array.from(tok.t).forEach(function splitCharacter(character) {
+          var characterWidth = ctx.measureText(character).width;
+          if (pieceText && pieceWidth + characterWidth > maxW) {
+            pieces.push(Object.assign({}, tok, { t: pieceText, w: pieceWidth, sp: false }));
+            pieceText = "";
+            pieceWidth = 0;
+          }
+          pieceText += character;
+          pieceWidth += characterWidth;
+        });
+        if (pieceText) {
+          pieces.push(Object.assign({}, tok, { t: pieceText, w: pieceWidth, sp: false }));
+        }
+      }
+      pieces.forEach(function appendPiece(piece) {
+        if (curW + piece.w > maxW && curW > 0 && !piece.sp) {
+          lines.push(cur);
+          cur = [];
+          curW = 0;
+        }
+        cur.push(piece);
+        curW += piece.w;
+      });
     });
     if (cur.length) lines.push(cur);
     return lines;
@@ -3025,7 +3143,7 @@
     ctx.closePath();
   }
 
-  function renderConversationsCanvas(conversations, options) {
+  function layoutConversationsCanvas(conversations, options) {
     var doc = root.document;
     if (!doc || typeof doc.createElement !== "function") { throw new Error("Canvas export requires a browser environment"); }
     options = options || {};
@@ -3047,7 +3165,7 @@
         var cx = x;
         toks.forEach(function (tok) {
           if (tok.code) ops.push({ kind: "rect", x: cx - 1, y: y - sizePx + 3, w: tok.w + 2, h: sizePx + 6, color: "#eef1f4", radius: 3 });
-          ops.push({ kind: "text", x: cx, y: y + 1, text: tok.t, size: sizePx, color: tok.code ? "#b3261e" : color, bold: tok.bold, italic: tok.italic, font: tok.code ? CV_MONO : CV_FONT });
+          ops.push({ kind: "text", x: cx, y: y + 1, text: tok.t, size: sizePx, color: tok.code ? "#b3261e" : tok.link ? ACCENT : color, bold: tok.bold, italic: tok.italic, font: tok.code ? CV_MONO : CV_FONT });
           cx += tok.w;
         });
         y += lh;
@@ -3076,7 +3194,7 @@
           cellLines[cj].forEach(function (toks) {
             var cx = cellX;
             toks.forEach(function (tok) {
-              ops.push({ kind: "text", x: cx, y: ty, text: tok.t, size: cellSize, color: ri === 0 ? "#0f172a" : "#334155", bold: tok.bold, italic: tok.italic, font: tok.code ? CV_MONO : CV_FONT });
+              ops.push({ kind: "text", x: cx, y: ty, text: tok.t, size: cellSize, color: tok.link ? ACCENT : ri === 0 ? "#0f172a" : "#334155", bold: tok.bold, italic: tok.italic, font: tok.code ? CV_MONO : CV_FONT });
               cx += tok.w;
             });
             ty += cellLh;
@@ -3086,6 +3204,30 @@
       });
       ops.push({ kind: "rect", x: x, y: y, w: blockW, h: 1, color: RULE });
       for (var c = 0; c <= cols; c++) { ops.push({ kind: "rect", x: x + c * colW, y: startY, w: 1, h: y - startY, color: RULE }); }
+    }
+    function wrapCodeLine(line, maxW, sizePx) {
+      var value = String(line == null ? "" : line);
+      if (!value) {
+        return [""];
+      }
+      measure.font = sizePx + "px " + CV_MONO;
+      var rows = [];
+      var current = "";
+      var currentWidth = 0;
+      Array.from(value).forEach(function appendCharacter(character) {
+        var characterWidth = measure.measureText(character).width;
+        if (current && currentWidth + characterWidth > maxW) {
+          rows.push(current);
+          current = "";
+          currentWidth = 0;
+        }
+        current += character;
+        currentWidth += characterWidth;
+      });
+      if (current || !rows.length) {
+        rows.push(current);
+      }
+      return rows;
     }
     function drawBlocks(blocks, x, blockW) {
       blocks.forEach(function (b) {
@@ -3104,7 +3246,20 @@
         }
         else if (b.type === "para") { drawSpans(b.spans, x, blockW, 15, INK, false); gap(7); }
         else if (b.type === "list") { b.items.forEach(function (item, idx) { addText(x + 2, b.ordered ? (idx + 1) + "." : "•", 15, MUTED); drawSpans(item, x + 24, blockW - 24, 15, INK, false); gap(4); }); gap(4); }
-        else if (b.type === "code") { var codeLines = String(b.code).split("\n"); var clh = 20, cpad = 10, boxH = codeLines.length * clh + cpad * 2; rect(x, blockW, boxH, "#f6f8fa", 8); var cy0 = y + cpad + 14; codeLines.forEach(function (ln, ci) { ops.push({ kind: "text", x: x + cpad, y: cy0 + ci * clh, text: ln, size: 13, color: "#24292f", font: CV_MONO }); }); y += boxH; gap(8); }
+        else if (b.type === "code") {
+          var cpad = 10, clh = 20, codeSize = 13;
+          var codeLines = String(b.code).split("\n").reduce(function wrapCode(out, line) {
+            return out.concat(wrapCodeLine(line, blockW - cpad * 2, codeSize));
+          }, []);
+          var boxH = codeLines.length * clh + cpad * 2;
+          rect(x, blockW, boxH, "#f6f8fa", 8);
+          var cy0 = y + cpad + 14;
+          codeLines.forEach(function (line, codeIndex) {
+            ops.push({ kind: "text", x: x + cpad, y: cy0 + codeIndex * clh, text: line, size: codeSize, color: "#24292f", font: CV_MONO });
+          });
+          y += boxH;
+          gap(8);
+        }
         else if (b.type === "quote") { var sY = y; drawSpans(b.spans, x + 14, blockW - 14, 15, MUTED, false, true); ops.push({ kind: "rect", x: x, y: sY - 2, w: 3, h: (y - sY) + 2, color: "#cbd5e1" }); gap(7); }
         else if (b.type === "table") { gap(8); drawTable(b.rows, x, blockW); gap(12); }
         else if (b.type === "hr") { gap(6); rule(x, x + blockW); gap(10); }
@@ -3135,15 +3290,47 @@
     addText(margin, "GitHub · " + EXPORT_PROMO_URL, 11.5, ACCENT); gap(4);
     gap(margin);
 
-    var DPR = (y * 2) > 30000 ? 1 : 2;
     var totalH = Math.ceil(y);
+    return { doc: doc, width: width, height: totalH, ops: ops };
+  }
+
+  function paintConversationCanvas(layout, startY, pageHeight) {
+    var width = layout.width;
+    var sliceStart = Math.max(0, Math.floor(startY || 0));
+    var sliceHeight = Math.max(1, Math.ceil(pageHeight || layout.height));
+    // Keep each live canvas below a conservative memory ceiling. A
+    // 860×14000 canvas at DPR 2 consumes about 184 MiB before PNG encoding,
+    // which can crash the popup on long conversations.
+    var doubledBytes = width * sliceHeight * 4 * 4;
+    var DPR = (sliceHeight * 2) <= 30000 && doubledBytes <= (96 * 1024 * 1024) ? 2 : 1;
+    var doc = layout.doc;
     var canvas = doc.createElement("canvas");
-    canvas.width = width * DPR; canvas.height = totalH * DPR;
+    canvas.width = width * DPR;
+    canvas.height = sliceHeight * DPR;
     var ctx = canvas.getContext("2d");
     ctx.scale(DPR, DPR);
-    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, width, totalH);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, sliceHeight);
     ctx.textBaseline = "alphabetic";
-    ops.forEach(function (op) {
+    ctx.save();
+    ctx.translate(0, -sliceStart);
+    layout.ops.forEach(function (op) {
+      if (op.kind === "text") {
+        // Assign every text run to exactly one half-open page by the same
+        // visual-top coordinate used when page ranges are chosen. This avoids
+        // a line being partially painted at the bottom of one page and then
+        // repeated at the top of the next.
+        var textTop = Math.max(0, op.y - (Number(op.size) || 14) * 1.45 - 4);
+        if (textTop < sliceStart || textTop >= sliceStart + sliceHeight) {
+          return;
+        }
+      } else {
+        var opTop = op.y;
+        var opBottom = op.y + (Number(op.h) || 1);
+        if (opBottom <= sliceStart || opTop >= sliceStart + sliceHeight) {
+          return;
+        }
+      }
       if (op.kind === "rect") {
         ctx.fillStyle = op.color;
         if (op.radius) { cvRoundRect(ctx, op.x, op.y, op.w, op.h, op.radius); ctx.fill(); }
@@ -3154,7 +3341,72 @@
         ctx.fillText(op.text, op.x, op.y);
       }
     });
+    ctx.restore();
     return canvas;
+  }
+
+  function conversationCanvasPageRanges(layout, maxPageHeight) {
+    var limit = Math.max(600, Math.min(14000, Number(maxPageHeight) || 1216));
+    if (layout.height <= limit) {
+      return [{ start: 0, height: layout.height }];
+    }
+    var textTops = layout.ops
+      .filter(function textOnly(op) { return op.kind === "text"; })
+      .map(function textTop(op) {
+        // Canvas dimensions and slice origins are integers. Keep candidate
+        // boundaries integer-aligned too, otherwise floor(start)+ceil(height)
+        // creates a one-pixel overlap that can repeat a line across pages.
+        return Math.max(0, Math.floor(op.y - (Number(op.size) || 14) * 1.45 - 4));
+      })
+      .sort(function numeric(a, b) { return a - b; });
+    var ranges = [];
+    var start = 0;
+    while (start < layout.height) {
+      var desiredEnd = Math.min(layout.height, start + limit);
+      var end = desiredEnd;
+      if (desiredEnd < layout.height) {
+        for (var index = 0; index < textTops.length; index += 1) {
+          var top = textTops[index];
+          if (top > start + Math.floor(limit * 0.55) && top <= desiredEnd) {
+            end = top;
+          }
+          if (top > desiredEnd) {
+            break;
+          }
+        }
+      }
+      if (end <= start) {
+        end = desiredEnd;
+      }
+      ranges.push({ start: start, height: Math.max(1, Math.ceil(end - start)) });
+      start = end;
+    }
+    return ranges;
+  }
+
+  function renderConversationsCanvas(conversations, options) {
+    var layout = layoutConversationsCanvas(conversations, options || {});
+    if (layout.height > 30000) {
+      throw new Error("Conversation is too long for one PNG canvas.");
+    }
+    return paintConversationCanvas(layout, 0, layout.height);
+  }
+
+  function renderConversationsCanvasPages(conversations, options) {
+    var layout = layoutConversationsCanvas(conversations, options || {});
+    return conversationCanvasPageRanges(layout, options && options.pageHeight).map(function renderPage(range) {
+      return paintConversationCanvas(layout, range.start, range.height);
+    });
+  }
+
+  function releaseCanvas(canvas) {
+    if (!canvas) {
+      return;
+    }
+    try {
+      canvas.width = 1;
+      canvas.height = 1;
+    } catch (_) {}
   }
 
   function dataUrlToUint8Blob(durl, mime) {
@@ -3229,12 +3481,114 @@
     });
   }
 
+  function buildPdfBlobFromCanvases(canvases) {
+    var pages = Array.isArray(canvases) ? canvases.filter(Boolean) : [];
+    if (!pages.length) {
+      return Promise.reject(new Error("PDF export did not receive any rendered pages."));
+    }
+    var images = [];
+    function compressCanvasPage(index) {
+      if (index >= pages.length) {
+        return Promise.resolve();
+      }
+      var canvas = pages[index];
+      var ctx = canvas.getContext("2d");
+      var width = canvas.width;
+      var height = canvas.height;
+      var data = ctx.getImageData(0, 0, width, height).data;
+      var rgb = new Uint8Array(width * height * 3);
+      var output = 0;
+      for (var pixel = 0; pixel < data.length; pixel += 4) {
+        rgb[output++] = data[pixel];
+        rgb[output++] = data[pixel + 1];
+        rgb[output++] = data[pixel + 2];
+      }
+      return compressZlibBytes(rgb).then(function compressed(bytes) {
+        images.push({ w: width, h: height, data: bytes });
+        return compressCanvasPage(index + 1);
+      });
+    }
+    return compressCanvasPage(0).then(function assemble() {
+      return new Blob([assembleImagePdf(images)], { type: PDF_MIME });
+    });
+  }
+
+  function buildPdfBlobFromConversations(conversations, options) {
+    options = options || {};
+    var layout = layoutConversationsCanvas(conversations, options);
+    var ranges = conversationCanvasPageRanges(layout, options.pageHeight || 1216);
+    var images = [];
+
+    function renderAndCompress(index) {
+      if (index >= ranges.length) {
+        return Promise.resolve();
+      }
+      var range = ranges[index];
+      var canvas = paintConversationCanvas(layout, range.start, range.height);
+      var ctx = canvas.getContext("2d");
+      var width = canvas.width;
+      var height = canvas.height;
+      var data = ctx.getImageData(0, 0, width, height).data;
+      var rgb = new Uint8Array(width * height * 3);
+      var output = 0;
+      for (var pixel = 0; pixel < data.length; pixel += 4) {
+        rgb[output++] = data[pixel];
+        rgb[output++] = data[pixel + 1];
+        rgb[output++] = data[pixel + 2];
+      }
+      return compressZlibBytes(rgb).then(function compressed(bytes) {
+        images.push({ w: width, h: height, data: bytes });
+        releaseCanvas(canvas);
+        return renderAndCompress(index + 1);
+      }, function failed(error) {
+        releaseCanvas(canvas);
+        throw error;
+      });
+    }
+
+    return renderAndCompress(0).then(function assemble() {
+      return new Blob([assembleImagePdf(images)], { type: PDF_MIME });
+    });
+  }
+
+  function renderConversationsPngBlobs(conversations, options) {
+    options = options || {};
+    var layout = layoutConversationsCanvas(conversations, options);
+    var ranges = conversationCanvasPageRanges(layout, options.pageHeight || 14000);
+    var pages = [];
+
+    function renderPage(index) {
+      if (index >= ranges.length) {
+        return Promise.resolve();
+      }
+      var range = ranges[index];
+      var canvas = paintConversationCanvas(layout, range.start, range.height);
+      return canvasToPngBlob(canvas).then(function converted(blob) {
+        pages.push(blob);
+        releaseCanvas(canvas);
+        return renderPage(index + 1);
+      }, function failed(error) {
+        releaseCanvas(canvas);
+        throw error;
+      });
+    }
+
+    return renderPage(0).then(function done() {
+      return pages;
+    });
+  }
+
   return {
     buildDocx: buildDocx,
     buildDocxRenderedBlob: buildDocxRenderedBlob,
+    buildZip: buildZip,
     renderConversationsCanvas: renderConversationsCanvas,
+    renderConversationsCanvasPages: renderConversationsCanvasPages,
+    renderConversationsPngBlobs: renderConversationsPngBlobs,
     canvasToPngBlob: canvasToPngBlob,
     buildPdfBlobFromCanvas: buildPdfBlobFromCanvas,
+    buildPdfBlobFromCanvases: buildPdfBlobFromCanvases,
+    buildPdfBlobFromConversations: buildPdfBlobFromConversations,
     buildDocxBytes: buildDocxBytes,
     collectConversationFromDom: collectConversationFromDom,
     buildHtml: buildHtml,

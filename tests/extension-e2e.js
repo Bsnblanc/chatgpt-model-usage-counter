@@ -240,7 +240,6 @@ async function pollPopup(cdp, popupSessionId) {
     if (
       state.language === "zh" &&
       state.headline.includes("2") &&
-      state.plan.includes("ChatGPT Plus") &&
       state.models.includes("gpt-4o-mini") &&
       state.models.includes("future-family-2026-thinking") &&
       state.chart &&
@@ -552,11 +551,7 @@ async function main() {
           link.textContent = title;
           nav.append(link);
         });
-        const plan = document.createElement("div");
-        plan.setAttribute("data-testid", "account-plan");
-        plan.textContent = "ChatGPT Plus";
         document.body.prepend(nav);
-        document.body.prepend(plan);
         return true;
       })()`
     );
@@ -602,7 +597,6 @@ async function main() {
 
     const chartPopup = await switchPopupView(cdp, reopenedPopupSessionId, "chart");
     assert.equal(chartPopup.activeView, "true");
-    assert.match(chartPopup.plan, /ChatGPT Plus/);
     assert.equal(chartPopup.chart, true);
     assert.equal(chartPopup.modelTextList, "");
     assert.match(chartPopup.countList, /future-family-2026-thinking/);

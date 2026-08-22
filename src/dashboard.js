@@ -12,8 +12,6 @@
   var CHART_SIZE = { width: 360, height: 192 };
   var STORAGE_KEY = "chatgptModelUsageStats.v1";
   var DEFAULT_LANGUAGE = "zh";
-  var CHATGPT_MODE_SLUG_RE = /^gpt-(?:(?:\d+(?:[-_.]\d+)*)|4o|4\.5|4\.1|4|3\.5)[-_.](thinking|instant|fast|auto|pro)$/i;
-  var CHATGPT_INTERNAL_FAMILY_RE = /^gpt-\d+-\d+(?:[-_.][a-z0-9][a-z0-9._-]*)?$/i;
   var USAGE_THEME_VARIABLES = {
     light: {
       "--usage-text-primary": "#18201c",
@@ -267,23 +265,36 @@
     all: "全选",
     chartView: "统计",
     exportView: "导出",
-    exportSubtitle: "勾选对话,逐个导出为所选格式",
+    exportSubtitle: "导出当前、选中或全部对话；多条自动打包为 ZIP",
+    exportFormatJson: "JSON",
     exportFormatMarkdown: "Markdown",
     exportFormatPdf: "PDF",
     exportFormatPng: "图片",
     exportFormatDocx: "Word",
+    exportScopeCurrent: "当前",
+    exportScopeSelected: "选中",
+    exportScopeAll: "全部",
+    exportCurrentHint: "导出当前打开的完整对话。",
+    exportAllHint: "导出账号历史中的全部 {count} 个对话，包括可读取的已归档对话。",
+    exportAllLoading: "正在读取账号对话索引…",
+    exportListIncomplete: "账号历史读取不完整；只能导出当前列表中已读取到的对话。",
+    exportListUnavailable: "无法读取账号对话索引；请确认当前标签页已登录 ChatGPT，然后重试。",
     exportEmpty: "未检测到对话。请在 ChatGPT 对话页打开一段对话后再试。",
     exportRunning: "正在导出…",
     exportDone: "已导出 {name}",
     exportDoneFiles: "{count} 个文件",
+    exportArchiveDone: "已将 {count} 个对话打包为 {name}",
+    exportPartial: "已导出 {success} 个对话，{failed} 个失败；详情见 ZIP 内报告。",
+    exportIncomplete: "已导出 {success} 个对话，但账号历史不完整；详情见 ZIP 内报告。",
+    exportSingleIncomplete: "已导出 {name}，但使用了页面回退，无法确认对话是否完整。",
     exportFailed: "导出失败:{error}",
     exportOpenPage: "请在 ChatGPT 对话页使用导出。",
     exportSelectAll: "全选",
     exportSelectNone: "清空",
     exportSelectedCount: "已选 {count} 个",
-    exportListEmpty: "侧边栏暂无对话。可在 ChatGPT 左侧滚动加载更多后再来选。",
+    exportListEmpty: "未找到可导出的账号对话。",
     exportNoSelection: "请先勾选要导出的对话。",
-    exportProgress: "正在读取所选对话…",
+    exportProgressCurrent: "正在读取当前完整对话…",
     conversationIndex: "对话",
     countTimes: "{count} 次",
     customRange: "自定义日期",
@@ -332,23 +343,36 @@
   I18N.en = Object.assign({}, I18N.en, {
     chartView: "Usage",
     exportView: "Export",
-    exportSubtitle: "Pick conversations, export each to the chosen format",
+    exportSubtitle: "Export the current, selected, or complete account history; multiple chats are zipped",
+    exportFormatJson: "JSON",
     exportFormatMarkdown: "Markdown",
     exportFormatPdf: "PDF",
     exportFormatPng: "Image",
     exportFormatDocx: "Word",
+    exportScopeCurrent: "Current",
+    exportScopeSelected: "Selected",
+    exportScopeAll: "All",
+    exportCurrentHint: "Export the complete conversation currently open.",
+    exportAllHint: "Export all {count} conversations in account history, including readable archived chats.",
+    exportAllLoading: "Reading the account conversation index…",
+    exportListIncomplete: "Account history was incomplete; only conversations already present in this list can be exported.",
+    exportListUnavailable: "The account conversation index could not be read. Confirm that the active tab is signed in to ChatGPT, then retry.",
     exportEmpty: "No conversation found. Open a ChatGPT conversation, then try again.",
     exportRunning: "Exporting…",
     exportDone: "Exported {name}",
     exportDoneFiles: "{count} files",
+    exportArchiveDone: "Packed {count} conversations into {name}",
+    exportPartial: "Exported {success} conversations; {failed} failed. See the report in the ZIP.",
+    exportIncomplete: "Exported {success} conversations, but account history was incomplete. See the report in the ZIP.",
+    exportSingleIncomplete: "Exported {name}, but rendered-page fallback was used, so completeness could not be verified.",
     exportFailed: "Export failed: {error}",
     exportOpenPage: "Open a ChatGPT conversation page to export.",
     exportSelectAll: "Select all",
     exportSelectNone: "Clear",
     exportSelectedCount: "{count} selected",
-    exportListEmpty: "No chats in the sidebar yet. Scroll the ChatGPT sidebar to load more, then return.",
+    exportListEmpty: "No account conversations are available to export.",
     exportNoSelection: "Select at least one conversation to export.",
-    exportProgress: "Reading selected chats…",
+    exportProgressCurrent: "Reading the complete current conversation…",
     customRange: "Custom dates",
     endDate: "End",
     all: "All",
@@ -449,12 +473,9 @@
   function isDeniedDashboardModelName(model) {
     var clean = normalizedDashboardModelName(model);
     var key = clean.replace(/[^a-z0-9]+/g, "");
-    var isInternalFamily = CHATGPT_INTERNAL_FAMILY_RE.test(clean);
     return !clean ||
       /^(unknown|unknownmodel|unresolved|unresolvedmodel)$/.test(key) ||
       /^(?:gpt)?lastusedmodel$/.test(key) ||
-      /^gpt-5\.\d+(?:$|[-_.])/.test(clean) ||
-      (isInternalFamily && !CHATGPT_MODE_SLUG_RE.test(clean)) ||
       isFeatureOnlyModelName(clean);
   }
 
@@ -473,12 +494,37 @@
     return {};
   }
 
+  function isRecordedConversationMode(model, metadata, rawModel) {
+    var source = metadata && typeof metadata === "object" ? metadata : {};
+    var parameters = modelParametersFromMetadata(source);
+    var requestModel = normalizedDashboardModelName(
+      parameters.model || source.chatgptModel || source.apiModel
+    );
+    var modelName = normalizedDashboardModelName(model);
+    var rawName = normalizedDashboardModelName(rawModel);
+    var labelName = normalizedDashboardModelName(source.label);
+
+    if (requestModel === "research") {
+      return [modelName, rawName, labelName].some(function isResearchName(name) {
+        return name === "research" || name === "deep-research";
+      });
+    }
+    if (requestModel === "agent-mode") {
+      return [modelName, rawName, labelName].some(function isAgentName(name) {
+        return name === "agent-mode";
+      });
+    }
+    return false;
+  }
+
   function isDashboardModelValid(model, metadata, rawModel) {
-    // 以规范化模型键(model)、原始键(rawModel)与展示标签(label)为权威身份。
-    // apiModel / chatgptModel / parameters.model 对 instant 等模式变体会合法地是裸 slug——
-    // 例如 gpt-5-5-instant 的 apiModel 就是 gpt-5-5,而裸 gpt-5-5 会被归一成 "gpt-5.5" 命中
-    // 视觉标签否决规则。若据此否决,sanitize 会把整条 instant 记录丢掉、面板显示 0。
-    // 可疑/视觉标签已由后台 isStoredModelValid 在入库时拦截,这里只需信任规范化后的键与标签。
+    // Exact request slugs and public dotted names are both valid model
+    // identities. Deep Research and Agent Mode are also recorded choices when
+    // trusted request metadata proves their exact request slug. Other
+    // unresolved placeholders and feature-only names are removed here.
+    if (isRecordedConversationMode(model, metadata, rawModel)) {
+      return true;
+    }
     return !hasDeniedDashboardModelName(rawModel) &&
       !isDeniedDashboardModelName(model) &&
       !hasDeniedDashboardModelName(metadata && metadata.label);
@@ -1535,7 +1581,10 @@
     var combinations = parameterCombinations(stats, model, 3, events);
     if (!combinations.length) {
       var stored = stats && stats.models && stats.models[model] ? stats.models[model] : {};
-      if (events || !stored.parameters || !parameterSignature(stored.parameters)) {
+      // With no explicit date filter, the latest observed model metadata is a
+      // valid fallback when event history or aggregate rows are unavailable.
+      // An explicit range must never display parameters observed outside it.
+      if (hasExplicitDateRange(state || {}) || !stored.parameters || !parameterSignature(stored.parameters)) {
         return "";
       }
       return [
@@ -1768,6 +1817,7 @@
   }
 
   var EXPORT_FORMATS = [
+    { id: "json", labelKey: "exportFormatJson" },
     { id: "markdown", labelKey: "exportFormatMarkdown" },
     { id: "pdf", labelKey: "exportFormatPdf" },
     { id: "png", labelKey: "exportFormatPng" },
@@ -1777,18 +1827,54 @@
   function renderExportPanel(state) {
     var list = Array.isArray(state.exportConversationList) ? state.exportConversationList : null;
     var selected = state.exportSelected || {};
+    var scope = state.exportScope === "selected" || state.exportScope === "all" ? state.exportScope : "current";
     var selectedCount = Object.keys(selected).filter(function (k) { return selected[k]; }).length;
     var buttons = EXPORT_FORMATS.map(function formatButton(fmt) {
       return '<button type="button" class="usage-export-btn" data-export-format="' + fmt.id + '">' +
         escapeHtml(text(state, fmt.labelKey)) + "</button>";
     }).join("");
 
-    var listHtml;
+    var scopeButtons = [
+      { id: "current", label: text(state, "exportScopeCurrent") },
+      { id: "selected", label: text(state, "exportScopeSelected") },
+      { id: "all", label: text(state, "exportScopeAll") }
+    ].map(function scopeButton(item) {
+      var active = item.id === scope;
+      return '<button type="button" class="usage-export-tab' + (active ? " active" : "") +
+        '" data-export-scope="' + item.id + '" aria-pressed="' + (active ? "true" : "false") + '">' +
+        escapeHtml(item.label) + "</button>";
+    }).join("");
+
+    var listHtml = "";
     var selectbar = "";
-    if (list === null) {
-      listHtml = '<p class="usage-export-hint">' + escapeHtml(text(state, "loading")) + "</p>";
+    if (scope === "current") {
+      listHtml = '<p class="usage-export-hint">' + escapeHtml(text(state, "exportCurrentHint")) + "</p>";
+    } else if (list === null) {
+      listHtml = '<p class="usage-export-hint">' + escapeHtml(text(state, "exportAllLoading")) + "</p>";
     } else if (!list.length) {
-      listHtml = '<p class="usage-export-hint">' + escapeHtml(text(state, "exportListEmpty")) + "</p>";
+      var emptyMeta = state.exportConversationMeta || {};
+      var emptyWarnings = Array.isArray(emptyMeta.warnings) ? emptyMeta.warnings : [];
+      var emptyWarningText = "";
+      if (emptyMeta.source === "unavailable" || emptyWarnings.some(function accountWarning(warning) {
+        return warning && warning.scope === "account";
+      })) {
+        emptyWarningText = text(state, "exportListUnavailable");
+      } else if (emptyMeta.complete === false || emptyWarnings.length) {
+        emptyWarningText = text(state, "exportListIncomplete");
+      }
+      listHtml = '<p class="usage-export-hint">' +
+        escapeHtml(text(state, "exportListEmpty")) +
+        (emptyWarningText
+          ? '<br><span class="usage-export-warning">' + escapeHtml(emptyWarningText) + "</span>"
+          : "") +
+        "</p>";
+    } else if (scope === "all") {
+      listHtml = '<p class="usage-export-hint">' +
+        escapeHtml(text(state, "exportAllHint", { count: list.length })) +
+        (state.exportConversationMeta && state.exportConversationMeta.complete === false
+          ? '<br><span class="usage-export-warning">' + escapeHtml(text(state, "exportListIncomplete")) + "</span>"
+          : "") +
+        "</p>";
     } else {
       selectbar =
         '<div class="usage-export-selectbar">' +
@@ -1804,6 +1890,7 @@
 
     return [
       '<section class="usage-export-panel">',
+      '<div class="usage-export-scope" role="group" aria-label="' + escapeHtml(text(state, "exportView")) + '">' + scopeButtons + "</div>",
       selectbar,
       listHtml,
       '<div class="usage-export-actions">' + buttons + "</div>",
@@ -2256,6 +2343,15 @@
         exportConversations(state, button.getAttribute("data-export-format"));
       });
     });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-scope]"), function bindExportScope(button) {
+      button.addEventListener("click", function changeExportScope() {
+        state.exportScope = button.getAttribute("data-export-scope");
+        if ((state.exportScope === "selected" || state.exportScope === "all") && !Array.isArray(state.exportConversationList)) {
+          loadExportConversationList(state);
+        }
+        render(state);
+      });
+    });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-conv]"), function bindConv(input) {
       input.addEventListener("change", function toggleConv() {
         if (!state.exportSelected) { state.exportSelected = {}; }
@@ -2302,7 +2398,7 @@
     return Boolean(state.options && state.options.surface === "page");
   }
 
-  // 弹窗面板没有页面 DOM,改向当前标签页的内容脚本发消息(仍只读 DOM,不碰后端/凭据)。
+  // 弹窗面板没有页面 DOM，向当前 ChatGPT 标签页的内容脚本请求同源账号历史或 DOM 回退结果。
   function tabsSendMessage(message) {
     return new Promise(function (resolve, reject) {
       if (typeof chrome === "undefined" || !chrome.tabs || typeof chrome.tabs.query !== "function") {
@@ -2320,29 +2416,125 @@
     });
   }
 
-  function loadExportConversationList(state) {
-    var apply = function (list) { state.exportConversationList = Array.isArray(list) ? list : []; render(state); };
+  function requestExportConversationList(state) {
     if (isPageSurface(state) && root.__chatgptUsageListConversations) {
-      Promise.resolve(root.__chatgptUsageListConversations()).then(apply).catch(function () { apply([]); });
-      return;
+      return Promise.resolve(root.__chatgptUsageListConversations()).then(function normalizeDirect(result) {
+        return Array.isArray(result) ? { conversations: result, complete: false, source: "sidebar" } : (result || {});
+      });
     }
-    tabsSendMessage({ type: "conversation.list" })
-      .then(function (resp) { apply(resp && resp.ok ? resp.conversations : []); })
-      .catch(function () { apply([]); });
+    return tabsSendMessage({ type: "conversation.list" }).then(function normalizeMessage(resp) {
+      if (!resp || !resp.ok) {
+        throw new Error((resp && resp.error) || text(state, "exportOpenPage"));
+      }
+      return resp;
+    });
   }
 
-  // 账号安全:全部路径只读取页面已渲染对话 DOM;多对话 = 逐个 SPA 打开侧边栏链接再读 DOM,
-  // 全程不调用任何 ChatGPT/OpenAI 后端接口、不读取 cookie/token。
+  function applyExportConversationList(state, result) {
+    var list = Array.isArray(result) ? result : result && result.conversations;
+    state.exportConversationList = Array.isArray(list) ? list : [];
+    state.exportConversationMeta = Array.isArray(result) ? { complete: false, source: "sidebar" } : (result || {});
+    render(state);
+    return state.exportConversationMeta;
+  }
+
+  function loadExportConversationList(state) {
+    state.exportConversationListRequest = requestExportConversationList(state)
+      .then(function apply(result) { return applyExportConversationList(state, result); })
+      .catch(function failed(error) {
+        return applyExportConversationList(state, {
+          conversations: [],
+          complete: false,
+          source: "unavailable",
+          warnings: [{ scope: "account", error: String((error && error.message) || error || "conversation-index-unavailable") }]
+        });
+      });
+    return state.exportConversationListRequest;
+  }
+
+  function normalizeConversationCollection(result) {
+    if (Array.isArray(result)) {
+      return { conversations: result, failures: [], warnings: [], requestedCount: result.length, complete: true };
+    }
+    result = result || {};
+    var failures = Array.isArray(result.failures) ? result.failures : [];
+    return {
+      conversations: Array.isArray(result.conversations)
+        ? result.conversations
+        : result.conversation ? [result.conversation] : [],
+      failures: failures,
+      warnings: Array.isArray(result.warnings) ? result.warnings : [],
+      requestedCount: Number(result.requestedCount) || (Array.isArray(result.conversations) ? result.conversations.length : result.conversation ? 1 : 0),
+      complete: result.complete !== false && failures.length === 0
+    };
+  }
+
+  function directPageCollection(state, helperName, args) {
+    if (!isPageSurface(state) || typeof root[helperName] !== "function") {
+      return null;
+    }
+    return Promise.resolve(root[helperName].apply(root, args || [])).then(normalizeConversationCollection);
+  }
+
+  // 用户进入导出页后才读取。账号历史走 ChatGPT 同源接口并自动带当前登录会话；
+  // 不读取 cookie、令牌或请求头。接口不可用时，内容脚本回退到已渲染页面和侧边栏。
   function collectConversationsForExport(state) {
-    var ids = Object.keys(state.exportSelected || {}).filter(function (k) { return state.exportSelected[k]; });
-    if (!ids.length) { return Promise.reject(new Error(text(state, "exportNoSelection"))); }
-    setExportStatus(state, text(state, "exportProgress"));
-    if (isPageSurface(state) && root.__chatgptUsageCollectMany) {
-      return root.__chatgptUsageCollectMany(ids);
+    setExportStatus(state, text(state, "exportProgressCurrent"));
+    var direct = directPageCollection(state, "__chatgptUsageCollectCurrent");
+    if (direct) {
+      return direct;
+    }
+    return tabsSendMessage({ type: "conversation.collect" }).then(function (resp) {
+      if (!resp || !resp.ok) { throw new Error((resp && resp.error) || text(state, "exportOpenPage")); }
+      return normalizeConversationCollection(resp);
+    });
+  }
+
+  function exportTargetPlan(state) {
+    var scope = state.exportScope === "selected" || state.exportScope === "all" ? state.exportScope : "current";
+    if (scope === "current") {
+      return Promise.resolve({ scope: scope, current: true, ids: [], complete: true, warnings: [] });
+    }
+    if (scope === "selected") {
+      var selectedIds = Object.keys(state.exportSelected || {}).filter(function selected(id) { return state.exportSelected[id]; });
+      if (!selectedIds.length) {
+        return Promise.reject(new Error(text(state, "exportNoSelection")));
+      }
+      return Promise.resolve({ scope: scope, current: false, ids: selectedIds, complete: true, warnings: [] });
+    }
+
+    function fromState() {
+      var list = Array.isArray(state.exportConversationList) ? state.exportConversationList : [];
+      var meta = state.exportConversationMeta || {};
+      return {
+        scope: scope,
+        current: false,
+        ids: list.map(function id(item) { return item.id; }).filter(Boolean),
+        complete: meta.complete !== false,
+        warnings: Array.isArray(meta.warnings) ? meta.warnings : [],
+        source: meta.source || ""
+      };
+    }
+
+    if (Array.isArray(state.exportConversationList)) {
+      return Promise.resolve(fromState());
+    }
+    if (!state.exportConversationListRequest) {
+      loadExportConversationList(state);
+    }
+    return Promise.resolve(state.exportConversationListRequest).then(fromState);
+  }
+
+  function collectConversationChunk(state, ids) {
+    var direct = directPageCollection(state, "__chatgptUsageCollectMany", [ids]);
+    if (direct) {
+      return direct;
     }
     return tabsSendMessage({ type: "conversation.collectMany", ids: ids }).then(function (resp) {
-      if (!resp || !resp.ok) { throw new Error((resp && resp.error) || text(state, "exportOpenPage")); }
-      return resp.conversations || [];
+      if (!resp || !resp.ok) {
+        throw new Error((resp && resp.error) || text(state, "exportOpenPage"));
+      }
+      return normalizeConversationCollection(resp);
     });
   }
 
@@ -2361,42 +2553,104 @@
   //  - 旧 PNG 像素字体只有 ASCII(中文→"?")、旧 PDF 用 STSong 不嵌字体(中文空白);
   //  - 两者都把 Markdown 当纯文本显示(## ** ``` | 不渲染)。
   // 其它格式(Markdown / DOCX / JSON)仍走同步 exportArtifact。
-  function buildExportArtifact(exporter, valid, format, base) {
+  function buildExportArtifacts(exporter, valid, format, base) {
     var hasCanvas = root && root.document && typeof root.document.createElement === "function" &&
       typeof exporter.renderConversationsCanvas === "function";
     if (hasCanvas && (format === "png" || format === "image" || format === "pdf")) {
-      var canvas = exporter.renderConversationsCanvas(valid, { filenameBase: base });
-      if (format === "pdf") {
-        return exporter.buildPdfBlobFromCanvas(canvas, {}).then(function (blob) {
-          return { blob: blob, filename: base + ".pdf" };
+      if (format === "pdf" && typeof exporter.buildPdfBlobFromConversations === "function") {
+        return exporter.buildPdfBlobFromConversations(valid, { filenameBase: base, pageHeight: 1216 }).then(function (blob) {
+          return [{ blob: blob, filename: base + ".pdf" }];
         });
       }
-      return exporter.canvasToPngBlob(canvas).then(function (blob) {
-        return { blob: blob, filename: base + ".png" };
-      });
+      if ((format === "png" || format === "image") && typeof exporter.renderConversationsPngBlobs === "function") {
+        return exporter.renderConversationsPngBlobs(valid, { filenameBase: base, pageHeight: 14000 }).then(function (blobs) {
+          return blobs.map(function pngPage(blob, index) {
+            var suffix = blobs.length > 1 ? "-part-" + String(index + 1).padStart(3, "0") : "";
+            return { blob: blob, filename: base + suffix + ".png" };
+          });
+        });
+      }
+      var pages = typeof exporter.renderConversationsCanvasPages === "function"
+        ? exporter.renderConversationsCanvasPages(valid, { filenameBase: base, pageHeight: format === "pdf" ? 1216 : 14000 })
+        : [exporter.renderConversationsCanvas(valid, { filenameBase: base })];
+      if (format === "pdf") {
+        var pdfPromise = typeof exporter.buildPdfBlobFromCanvases === "function"
+          ? exporter.buildPdfBlobFromCanvases(pages, {})
+          : exporter.buildPdfBlobFromCanvas(pages[0], {});
+        return pdfPromise.then(function (blob) {
+          return [{ blob: blob, filename: base + ".pdf" }];
+        });
+      }
+      return Promise.all(pages.map(function pngPage(canvas, index) {
+        return exporter.canvasToPngBlob(canvas).then(function (blob) {
+          var suffix = pages.length > 1 ? "-part-" + String(index + 1).padStart(3, "0") : "";
+          return { blob: blob, filename: base + suffix + ".png" };
+        });
+      }));
     }
     // Word 走渲染版(Markdown→Word 结构),其余(Markdown/JSON)走原始同步导出。
     if (format === "docx" && typeof exporter.buildDocxRenderedBlob === "function") {
-      return Promise.resolve({ blob: exporter.buildDocxRenderedBlob(valid, {}), filename: base + ".docx" });
+      return Promise.resolve([{ blob: exporter.buildDocxRenderedBlob(valid, {}), filename: base + ".docx" }]);
     }
     var artifact = exporter.exportArtifact(valid, format, { filenameBase: base });
-    return Promise.resolve({ blob: artifact.blob, filename: artifact.filename });
+    return Promise.resolve([{ blob: artifact.blob, filename: artifact.filename }]);
+  }
+
+  function setExportControlsDisabled(state, disabled) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-export-format],[data-export-scope],[data-export-selectall],[data-export-selectnone],[data-export-conv]"),
+      function toggle(control) {
+        control.disabled = Boolean(disabled);
+      }
+    );
   }
 
   function exportConversations(state, format) {
     var exporter = exporterModule();
-    if (!exporter || typeof exporter.exportArtifact !== "function" || typeof exporter.downloadBlob !== "function") {
+    if (!exporter || typeof exporter.exportArtifact !== "function" || typeof exporter.downloadBlob !== "function" || typeof exporter.buildZip !== "function") {
       setExportStatus(state, text(state, "exportFailed", { error: "exporter" }), true);
       return;
     }
+    if (state.exportBusy) {
+      return;
+    }
+    state.exportBusy = true;
+    setExportControlsDisabled(state, true);
     setExportStatus(state, text(state, "exportRunning"));
-    collectConversationsForExport(state).then(function (conversations) {
-      var valid = (conversations || []).filter(function (c) { return c && Array.isArray(c.messages) && c.messages.length; });
-      if (!valid.length) { setExportStatus(state, text(state, "exportEmpty"), true); return null; }
-      // 每段对话单独导出成一个文件,逐个下载——多选不再拼成一个文件。
-      return downloadConversationsSeparately(state, exporter, valid, format);
+    return exportTargetPlan(state).then(function executePlan(plan) {
+      if (plan.current) {
+        return collectConversationsForExport(state).then(function currentResult(collection) {
+          var current = (collection.conversations || []).filter(function valid(c) { return c && Array.isArray(c.messages) && c.messages.length; });
+          if (!current.length) {
+            throw new Error((collection.failures[0] && collection.failures[0].error) || text(state, "exportEmpty"));
+          }
+          return downloadSingleConversation(state, exporter, current[0], format, collection);
+        });
+      }
+      if (!plan.ids.length) {
+        throw new Error(plan.warnings.length ? text(state, "exportListUnavailable") : text(state, "exportEmpty"));
+      }
+      if (plan.ids.length === 1 && plan.complete && !plan.warnings.length) {
+        return collectConversationChunk(state, plan.ids).then(function singleSelected(collection) {
+          var targetId = plan.ids[0];
+          var conversation = (collection.conversations || []).find(function exactTarget(item) {
+            return item && item.id === targetId;
+          });
+          if (!conversation || !conversation.messages || !conversation.messages.length) {
+            throw new Error((collection.failures[0] && collection.failures[0].error) || text(state, "exportEmpty"));
+          }
+          return downloadSingleConversation(state, exporter, conversation, format, collection);
+        });
+      }
+      return downloadConversationArchiveByIds(state, exporter, plan, format);
     }).catch(function (error) {
       setExportStatus(state, text(state, "exportFailed", { error: String((error && error.message) || error) }), true);
+    }).then(function finishExportAttempt() {
+      state.exportBusy = false;
+      setExportControlsDisabled(state, false);
     });
   }
 
@@ -2413,9 +2667,49 @@
     });
   }
 
-  // 单个文件下载:优先请后台用 chrome.downloads 落盘(扩展发起,绕开浏览器对“页面一次手势批量下载”的拦截);
-  // 后台不可用或报错时回退到 exporter.downloadBlob(a.click),保证至少不比以前差。
-  function downloadOneFile(exporter, blob, filename) {
+  function downloadThroughExtensionApi(blob, filename) {
+    var api = root && root.chrome && root.chrome.downloads;
+    var urlApi = (root && root.URL) || (typeof URL !== "undefined" ? URL : null);
+    if (!api || typeof api.download !== "function" || !urlApi || typeof urlApi.createObjectURL !== "function") {
+      return null;
+    }
+    return new Promise(function (resolve) {
+      var url = urlApi.createObjectURL(blob);
+      var finish = function (ok) {
+        setTimeout(function revoke() {
+          try { urlApi.revokeObjectURL(url); } catch (_) {}
+        }, 60000);
+        resolve(Boolean(ok));
+      };
+      try {
+        api.download({ url: url, filename: filename, saveAs: false }, function (downloadId) {
+          if (root.chrome.runtime && root.chrome.runtime.lastError) {
+            finish(false);
+            return;
+          }
+          finish(typeof downloadId === "number");
+        });
+      } catch (_) {
+        finish(false);
+      }
+    });
+  }
+
+  // 页面内面板直接下载 Blob；扩展弹窗优先使用 chrome.downloads + Blob URL。
+  // 只有旧环境缺少这些能力时才把 data URL 发给后台，避免大文件跨扩展消息复制。
+  function downloadOneFile(state, exporter, blob, filename) {
+    if (isPageSurface(state)) {
+      exporter.downloadBlob(blob, filename);
+      return Promise.resolve();
+    }
+    var directDownload = downloadThroughExtensionApi(blob, filename);
+    if (directDownload) {
+      return directDownload.then(function downloaded(ok) {
+        if (!ok) {
+          exporter.downloadBlob(blob, filename);
+        }
+      });
+    }
     var runtime = (root && root.chrome && root.chrome.runtime) || (typeof chrome !== "undefined" && chrome ? chrome.runtime : null);
     if (!runtime || typeof runtime.sendMessage !== "function") {
       exporter.downloadBlob(blob, filename);
@@ -2440,43 +2734,243 @@
     });
   }
 
-  function downloadConversationsSeparately(state, exporter, conversations, format) {
-    var total = conversations.length;
-    var lastName = "";
-    var seenBases = {};
-    // 标题相同的对话会得到相同文件名而互相覆盖,这里给重复的补 -2/-3 后缀。
-    function uniqueBase(raw) {
-      if (Object.prototype.hasOwnProperty.call(seenBases, raw)) {
-        seenBases[raw] += 1;
-        return raw + "-" + seenBases[raw];
+  function nextUniqueConversationBase(exporter, conversation, index, seenBases) {
+    var raw = exporter.safeName
+      ? exporter.safeName(conversation.title || conversation.id || ("chatgpt-conversation-" + (index + 1)))
+      : ("chatgpt-conversation-" + (index + 1));
+    var collisionKey = function (value) {
+      var normalized = String(value || "");
+      if (typeof normalized.normalize === "function") {
+        normalized = normalized.normalize("NFC");
       }
-      seenBases[raw] = 1;
-      return raw;
+      return normalized.toLowerCase();
+    };
+    var baseKey = collisionKey(raw);
+    var countKey = "count:" + baseKey;
+    var count = Number(seenBases[countKey]) || 0;
+    var candidate = raw;
+    var usedKey = "";
+    do {
+      count += 1;
+      var suffix = count > 1 ? "-" + count : "";
+      candidate = count > 1
+        ? raw.slice(0, Math.max(1, 80 - suffix.length)).replace(/[. ]+$/g, "") + suffix
+        : raw;
+      usedKey = "used:" + collisionKey(candidate);
+    } while (seenBases[usedKey]);
+    seenBases[countKey] = count;
+    seenBases[usedKey] = true;
+    return candidate;
+  }
+
+  function uniqueConversationBases(exporter, conversations) {
+    var seenBases = {};
+    return conversations.map(function makeBase(conversation, index) {
+      return nextUniqueConversationBase(exporter, conversation, index, seenBases);
+    });
+  }
+
+  function downloadSingleConversation(state, exporter, conversation, format, collection) {
+    var base = uniqueConversationBases(exporter, [conversation])[0];
+    return buildExportArtifacts(exporter, [conversation], format, base).then(function (artifacts) {
+      if (artifacts.length === 1) {
+        return downloadOneFile(state, exporter, artifacts[0].blob, artifacts[0].filename).then(function () {
+          if (collection && (collection.complete === false || (collection.warnings || []).length)) {
+            setExportStatus(state, text(state, "exportSingleIncomplete", { name: artifacts[0].filename }), true);
+          } else {
+            setExportStatus(state, text(state, "exportDone", { name: artifacts[0].filename }));
+          }
+        });
+      }
+      return Promise.all(artifacts.map(function toArchiveFile(artifact) {
+        return blobToBytes(artifact.blob).then(function bytes(content) {
+          return { name: artifact.filename, content: content };
+        });
+      })).then(function archiveLongImage(files) {
+        return finishConversationArchive(
+          state,
+          exporter,
+          files,
+          format,
+          {
+            requestedCount: 1,
+            complete: !collection || collection.complete !== false,
+            failures: collection && collection.failures || [],
+            warnings: collection && collection.warnings || []
+          },
+          1,
+          []
+        );
+      });
+    });
+  }
+
+  function blobToBytes(blob) {
+    if (blob && typeof blob.arrayBuffer === "function") {
+      return blob.arrayBuffer().then(function toBytes(buffer) { return new Uint8Array(buffer); });
     }
-    function step(index) {
-      if (index >= total) {
-        var doneName = total > 1 ? text(state, "exportDoneFiles", { count: total }) : lastName;
-        setExportStatus(state, text(state, "exportDone", { name: doneName }));
+    return new Promise(function (resolve, reject) {
+      var FileReaderCtor = (root && root.FileReader) || (typeof FileReader !== "undefined" ? FileReader : null);
+      if (!FileReaderCtor) { reject(new Error("no-filereader")); return; }
+      var reader = new FileReaderCtor();
+      reader.onload = function () { resolve(new Uint8Array(reader.result)); };
+      reader.onerror = function () { reject(reader.error || new Error("read-failed")); };
+      reader.readAsArrayBuffer(blob);
+    });
+  }
+
+  function localExportDateStamp(date) {
+    var value = date || new Date();
+    return value.getFullYear() + "-" +
+      String(value.getMonth() + 1).padStart(2, "0") + "-" +
+      String(value.getDate()).padStart(2, "0");
+  }
+
+  function downloadConversationArchiveByIds(state, exporter, plan, format) {
+    var files = [];
+    var collectionFailures = [];
+    var collectionWarnings = (plan.warnings || []).slice();
+    var conversionFailures = [];
+    var collectionComplete = plan.complete !== false;
+    var seenBases = {};
+    var exportedConversationCount = 0;
+    var ids = plan.ids;
+    var chunkSize = 6;
+
+    function convertConversation(conversation, position) {
+      var base = nextUniqueConversationBase(exporter, conversation, position, seenBases);
+      return buildExportArtifacts(exporter, [conversation], format, base).then(function (artifacts) {
+        return Promise.all(artifacts.map(function convertArtifact(artifact) {
+          return blobToBytes(artifact.blob).then(function addFile(bytes) {
+            return { name: artifact.filename, content: bytes };
+          });
+        })).then(function converted(artifactFiles) {
+          // Blob reads can finish in a different order (large first PNG page
+          // versus a smaller final page). Append only after Promise.all has
+          // restored the artifact array order so part-001 always precedes
+          // part-002 in the ZIP and in _export-report.json.
+          Array.prototype.push.apply(files, artifactFiles);
+          exportedConversationCount += 1;
+        });
+      }).catch(function failed(error) {
+        conversionFailures.push({
+          id: conversation.id || "",
+          title: conversation.title || "",
+          error: String((error && error.message) || error || "conversion-failed")
+        });
+      });
+    }
+
+    function convertChunk(conversations, positionById) {
+      var cursor = 0;
+      function next() {
+        if (cursor >= conversations.length) {
+          return Promise.resolve();
+        }
+        var conversation = conversations[cursor];
+        cursor += 1;
+        var position = Object.prototype.hasOwnProperty.call(positionById, conversation.id)
+          ? positionById[conversation.id]
+          : cursor - 1;
+        return convertConversation(conversation, position).then(next);
+      }
+      return next();
+    }
+
+    function step(offset) {
+      if (offset >= ids.length) {
         return Promise.resolve();
       }
-      var conv = conversations[index];
-      var base = uniqueBase(exporter.safeName
-        ? exporter.safeName(conv.title || conv.id || ("chatgpt-conversation-" + (index + 1)))
-        : ("chatgpt-conversation-" + (index + 1)));
-      if (total > 1) {
-        setExportStatus(state, text(state, "exportRunning") + " " + (index + 1) + "/" + total);
-      }
-      return buildExportArtifact(exporter, [conv], format, base).then(function (art) {
-        lastName = art.filename;
-        return downloadOneFile(exporter, art.blob, art.filename);
-      }).then(function () {
-        // 后台 chrome.downloads 路径已逐个落盘、无需大间隔;留一点小间隔给回退的 a.click 路径。
-        return new Promise(function (resolve) {
-          setTimeout(resolve, total > 1 ? 600 : 0);
+      var chunkIds = ids.slice(offset, offset + chunkSize);
+      setExportStatus(state, text(state, "exportRunning") + " " + Math.min(ids.length, offset + chunkIds.length) + "/" + ids.length);
+      return collectConversationChunk(state, chunkIds).then(function collected(result) {
+        collectionFailures = collectionFailures.concat(result.failures || []);
+        collectionWarnings = collectionWarnings.concat(result.warnings || []);
+        if (result.complete === false) {
+          collectionComplete = false;
+        }
+        var allowed = {};
+        var byId = {};
+        var received = {};
+        var positions = {};
+        chunkIds.forEach(function rememberPosition(id, index) {
+          allowed[id] = true;
+          positions[id] = offset + index;
         });
-      }).then(function () { return step(index + 1); });
+        (result.conversations || []).forEach(function rememberConversation(conversation) {
+          if (conversation && allowed[conversation.id] && !byId[conversation.id]) {
+            byId[conversation.id] = conversation;
+            received[conversation.id] = true;
+          }
+        });
+        chunkIds.forEach(function reportMissing(id) {
+          var alreadyReported = (result.failures || []).some(function same(failure) { return failure && failure.id === id; });
+          if (!received[id] && !alreadyReported) {
+            collectionFailures.push({ id: id, error: "Conversation was not returned by ChatGPT." });
+          }
+        });
+        return convertChunk(chunkIds.map(function inRequestedOrder(id) { return byId[id]; }).filter(Boolean), positions);
+      }).catch(function chunkFailed(error) {
+        chunkIds.forEach(function failedId(id) {
+          collectionFailures.push({ id: id, error: String((error && error.message) || error || "collection-failed") });
+        });
+      }).then(function nextChunk() {
+        return step(offset + chunkSize);
+      });
     }
-    return step(0);
+
+    return step(0).then(function finishArchive() {
+      return finishConversationArchive(
+        state,
+        exporter,
+        files,
+        format,
+        {
+          requestedCount: ids.length,
+          complete: collectionComplete && collectionFailures.length === 0,
+          failures: collectionFailures,
+          warnings: collectionWarnings
+        },
+        exportedConversationCount,
+        conversionFailures
+      );
+    });
+  }
+
+  function finishConversationArchive(state, exporter, sourceFiles, format, collection, exportedConversationCount, conversionFailures) {
+    var files = sourceFiles.slice();
+    var failures = (collection.failures || []).concat(conversionFailures || []);
+    var warnings = collection.warnings || [];
+    if (!files.length) {
+      throw new Error(failures[0] && failures[0].error ? failures[0].error : "No conversation file could be created.");
+    }
+    var report = {
+      exportedAt: new Date().toISOString(),
+      format: format,
+      requestedConversationCount: collection.requestedCount,
+      exportedConversationCount: exportedConversationCount,
+      exportedFileCount: files.length,
+      failedConversationCount: failures.length,
+      complete: failures.length === 0 && collection.complete !== false && warnings.length === 0,
+      failures: failures,
+      warnings: warnings,
+      files: files.map(function filename(file) { return file.name; })
+    };
+    files.push({ name: "_export-report.json", content: JSON.stringify(report, null, 2) + "\n" });
+    var scope = state.exportScope === "all" ? "all" : state.exportScope === "current" ? "current" : "selected";
+    var archiveName = "chatgpt-" + scope + "-" + format + "-" + localExportDateStamp() + ".zip";
+    var zipBlob = new Blob([exporter.buildZip(files)], { type: (exporter.MIME && exporter.MIME.zip) || "application/zip" });
+    // ZIP 本身只有一次下载。弹窗使用 chrome.downloads + Blob URL，页面内面板直接下载 Blob；
+    // 两条路径都避免把大型归档转成 base64 后跨扩展消息传输。
+    return downloadOneFile(state, exporter, zipBlob, archiveName).then(function downloadedArchive() {
+      if (failures.length) {
+        setExportStatus(state, text(state, "exportPartial", { success: exportedConversationCount, failed: failures.length }), true);
+      } else if (collection.complete === false || warnings.length) {
+        setExportStatus(state, text(state, "exportIncomplete", { success: exportedConversationCount }), true);
+      } else {
+        setExportStatus(state, text(state, "exportArchiveDone", { count: exportedConversationCount, name: archiveName }));
+      }
+    });
   }
 
   function bindTooltip(state) {
@@ -2601,14 +3095,16 @@
       ".usage-export-panel{padding:6px 2px 4px;display:flex;flex-direction:column;gap:8px}",
       ".usage-export-title{margin:0;font-size:13px;font-weight:600;color:var(--usage-text-primary)}",
       ".usage-export-hint{margin:0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary)}",
-      ".usage-export-actions{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}",
+      ".usage-export-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}",
       ".usage-export-btn{border:1px solid var(--usage-border-panel);background:var(--usage-surface-panel);color:var(--usage-text-primary);border-radius:6px;padding:7px 8px;font-size:12px;font-weight:600;cursor:pointer;transition:background .12s ease,border-color .12s ease}",
       ".usage-export-btn:hover{background:var(--usage-surface-track);border-color:var(--usage-accent-strong,var(--usage-text-secondary))}",
       ".usage-export-btn:focus-visible{outline:2px solid var(--usage-accent-strong,var(--usage-text-secondary));outline-offset:2px}",
       ".usage-export-btn:active{transform:translateY(1px)}",
+      ".usage-export-btn:disabled,.usage-export-tab:disabled,.usage-export-mini:disabled{opacity:.55;cursor:wait;transform:none}",
       ".usage-export-status{margin:2px 0 0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary);min-height:14px}",
       ".usage-export-status.error{color:var(--usage-error-status-text,#dc2626)}",
-      ".usage-export-scope{display:grid;grid-template-columns:1fr 1fr;gap:4px}",
+      ".usage-export-warning{color:var(--usage-warning-text,#b45309)}",
+      ".usage-export-scope{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}",
       ".usage-export-tab{border:1px solid var(--usage-border-panel);background:var(--usage-surface-panel);color:var(--usage-text-secondary);border-radius:6px;padding:5px;font-size:12px;cursor:pointer}",
       ".usage-export-tab.active{background:var(--usage-surface-track);color:var(--usage-text-primary);font-weight:600;border-color:var(--usage-accent-link,var(--usage-text-secondary))}",
       ".usage-export-tab:focus-visible{outline:2px solid var(--usage-accent-link,#10a37f);outline-offset:1px}",
@@ -2765,6 +3261,11 @@
       statusText: "",
       statusError: false,
       statusScope: "global",
+      exportScope: "current",
+      exportConversationList: null,
+      exportConversationMeta: null,
+      exportSelected: {},
+      exportBusy: false,
       stats: { totals: {}, byDate: {}, models: {}, sessionsByModel: {}, variantsByModel: {}, parametersByModel: {}, events: [] }
     };
     subscribePageThemeChanges(state);
@@ -2792,7 +3293,14 @@
     _test: {
       detectPageTheme: detectPageTheme,
       render: render,
-      applyPopupThemeVariables: applyPopupThemeVariables
+      applyPopupThemeVariables: applyPopupThemeVariables,
+      buildExportArtifacts: buildExportArtifacts,
+      downloadConversationArchiveByIds: downloadConversationArchiveByIds,
+      exportTargetPlan: exportTargetPlan,
+      finishConversationArchive: finishConversationArchive,
+      localExportDateStamp: localExportDateStamp,
+      normalizeConversationCollection: normalizeConversationCollection,
+      uniqueConversationBases: uniqueConversationBases
     }
   };
 });

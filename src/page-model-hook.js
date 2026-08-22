@@ -2,8 +2,6 @@
 
 var MODEL_FIELD_RE = /^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel)$/i;
 var MODEL_RE = /^[a-z][a-z0-9._-]{1,95}$/i;
-var CHATGPT_MODE_SLUG_RE = /^gpt-(?:(?:\d+(?:[-_.]\d+)*)|4o|4\.5|4\.1|4|3\.5)[-_.](thinking|instant|fast|auto|pro)$/i;
-var CHATGPT_INTERNAL_FAMILY_RE = /^gpt-\d+-\d+(?:[-_.][a-z0-9][a-z0-9._-]*)?$/i;
 
 function normalize(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -55,6 +53,12 @@ function hasGenericModelSlugEvidence(value) {
   return false;
 }
 
+function hasExplicitVersionEvidence(value) {
+  var slug = String(value || "").toLowerCase().replace(/_/g, "-");
+  return /(?=.*[a-z])(?=.*\d)(?=.*[-_.])^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+$/i.test(slug) &&
+    !/^(?:model|reasoning|text|tools?|temperature|max|response|request|conversation|metadata|stream|protocol|transport|endpoint|session)(?:[-_.]|$)/i.test(slug);
+}
+
 function isFeatureNamedSlug(value) {
   var slug = String(value || "").toLowerCase().replace(/_/g, "-");
   if (/^image-\d+-image$/i.test(slug)) {
@@ -76,8 +80,7 @@ function isModelSlug(value) {
     !/^(?:gpt)?lastusedmodel$/.test(unresolved) &&
     !featureId(text) &&
     !isFeatureNamedSlug(text) &&
-    !/^gpt-5\.\d+(?:$|[-_.])/.test(normalized) &&
-    hasGenericModelSlugEvidence(normalized);
+    (hasGenericModelSlugEvidence(normalized) || hasExplicitVersionEvidence(normalized));
 }
 
 if (typeof module === "object" && module.exports) {

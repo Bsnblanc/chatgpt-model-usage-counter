@@ -24,6 +24,14 @@ class FakeElement {
   }
 
   closest(selector) {
+    if (selector.includes('a[href*="/c/"]') && this.tagName === "A" && /\/c\//.test(this.attributes.href || "")) {
+      return this;
+    }
+
+    if (selector.includes("[data-message-author-role]") && this.attributes["data-message-author-role"]) {
+      return this;
+    }
+
     if (selector.includes("button") && this.tagName === "BUTTON") {
       return this;
     }
@@ -54,6 +62,12 @@ class FakeDocument {
       return this.elements.filter((element) => /model-switcher/i.test(element.getAttribute("data-testid") || ""));
     }
 
+    if (selector.includes("aria-selected") || selector.includes("aria-current")) {
+      return this.elements.filter((element) =>
+        element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-current") === "true"
+      );
+    }
+
     if (selector.includes("button") || selector.includes("[role='button']") || selector.includes('[role="button"]')) {
       return this.elements.filter((element) => element.tagName === "BUTTON" || element.getAttribute("role") === "button");
     }
@@ -64,6 +78,10 @@ class FakeDocument {
 
     if (selector.includes("contenteditable")) {
       return this.elements.filter((element) => element.getAttribute("contenteditable") === "true");
+    }
+
+    if (selector.includes("[data-message-author-role]")) {
+      return this.elements.filter((element) => Boolean(element.getAttribute("data-message-author-role")));
     }
 
     if (/^(main|article|p|li|div|span)$/i.test(selector)) {
@@ -83,7 +101,13 @@ test("extractModelLabel normalizes common ChatGPT model labels", () => {
   assert.equal(detector.extractModelLabel("Unknown model"), "");
   assert.equal(detector.extractModelLabel("gpt-5-5-thinking"), "gpt-5-5-thinking");
   assert.equal(detector.extractModelLabel("gpt_5_5_thinking"), "gpt-5-5-thinking");
-  assert.equal(detector.extractModelLabel("GPT-5.5 Thinking"), "");
+  assert.equal(detector.extractModelLabel("GPT-5.5 Thinking"), "gpt-5.5-thinking");
+  assert.equal(detector.extractModelLabel("GPT-5.6 Sol"), "gpt-5.6-sol");
+  assert.equal(detector.extractModelLabel("GPT-5.6 Sol Pro"), "gpt-5.6-sol-pro");
+  assert.equal(detector.extractModelLabel("GPT-5.6 Luna"), "gpt-5.6-luna");
+  assert.equal(detector.extractModelLabel("GPT-5.6 Luna Max"), "gpt-5.6-luna-max");
+  assert.equal(detector.extractModelLabel("GPT-5.6 Terra"), "gpt-5.6-terra");
+  assert.equal(detector.extractModelLabel("GPT-5.6 Terra Max"), "gpt-5.6-terra-max");
   assert.equal(detector.extractModelLabel("gptLastUsedModel"), "");
   assert.equal(detector.extractModelLabel("image_generation_options"), "");
   assert.equal(detector.extractModelLabel("text-verbosity"), "");
@@ -103,7 +127,7 @@ test("resolveModelInfo accepts exact ChatGPT thinking request slugs without inve
   assert.equal(exactChatGPTSlug.apiModel, "gpt-5-5-thinking");
   assert.equal(exactChatGPTSlug.mode, "thinking");
   assert.equal(detector.resolveModelInfo("gptLastUsedModel"), null);
-  assert.equal(detector.resolveModelInfo("GPT-5.5 Thinking"), null);
+  assert.equal(detector.resolveModelInfo("GPT-5.5 Thinking").label, "gpt-5.5-thinking");
   assert.equal(detector.resolveModelInfo("agent-mode-v2"), null);
   assert.equal(detector.resolveModelInfo("deepsearch-v2"), null);
   assert.equal(detector.resolveModelInfo("image-generation-v1"), null);
@@ -122,8 +146,8 @@ test("findCurrentModelInfo returns API model parameters for current models", () 
   assert.equal(info.apiModel, "gpt-5-thinking");
   assert.equal(info.mode, "thinking");
   assert.equal(info.parameters.model, "gpt-5-thinking");
-  assert.deepEqual(info.parameters["reasoning.effort"], ["none", "low", "medium", "high", "xhigh"]);
-  assert.deepEqual(info.parameters["text.verbosity"], ["low", "medium", "high"]);
+  assert.equal(info.parameters["reasoning.effort"], undefined);
+  assert.equal(info.parameters["text.verbosity"], undefined);
 });
 
 test("findCurrentModelInfo recognizes future explicit model slugs from model switcher text", () => {
@@ -141,15 +165,29 @@ test("findCurrentModelInfo recognizes future explicit model slugs from model swi
   assert.equal(info.parameters.model, "future-family-2026-thinking");
 });
 
-test("resolveModelInfo extracts a label when the catalog rejects an unknown model (was dropped before)", () => {
-  // 回归:之前 resolveModelInfo 调了 extractModelLabel 却把结果丢掉直接 return null,
-  // 目录还没收录的型号(如未来的 o5 系列)就识别不到、计不上数(用户:没统计到正确模型)。
+test("findCurrentModelInfo accepts an unknown versioned slug from an explicit data-model field", () => {
+  const modelButton = new FakeElement({
+    innerText: "Aurora",
+    attributes: {
+      "data-testid": "model-switcher-dropdown-button",
+      "data-model": "aurora-7",
+      "aria-haspopup": "menu"
+    }
+  });
+  const info = detector.findCurrentModelInfo(new FakeDocument([modelButton]));
+
+  assert.equal(info.label, "aurora-7");
+  assert.equal(info.apiModel, "aurora-7");
+  assert.deepEqual(info.parameters, { model: "aurora-7" });
+});
+
+test("resolveModelInfo normalizes future O-series visible labels", () => {
+  // 未来 O 系列的可见标签会被规范成可存储 slug，而不依赖硬编码型号清单。
   const future = detector.resolveModelInfo("o5 hyper");
   assert.ok(future && future.label, "目录没收录也应按模式抽取型号,而不是返回 null");
-  assert.equal(future.label, "o5");
-  assert.equal(future.apiModel, "o5");
-  assert.equal(future.chatgptModel, "o5");
-  assert.deepEqual(future.parameters, {});
+  assert.equal(future.label, "o5-hyper");
+  assert.equal(future.apiModel, "o5-hyper");
+  assert.equal(future.parameters.model, "o5-hyper");
 
   // 但非型号文本仍返回 null,不会把普通按钮误计成模型。
   assert.equal(detector.resolveModelInfo("Share"), null);
@@ -168,11 +206,48 @@ test("findCurrentModel prefers visible model switcher candidates", () => {
   assert.equal(detector.findCurrentModel(doc), "gpt-5-thinking");
 });
 
+test("findCurrentModelInfo ignores selected conversation titles that look like model labels", () => {
+  const conversationLink = new FakeElement({
+    tagName: "A",
+    innerText: "GPT-5.6 Sol",
+    attributes: {
+      href: "/c/conversation-1234",
+      "aria-current": "page"
+    },
+    rect: { top: 300, left: 10, width: 220, height: 32, right: 230, bottom: 332 }
+  });
+
+  assert.equal(detector.findCurrentModelInfo(new FakeDocument([conversationLink])), null);
+});
+
 test("findCurrentModelInfo returns null when ChatGPT exposes no model label", () => {
   const doc = new FakeDocument([]);
   const info = detector.findCurrentModelInfo(doc);
 
   assert.equal(info, null);
+});
+
+test("findCurrentModelInfo does not reuse a stale model stored by an earlier selection", () => {
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.localStorage = {
+    length: 1,
+    key() {
+      return "lastSelectedModel";
+    },
+    getItem() {
+      return "gpt-5.6-sol";
+    }
+  };
+
+  try {
+    assert.equal(detector.findCurrentModelInfo(new FakeDocument([])), null);
+  } finally {
+    if (typeof previousLocalStorage === "undefined") {
+      delete globalThis.localStorage;
+    } else {
+      globalThis.localStorage = previousLocalStorage;
+    }
+  }
 });
 
 test("findCurrentModelInfo reads explicit current model declarations", () => {
@@ -186,6 +261,17 @@ test("findCurrentModelInfo reads explicit current model declarations", () => {
 
   assert.equal(info.label, "gpt-4o-mini");
   assert.equal(info.apiModel, "gpt-4o-mini");
+});
+
+test("findCurrentModelInfo ignores model-like declarations inside conversation messages", () => {
+  const userMessage = new FakeElement({
+    tagName: "DIV",
+    innerText: "Current model: GPT-6.1 Aurora",
+    attributes: { "data-message-author-role": "user" },
+    rect: { top: 260, left: 320, width: 480, height: 48, right: 800, bottom: 308 }
+  });
+
+  assert.equal(detector.findCurrentModelInfo(new FakeDocument([userMessage])), null);
 });
 
 test("isSendButton accepts enabled send controls and rejects stop controls", () => {

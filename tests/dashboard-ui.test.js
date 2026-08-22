@@ -145,7 +145,7 @@ test("model conversation index renders as an index, not selection controls", () 
   assert.doesNotMatch(source, /\.usage-record-sessions\{[^}]*border/);
 });
 
-test("usage view keeps exact thinking slug and omits invalid historical labels", () => {
+test("usage view keeps exact and public model labels while omitting unresolved placeholders", () => {
   const html = dashboard.renderActiveView(
     {
       language: "en",
@@ -161,8 +161,10 @@ test("usage view keeps exact thinking slug and omits invalid historical labels",
 
   assert.match(html, /gpt-5-thinking/);
   assert.match(html, /Clean/);
-  ["gpt-5-5-preview", "GPT-5.5", "GPT-5 5", "Unknown model", "Dirty"].forEach((value) => {
+  ["gpt-5-5-preview", "GPT-5.5", "GPT-5 5"].forEach((value) => {
+    assert.match(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), value);
+  });
+  ["Unknown model"].forEach((value) => {
     assert.doesNotMatch(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), value);
   });
 });
-

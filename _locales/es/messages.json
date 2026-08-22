@@ -1,4 +1,4 @@
 {
   "extName": { "message": "Contador de uso de modelos de ChatGPT" },
-  "extDescription": { "message": "Cuenta tus prompts de ChatGPT por modelo, con gráficos de uso y exportación de conversaciones." }
+  "extDescription": { "message": "Cuenta prompts de ChatGPT por modelo exacto y fecha; exporta el chat actual, los elegidos o todos en cinco formatos." }
 }

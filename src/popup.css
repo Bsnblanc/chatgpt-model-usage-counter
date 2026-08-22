@@ -1,7 +1,7 @@
 /*
 CSS TOKEN TABLE
 
-Source: src/dashboard.js injectStyles() lines 2710-2873.
+Source: src/dashboard.js injectStyles().
 Purpose: semantic --usage-* custom-property plan for every hardcoded color in the injected dashboard CSS.
 Dark values are aligned to the ChatGPT dark theme reference: page #1a1a2e/#212121, surfaces #2a2b32/#171717, text #ececf1/#b4b4b4/#8e8ea0/#565869, borders #565869/#3e3f4b, accent #10a37f/#19c37d.
 
@@ -43,10 +43,6 @@ Dark values are aligned to the ChatGPT dark theme reference: page #1a1a2e/#21212
 | --usage-shadow-tooltip | rgba(15,23,42,.2) | rgba(0,0,0,.3) | Tooltip elevation shadow. |
 | --usage-shadow-export | rgba(15,23,42,.14) | rgba(0,0,0,.3) | Export button elevation shadow. |
 | --usage-tooltip-surface | #111827 | #171717 | Tooltip background surface. |
-| --usage-plan-operational-bg | #dcfce7 | #0f2f1f | Current plan success badge background. |
-| --usage-plan-operational-text | #166534 | #86efac | Current plan success badge text. |
-| --usage-plan-error-bg | #fee2e2 | #3a1518 | Current plan error badge background. |
-| --usage-plan-error-text | #991b1b | #f87171 | Current plan error badge text. |
 | --usage-status-info-bg | #e0f2fe | #17212b | Default OpenAI status badge background before a specific status is applied. |
 | --usage-status-info-text | #075985 | #7dd3fc | Default OpenAI status badge text. |
 | --usage-status-info-dot | #0284c7 | #38bdf8 | Default OpenAI status badge indicator dot. |
@@ -112,10 +108,6 @@ Migration note: legacy runtime declarations --bg: #f7f8f6; and --text: #18201c; 
   --usage-shadow-tooltip: rgba(15,23,42,.2);
   --usage-shadow-export: rgba(15,23,42,.14);
   --usage-tooltip-surface: #111827;
-  --usage-plan-operational-bg: #dcfce7;
-  --usage-plan-operational-text: #166534;
-  --usage-plan-error-bg: #fee2e2;
-  --usage-plan-error-text: #991b1b;
   --usage-status-info-bg: #e0f2fe;
   --usage-status-info-text: #075985;
   --usage-status-info-dot: #0284c7;
@@ -178,10 +170,6 @@ Migration note: legacy runtime declarations --bg: #f7f8f6; and --text: #18201c; 
     --usage-shadow-tooltip: rgba(0,0,0,.3);
     --usage-shadow-export: rgba(0,0,0,.3);
     --usage-tooltip-surface: #171717;
-    --usage-plan-operational-bg: #0f2f1f;
-    --usage-plan-operational-text: #86efac;
-    --usage-plan-error-bg: #3a1518;
-    --usage-plan-error-text: #f87171;
     --usage-status-info-bg: #17212b;
     --usage-status-info-text: #7dd3fc;
     --usage-status-info-dot: #38bdf8;

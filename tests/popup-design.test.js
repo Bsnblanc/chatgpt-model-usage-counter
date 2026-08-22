@@ -71,41 +71,47 @@ test("interactive elements expose visible focus, hover, and reduced-motion handl
   assert.match(dashboard, /\.usage-export-btn:focus-visible\{outline:2px solid/);
 });
 
-test("export tab is wired with all four conversation formats", () => {
+test("export tab is wired with all five conversation formats", () => {
   const dashboard = dashboardSource();
 
   assert.match(dashboard, /id: "export"/);
   assert.match(dashboard, /data-export-format=/);
+  assert.match(dashboard, /exportFormatJson/);
   assert.match(dashboard, /exportFormatMarkdown/);
   assert.match(dashboard, /exportFormatPdf/);
   assert.match(dashboard, /exportFormatPng/);
   assert.match(dashboard, /exportFormatDocx/);
 });
 
-test("export shows one conversation list (no scope toggle, no verbose hint) and routes PNG+PDF via Canvas", () => {
+test("export supports current, selected, and all scopes and routes PNG+PDF via Canvas", () => {
   const dashboard = dashboardSource();
   // 多对话选择列表 + 全选
   assert.match(dashboard, /data-export-conv/);
   assert.match(dashboard, /data-export-selectall/);
   assert.match(dashboard, /collectConversationsForExport/);
-  // 已移除"当前/选择"两种模式与废话提示
-  assert.doesNotMatch(dashboard, /data-export-scope/);
-  assert.doesNotMatch(dashboard, /exportConversationHint/);
+  assert.match(dashboard, /data-export-scope/);
+  assert.match(dashboard, /exportScopeCurrent/);
+  assert.match(dashboard, /exportScopeSelected/);
+  assert.match(dashboard, /exportScopeAll/);
+  assert.match(dashboard, /collectConversationChunk/);
+  assert.match(dashboard, /chunkSize = 6/);
+  assert.match(dashboard, /buildZip/);
   // PNG 与 PDF 都走 Canvas(系统中文字体 + Markdown 渲染),而非 ASCII 像素字体/不嵌字体 PDF
   assert.match(dashboard, /renderConversationsCanvas/);
 });
 
-test("bare GPT-5.x base is stored and counted as the instant variant", () => {
+test("bare GPT request slugs are stored exactly", () => {
   const catalog = require("../src/model-catalog");
-  assert.equal(catalog.resolveModelInfo("gpt-5-5").label, "gpt-5-5-instant");
-  assert.equal(catalog.resolveModelInfo("gpt-5-5").mode, "instant");
-  assert.equal(catalog.resolveModelInfo("gpt-5-3").label, "gpt-5-3-instant");
+  assert.equal(catalog.resolveModelInfo("gpt-5-5").label, "gpt-5-5");
+  assert.equal(catalog.resolveModelInfo("gpt-5-5").mode, "");
+  assert.equal(catalog.resolveModelInfo("gpt-5-3").label, "gpt-5-3");
   // thinking 不受影响
   assert.equal(catalog.resolveModelInfo("gpt-5-5-thinking").label, "gpt-5-5-thinking");
 });
 
-test("background keeps a specific GPT variant over a bare base from the request body", () => {
+test("background treats the current request model as authoritative over stale DOM metadata", () => {
   const background = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
-  assert.match(background, /isBareGptFamilyBase/);
-  assert.match(background, /isMoreSpecificGptVariant/);
+  assert.match(background, /current request and is authoritative/i);
+  assert.doesNotMatch(background, /isBareGptFamilyBase/);
+  assert.doesNotMatch(background, /isMoreSpecificGptVariant/);
 });

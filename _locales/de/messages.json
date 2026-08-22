@@ -1,4 +1,4 @@
 {
   "extName": { "message": "ChatGPT-Modellnutzungszähler" },
-  "extDescription": { "message": "Zählt deine ChatGPT-Prompts lokal nach Modell, mit Nutzungsdiagrammen und Konversationsexport." }
+  "extDescription": { "message": "Zählt ChatGPT-Prompts lokal nach exaktem Modell und Datum; exportiert aktuelle, gewählte oder alle Chats in fünf Formaten." }
 }

@@ -59,6 +59,7 @@ test("a single conversation exports to every selectable format with a valid arti
   };
 
   const expectations = {
+    json: { ext: "json", mime: /json/ },
     markdown: { ext: "md", mime: /markdown/ },
     pdf: { ext: "pdf", mime: /pdf/ },
     png: { ext: "png", mime: /png/ },
@@ -90,6 +91,61 @@ test("ACCOUNT SAFETY: the exporter never calls a backend API or touches credenti
   // 不得读取账号凭据
   assert.doesNotMatch(source, /document\.cookie/, "exporter must not read cookies");
   assert.doesNotMatch(source, /authorization|access_token|session_token/i, "exporter must not touch auth tokens");
+});
+
+test("normalizeConversations follows the selected current-node branch instead of exporting sibling branches", () => {
+  const normalized = exporter.normalizeConversations([{
+    id: "branch-123456",
+    title: "Branched conversation",
+    current_node: "assistant-current",
+    mapping: {
+      root: { parent: null, message: null },
+      user: {
+        parent: "root",
+        message: {
+          id: "user",
+          author: { role: "user" },
+          create_time: 1,
+          content: { content_type: "text", parts: ["Original question"] }
+        }
+      },
+      "assistant-old": {
+        parent: "user",
+        message: {
+          id: "assistant-old",
+          author: { role: "assistant" },
+          create_time: 2,
+          content: { content_type: "text", parts: ["Superseded answer"] }
+        }
+      },
+      "assistant-current": {
+        parent: "user",
+        message: {
+          id: "assistant-current",
+          author: { role: "assistant" },
+          create_time: 3,
+          content: { content_type: "text", parts: ["Current answer"] }
+        }
+      }
+    }
+  }])[0];
+
+  assert.deepEqual(normalized.messages.map((message) => message.id), ["user", "assistant-current"]);
+  assert.doesNotMatch(normalized.messages.map((message) => message.text).join("\n"), /Superseded/);
+});
+
+test("buildZip creates one readable archive entry per supplied export file", () => {
+  const bytes = exporter.buildZip([
+    { name: "chat-one.json", content: "{\"ok\":true}\n" },
+    { name: "对话二.md", content: "# 可读导出\n" }
+  ]);
+  const buffer = Buffer.from(bytes);
+
+  assert.equal(buffer.readUInt32LE(0), 0x04034b50);
+  assert.match(buffer.toString("utf8"), /chat-one\.json/);
+  assert.match(buffer.toString("utf8"), /对话二\.md/);
+  assert.match(buffer.toString("utf8"), /可读导出/);
+  assert.equal(exporter.MIME.zip, "application/zip");
 });
 
 test("ACCOUNT SAFETY: collecting a conversation triggers no network primitives", () => {

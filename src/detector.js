@@ -20,8 +20,8 @@
 
   var MAX_LABEL_LENGTH = 48;
   var MODEL_PATTERNS = [
-    /\b(?:GPT|ChatGPT)[-\s]?(?:5|4o|4\.5|4\.1|4|3\.5)(?![.\-]\d)(?:[-\s]?(?:chat|instant|thinking|fast|mini|nano|pro|turbo|preview|search preview|audio|realtime|transcribe|tts))*\b/i,
-    /\bo\d+(?:[-\s]?(?:mini|pro|preview|deep[-\s]?research|high|medium|low))*\b/i,
+    /\b(?:GPT|ChatGPT)[-\s]?(?:\d+(?:\.\d+)*|4o)(?:[-\s]?(?:sol|luna|chat|instant|thinking|fast|mini|nano|pro|turbo|preview|audio|realtime|transcribe|tts|codex|max))*\b/i,
+    /\bo\d+(?:[-\s]?[a-z][a-z0-9-]*){0,2}\b/i,
     /\bchat[-\s]?latest\b/i
   ];
   var EXPLICIT_MODEL_CONTEXT_RE = /(?:当前模型|目前模型|模型|current model|selected model|active model)\s*[:：-]?\s*((?:GPT|ChatGPT|gpt)[A-Za-z0-9.\-\s]+|o\d+[A-Za-z0-9.\-\s]*|chat[-\s]?latest)/i;
@@ -92,11 +92,11 @@
     label = label.replace(/^GPT\s*[- ]?\s*/i, "GPT-");
     label = label.replace(/^o(\d+)/i, "o$1");
     label = label.replace(/\bo(\d+)\s+(mini|pro|high|medium|low)\b/i, "o$1-$2");
-    label = label.replace(/\b(GPT-(?:5|4o|4\.5|4\.1|4|3\.5))(?![.\-]\d)\s+(mini|nano|pro|thinking|fast|instant|high|medium|low)\b/i, function (_, base, suffix) {
+    label = label.replace(/\b(GPT-(?:\d+(?:\.\d+)*|4o))\s+(sol|luna|mini|nano|pro|thinking|fast|instant|high|medium|low)\b/i, function (_, base, suffix) {
       var cleanSuffix = suffix.toLowerCase() === "thinking" ? "Thinking" : suffix.toLowerCase();
       return base + " " + cleanSuffix;
     });
-    label = label.replace(/\b(GPT-(?:5|4o|4\.5|4\.1|4|3\.5))(?![.\-]\d)-(mini|nano|pro|thinking|fast|instant|high|medium|low)\b/i, function (_, base, suffix) {
+    label = label.replace(/\b(GPT-(?:\d+(?:\.\d+)*|4o))-(sol|luna|mini|nano|pro|thinking|fast|instant|high|medium|low)\b/i, function (_, base, suffix) {
       var cleanSuffix = suffix.toLowerCase() === "thinking" ? "Thinking" : suffix.toLowerCase();
       return base + " " + cleanSuffix;
     });
@@ -185,6 +185,45 @@
         getAttributeText(element, "href")
       ].join(" ")
     );
+  }
+
+  function modelInfoFromElement(element) {
+    if (!element) {
+      return null;
+    }
+
+    // Resolve each semantic source independently. Combining visible text with
+    // data-testid/id values can turn UI implementation names such as
+    // "model-switcher-dropdown-button" into a fake model suffix.
+    var candidates = [
+      getAttributeText(element, "data-model"),
+      getAttributeText(element, "data-model-id"),
+      getAttributeText(element, "data-value"),
+      typeof element.value === "string" ? element.value : "",
+      element.innerText || "",
+      element.textContent || "",
+      getAttributeText(element, "aria-label"),
+      getAttributeText(element, "title")
+    ];
+    var seen = {};
+    for (var i = 0; i < candidates.length; i += 1) {
+      var candidate = normalizeWhitespace(candidates[i]);
+      if (!candidate || seen[candidate]) {
+        continue;
+      }
+      seen[candidate] = true;
+      var info = resolveModelInfo(candidate);
+      if (!info && i < 2 && modelCatalog && typeof modelCatalog.resolveRequestModelInfo === "function") {
+        // data-model and data-model-id are explicit model-bearing fields, so
+        // they may safely carry a future versioned family unknown to this build.
+        info = modelCatalog.resolveRequestModelInfo(candidate);
+      }
+      if (info && info.label) {
+        return info;
+      }
+    }
+
+    return null;
   }
 
   function getEditableText(element) {
@@ -277,24 +316,28 @@
     return score;
   }
 
-  function isStorageModelCandidate(key, value) {
-    var keyText = normalizeWhitespace(key);
-    var valueText = normalizeWhitespace(value);
-    var combined = [keyText, valueText].join(" ");
+  function hasExplicitModelSemantics(element) {
+    return /model-switcher/i.test(getAttributeText(element, "data-testid")) ||
+      /(?:model|模型)/i.test(getAttributeText(element, "aria-label")) ||
+      Boolean(getAttributeText(element, "data-model") || getAttributeText(element, "data-model-id"));
+  }
 
-    if (!/(gpt|chat-latest|o\d+)/i.test(combined)) {
+  function isConversationNavigationCandidate(element) {
+    if (!element) {
       return false;
     }
-
-    if (/(selected|current|active|default|last|conversation|composer).{0,32}model/i.test(combined)) {
+    var href = getAttributeText(element, "href");
+    if (/\/(?:c|g\/[^/]+\/c)\//i.test(href)) {
       return true;
     }
-
-    if (/model.{0,32}(selected|current|active|default|last|slug|id)/i.test(combined)) {
-      return true;
+    if (typeof element.closest !== "function") {
+      return false;
     }
-
-    return /^model$/i.test(keyText) || /^model(id|slug)$/i.test(keyText);
+    try {
+      return Boolean(element.closest('a[href*="/c/"],a[href*="/g/"][href*="/c/"],[data-message-author-role]'));
+    } catch (_) {
+      return false;
+    }
   }
 
   function explicitModelInfoFromText(text) {
@@ -337,39 +380,19 @@
       if (!isVisible(element)) {
         continue;
       }
+      var tagName = String(element.tagName || "").toLowerCase();
+      if ((isConversationNavigationCandidate(element) || tagName === "main" || tagName === "article") &&
+          !hasExplicitModelSemantics(element)) {
+        continue;
+      }
 
-      var info = explicitModelInfoFromText(getEditableText(element));
+      var declarationText = getEditableText(element);
+      if (declarationText.length > 160) {
+        continue;
+      }
+      var info = explicitModelInfoFromText(declarationText);
       if (info) {
         return info;
-      }
-    }
-
-    return null;
-  }
-
-  function findStorageModel(rootLike) {
-    var stores = [];
-    if (rootLike && rootLike.localStorage) stores.push(rootLike.localStorage);
-    if (rootLike && rootLike.sessionStorage) stores.push(rootLike.sessionStorage);
-
-    for (var i = 0; i < stores.length; i += 1) {
-      var store = stores[i];
-      try {
-        for (var index = 0; index < store.length; index += 1) {
-          var key = store.key(index);
-          var value = store.getItem(key);
-          if (!isStorageModelCandidate(key, value)) {
-            continue;
-          }
-
-          var text = [key, value].join(" ");
-          var info = resolveModelInfo(text);
-          if (info && info.label && info.apiModel) {
-            return info;
-          }
-        }
-      } catch (_) {
-        continue;
       }
     }
 
@@ -394,9 +417,12 @@
       if (!isVisible(element)) {
         continue;
       }
+      if (isConversationNavigationCandidate(element) && !hasExplicitModelSemantics(element)) {
+        continue;
+      }
 
       var text = getElementText(element);
-      var modelInfo = resolveModelInfo(text);
+      var modelInfo = modelInfoFromElement(element);
       if (!modelInfo || !modelInfo.label) {
         continue;
       }
@@ -411,7 +437,10 @@
       return best.info;
     }
 
-    return findStorageModel(root) || findExplicitModelDeclaration(documentLike);
+    // Do not guess from persisted "last/default model" values. They can lag
+    // behind a model switch; the current request or current visible selector
+    // is required for a reliable count.
+    return findExplicitModelDeclaration(documentLike);
   }
 
   function findCurrentModel(documentLike) {

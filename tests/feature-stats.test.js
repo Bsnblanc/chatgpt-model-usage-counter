@@ -115,28 +115,56 @@ test("dashboard feature rows hide zero-count entries and label canonical feature
   assert.doesNotMatch(html, />0 times</);
 });
 
-test("instant model (bare gpt-5-x) is counted under the -instant label, not the bare slug", () => {
+test("bare GPT request slugs are counted exactly without an invented instant suffix", () => {
   const now = new Date("2026-06-26T12:00:00.000Z");
-  // 真机实测:选 Instant 模型后,请求体只给裸 slug gpt-5-5(无 thinking 后缀)。
-  // 必须存成 gpt-5-5-instant,否则 instant 用量被错记成裸 gpt-5-5。
+  // The current request body is authoritative. A bare slug remains bare unless
+  // the request itself supplies an explicit mode suffix.
   const stats = background.applyIncrement(background.createEmptyStats(), {
     model: "gpt-5-5", chatgptModel: "gpt-5-5", apiModel: "gpt-5-5",
     modelObservedSource: "webRequest", submittedAt: now.toISOString(),
     promptHash: "instant-real", promptLength: 8, modelParameters: { model: "gpt-5-5" }
   }, now);
-  assert.equal(stats.totals["gpt-5-5-instant"], 1);
-  assert.equal(stats.totals["gpt-5-5"], undefined);
+  assert.equal(stats.totals["gpt-5-5"], 1);
+  assert.equal(stats.totals["gpt-5-5-instant"], undefined);
   // 另一条次版本同理
   const stats2 = background.applyIncrement(background.createEmptyStats(), {
     model: "gpt-5-3", modelObservedSource: "webRequest", submittedAt: now.toISOString(),
     promptHash: "i2", promptLength: 8, modelParameters: { model: "gpt-5-3" }
   }, now);
-  assert.equal(stats2.totals["gpt-5-3-instant"], 1);
+  assert.equal(stats2.totals["gpt-5-3"], 1);
+});
+
+test("legacy invented instant labels migrate to their exact bare request slug", () => {
+  const now = new Date("2026-08-22T12:00:00.000Z");
+  const stats = background.createEmptyStats();
+  stats.totals["gpt-5-5-instant"] = 6;
+  stats.byDate["2026-06-26"] = { "gpt-5-5-instant": 6 };
+  stats.models["gpt-5-5-instant"] = {
+    label: "gpt-5-5-instant",
+    apiModel: "gpt-5-5",
+    chatgptModel: "gpt-5-5",
+    mode: "instant",
+    parameters: { model: "gpt-5-5" }
+  };
+
+  const migrated = background.applyIncrement(stats, {
+    model: "gpt-5-5",
+    apiModel: "gpt-5-5",
+    chatgptModel: "gpt-5-5",
+    modelObservedSource: "webRequest",
+    submittedAt: now.toISOString(),
+    promptHash: "migration-check",
+    promptLength: 8,
+    modelParameters: { model: "gpt-5-5" }
+  }, now);
+
+  assert.equal(migrated.totals["gpt-5-5"], 7);
+  assert.equal(migrated.totals["gpt-5-5-instant"], undefined);
+  assert.deepEqual(migrated.byDate["2026-06-26"], { "gpt-5-5": 6 });
 });
 
 test("dashboard keeps instant records whose apiModel is the bare gpt-5-x slug (not dropped by sanitize)", () => {
-  // 真机实测的 instant 记录:键是 gpt-5-5-instant,但 apiModel/chatgptModel 是裸 gpt-5-5。
-  // 裸 gpt-5-5 会被归一成 "gpt-5.5" 命中视觉标签否决规则;若据此丢弃整条记录,面板会显示 0。
+  // 兼容旧版本已经保存的 instant 记录；升级清理不能让历史统计归零。
   const stats = background.createEmptyStats();
   stats.totals["gpt-5-5-instant"] = 6;
   stats.byDate["2026-06-26"] = { "gpt-5-5-instant": 6 };
@@ -150,13 +178,31 @@ test("dashboard keeps instant records whose apiModel is the bare gpt-5-x slug (n
   assert.deepEqual(series.series[0].values, [6]);
 });
 
-test("GPT-5.5 visible labels are rejected while exact ChatGPT thinking slugs stay valid", () => {
-  assert.equal(catalog.resolveModelInfo("GPT-5.5 Thinking"), null);
+test("public dotted GPT labels and exact request slugs both remain valid", () => {
+  assert.equal(catalog.resolveModelInfo("GPT-5.5 Thinking").label, "gpt-5.5-thinking");
   assert.equal(catalog.resolveModelInfo("gpt-5-5-thinking").label, "gpt-5-5-thinking");
   assert.equal(catalog.resolveModelInfo("gpt_5_5_thinking").label, "gpt-5-5-thinking");
   assert.equal(catalog.resolveModelInfo("gptLastUsedModel"), null);
-  assert.equal(detector.resolveModelInfo("GPT-5.5 Thinking"), null);
-  assert.equal(detector.extractModelLabel("Current model GPT-5.5 Thinking"), "");
+  assert.equal(detector.resolveModelInfo("GPT-5.5 Thinking").label, "gpt-5.5-thinking");
+  assert.equal(detector.extractModelLabel("Current model GPT-5.5 Thinking"), "gpt-5.5-thinking");
+});
+
+test("future O-series labels become valid model identities and are counted", () => {
+  const now = new Date("2026-08-22T12:00:00.000Z");
+  const info = detector.resolveModelInfo("o5 hyper");
+  const stats = background.applyIncrement(background.createEmptyStats(), {
+    model: info.label,
+    apiModel: info.apiModel,
+    modelObservedSource: "message-dom:model-switcher",
+    modelParameters: info.parameters,
+    submittedAt: now.toISOString(),
+    promptHash: "future-o-series",
+    promptLength: 12
+  }, now);
+
+  assert.equal(info.label, "o5-hyper");
+  assert.equal(stats.totals["o5-hyper"], 1);
+  assert.equal(stats.models["o5-hyper"].parameters.model, "o5-hyper");
 });
 
 const featurePayload = (model, hash, extra) => Object.assign({

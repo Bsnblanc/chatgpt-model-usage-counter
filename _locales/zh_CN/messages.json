@@ -1,4 +1,4 @@
 {
   "extName": { "message": "ChatGPT 模型使用统计" },
-  "extDescription": { "message": "在本地按模型统计你的 ChatGPT 提交次数，含使用图表与对话导出。" }
+  "extDescription": { "message": "按精确模型和日期本地统计 ChatGPT 用量，并以五种清晰格式导出当前、选中或全部对话。" }
 }

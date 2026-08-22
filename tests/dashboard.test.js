@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const dashboard = require("../src/dashboard");
+const exporter = require("../src/exporter");
 
 function createStats() {
   return {
@@ -380,21 +381,24 @@ class DashboardTestContainer {
   }
 }
 
-test("dashboard text view keeps exact thinking slug and hides invalid historical labels", () => {
+test("dashboard text view keeps exact and public labels while hiding unresolved placeholders", () => {
   const html = dashboard.renderModelTextList(createDirtyStats(), { language: "en" });
 
   assert.match(html, /gpt-5-thinking/);
   assert.match(html, /Clean exact thinking session/);
-  ["gpt-5-5-preview", "gpt_5_5", "GPT-5.5", "GPT-5 5", "Unknown model", "Dirty session"].forEach((value) => {
+  ["gpt-5-5-preview", "gpt_5_5", "GPT-5.5", "GPT-5 5", "Dirty session"].forEach((value) => {
+    assert.match(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), value);
+  });
+  ["Unknown model"].forEach((value) => {
     assert.doesNotMatch(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), value);
   });
 });
 
-test("dashboard helpers filter invalid variants and parameter aggregates", () => {
+test("dashboard helpers preserve exact variants and filter invalid parameter aggregates", () => {
   const variants = dashboard.modelVariants(createDirtyStats(), "gpt-5-thinking");
   const combinations = dashboard.parameterCombinations(createDirtyStats(), "gpt-5-thinking");
 
-  assert.deepEqual(variants.map((variant) => variant.name), ["gpt-5-thinking"]);
+  assert.deepEqual(variants.map((variant) => variant.name), ["gpt-5-5-preview", "gpt-5-thinking"]);
   assert.equal(combinations.length, 1);
   assert.equal(combinations[0].parameters.model, "gpt-5-thinking");
 });
@@ -425,6 +429,53 @@ test("dashboard treats canvas and versioned feature slugs as features, not model
   assert.match(html, /Canvas/);
   assert.doesNotMatch(html, /<strong>canvas<\/strong>/);
   assert.doesNotMatch(html, /<strong>canvas-v2<\/strong>/);
+});
+
+test("dashboard keeps recorded Deep Research and Agent Mode choices", () => {
+  const stats = createStats();
+  stats.totals["Deep research"] = 2;
+  stats.totals["Agent mode"] = 1;
+  stats.byDate["2026-05-30"]["Deep research"] = 2;
+  stats.byDate["2026-05-30"]["Agent mode"] = 1;
+  stats.models["Deep research"] = {
+    label: "Deep research",
+    apiModel: "research",
+    chatgptModel: "research",
+    parameters: { model: "research" }
+  };
+  stats.models["Agent mode"] = {
+    label: "Agent mode",
+    apiModel: "agent-mode",
+    chatgptModel: "agent-mode",
+    parameters: { model: "agent-mode" }
+  };
+  stats.variantsByModel["Deep research"] = {
+    total: 2,
+    variants: {
+      research: {
+        name: "research",
+        apiModel: "research",
+        count: 2
+      }
+    }
+  };
+  stats.variantsByModel["Agent mode"] = {
+    total: 1,
+    variants: {
+      "agent-mode": {
+        name: "agent-mode",
+        apiModel: "agent-mode",
+        count: 1
+      }
+    }
+  };
+
+  const html = dashboard.renderModelTextList(stats, { language: "en" });
+
+  assert.match(html, /Deep research/);
+  assert.match(html, /Agent mode/);
+  assert.match(html, /research/);
+  assert.match(html, /agent-mode/);
 });
 
 test("dashboard fills missing event feature rows from stored aggregates in the selected range", () => {
@@ -803,7 +854,9 @@ test("dashboard export view heading shows Export, not the stats title/subtitle",
 
   // 导出页标题应是 Export,而不是统计页的 "Model usage" + "X total | N selected"(用户:导出界面标题不对)。
   assert.match(container.innerHTML, /<h2>Export<\/h2>/);
-  assert.match(container.innerHTML, /Pick conversations/);
+  assert.match(container.innerHTML, /current, selected, or complete account history/);
+  assert.match(container.innerHTML, /data-export-scope="current"/);
+  assert.match(container.innerHTML, /data-export-format="json"/);
   assert.doesNotMatch(container.innerHTML, /\d+ total \| \d+ selected/);
 });
 
@@ -871,8 +924,7 @@ test("renderModelTextList keeps parameters and conversation index inside each ex
   assert.match(html, /future-family-2026-instant/);
   // 同名变体("调用型号"又写一遍同型号)不再重复显示
   assert.doesNotMatch(html, /usage-variant-row/);
-  assert.match(html, /Parameters/);
-  assert.match(html, /2 times/);
+  assert.match(html, /Latest parameters/);
   assert.match(html, /reasoning.effort=high/);
   assert.match(html, /text.verbosity=medium/);
   assert.doesNotMatch(html, /model=future-family-2026-thinking/);
@@ -1446,3 +1498,334 @@ test("custom date controls render only inside the usage view", () => {
   assert.doesNotMatch(dashboard.renderActiveView(state, []), /usage-date-controls/);
 });
 
+test("exportTargetPlan separates selected ids from complete or incomplete all-history scope", async () => {
+  const selected = await dashboard._test.exportTargetPlan({
+    exportScope: "selected",
+    exportSelected: { "chat-0001": true, "chat-0002": false, "chat-0003": true }
+  });
+  assert.deepEqual(selected.ids, ["chat-0001", "chat-0003"]);
+  assert.equal(selected.complete, true);
+
+  const all = await dashboard._test.exportTargetPlan({
+    exportScope: "all",
+    exportConversationList: [
+      { id: "chat-0001", title: "One" },
+      { id: "chat-0002", title: "Two" }
+    ],
+    exportConversationMeta: {
+      complete: false,
+      warnings: [{ scope: "archived", error: "unavailable" }]
+    }
+  });
+  assert.deepEqual(all.ids, ["chat-0001", "chat-0002"]);
+  assert.equal(all.complete, false);
+  assert.equal(all.warnings.length, 1);
+});
+
+test("export view reports an unavailable account index instead of showing an unexplained empty list", () => {
+  const html = dashboard.renderActiveView({
+    language: "en",
+    activeView: "export",
+    exportScope: "all",
+    exportConversationList: [],
+    exportConversationMeta: {
+      complete: false,
+      source: "unavailable",
+      warnings: [{ scope: "account", error: "no-tab" }]
+    }
+  }, []);
+
+  assert.match(html, /No account conversations are available to export/);
+  assert.match(html, /could not be read/);
+  assert.match(html, /usage-export-warning/);
+});
+
+test("export view reports account-read failure when the sidebar fallback is also empty", () => {
+  const html = dashboard.renderActiveView({
+    language: "en",
+    activeView: "export",
+    exportScope: "all",
+    exportConversationList: [],
+    exportConversationMeta: {
+      complete: false,
+      source: "sidebar",
+      warnings: [{ scope: "account", error: "history request failed" }]
+    }
+  }, []);
+
+  assert.match(html, /No account conversations are available to export/);
+  assert.match(html, /could not be read/);
+  assert.match(html, /usage-export-warning/);
+});
+
+test("conversation collection cannot be complete while it contains failures", () => {
+  const normalized = dashboard._test.normalizeConversationCollection({
+    conversations: [{ id: "chat-0001", messages: [{ role: "user", text: "ok" }] }],
+    failures: [{ id: "chat-0002", error: "unavailable" }],
+    requestedCount: 2
+  });
+
+  assert.equal(normalized.complete, false);
+  assert.equal(normalized.requestedCount, 2);
+});
+
+test("multi-conversation archive contains separate files and a machine-readable integrity report", async () => {
+  let downloaded = null;
+  const archiveExporter = Object.assign({}, exporter, {
+    downloadBlob(blob, filename) {
+      downloaded = { blob, filename };
+    }
+  });
+  const state = {
+    exportScope: "all",
+    language: "en",
+    container: { querySelector: () => null }
+  };
+
+  await dashboard._test.finishConversationArchive(
+    state,
+    archiveExporter,
+    [
+      { name: "First chat.md", content: "# First\n" },
+      { name: "Second chat.md", content: "# Second\n" }
+    ],
+    "markdown",
+    { requestedCount: 2, complete: true, failures: [], warnings: [] },
+    2,
+    []
+  );
+
+  assert.ok(downloaded);
+  assert.match(downloaded.filename, /^chatgpt-all-markdown-\d{4}-\d{2}-\d{2}\.zip$/);
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  const entries = {};
+  let offset = 0;
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const size = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = buffer.subarray(nameStart, nameStart + nameLength).toString("utf8");
+    entries[name] = buffer.subarray(dataStart, dataStart + size);
+    offset = dataStart + size;
+  }
+
+  assert.equal(entries["First chat.md"].toString("utf8"), "# First\n");
+  assert.equal(entries["Second chat.md"].toString("utf8"), "# Second\n");
+  const report = JSON.parse(entries["_export-report.json"].toString("utf8"));
+  assert.equal(report.requestedConversationCount, 2);
+  assert.equal(report.exportedConversationCount, 2);
+  assert.equal(report.exportedFileCount, 2);
+  assert.equal(report.failedConversationCount, 0);
+  assert.equal(report.complete, true);
+});
+
+test("archive integrity report cannot be complete when collection warnings exist", async () => {
+  let downloaded = null;
+  const archiveExporter = Object.assign({}, exporter, {
+    downloadBlob(blob, filename) {
+      downloaded = { blob, filename };
+    }
+  });
+  const state = {
+    exportScope: "selected",
+    language: "en",
+    options: { surface: "page" },
+    container: { querySelector: () => null }
+  };
+
+  await dashboard._test.finishConversationArchive(
+    state,
+    archiveExporter,
+    [{ name: "Recovered chat.md", content: "# Recovered\n" }],
+    "markdown",
+    {
+      requestedCount: 1,
+      complete: false,
+      failures: [],
+      warnings: [{ scope: "rendered-page-fallback", error: "Completeness could not be verified." }]
+    },
+    1,
+    []
+  );
+
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  let offset = 0;
+  let report = null;
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const size = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = buffer.subarray(nameStart, nameStart + nameLength).toString("utf8");
+    if (name === "_export-report.json") {
+      report = JSON.parse(buffer.subarray(dataStart, dataStart + size).toString("utf8"));
+    }
+    offset = dataStart + size;
+  }
+
+  assert.ok(report);
+  assert.equal(report.complete, false);
+  assert.equal(report.failedConversationCount, 0);
+  assert.equal(report.warnings.length, 1);
+  assert.equal(report.warnings[0].scope, "rendered-page-fallback");
+});
+
+test("multi-conversation export keeps requested order and never archives an unrequested result", async () => {
+  let downloaded = null;
+  const previousCollector = globalThis.__chatgptUsageCollectMany;
+  globalThis.__chatgptUsageCollectMany = async () => ({
+    conversations: [
+      { id: "secret-0003", title: "Secret", messages: [{ id: "s1", role: "user", text: "must not export" }] },
+      { id: "chat-0002", title: "Two", messages: [{ id: "m2", role: "user", text: "second" }] },
+      { id: "chat-0001", title: "One", messages: [{ id: "m1", role: "user", text: "first" }] },
+      { id: "chat-0001", title: "Duplicate", messages: [{ id: "m3", role: "user", text: "duplicate" }] }
+    ],
+    failures: [],
+    requestedCount: 2,
+    complete: true
+  });
+  const archiveExporter = Object.assign({}, exporter, {
+    downloadBlob(blob, filename) {
+      downloaded = { blob, filename };
+    }
+  });
+  const state = {
+    exportScope: "selected",
+    language: "en",
+    options: { surface: "page" },
+    container: { querySelector: () => null }
+  };
+
+  try {
+    await dashboard._test.downloadConversationArchiveByIds(
+      state,
+      archiveExporter,
+      { ids: ["chat-0001", "chat-0002"], complete: true, warnings: [] },
+      "json"
+    );
+  } finally {
+    if (typeof previousCollector === "undefined") {
+      delete globalThis.__chatgptUsageCollectMany;
+    } else {
+      globalThis.__chatgptUsageCollectMany = previousCollector;
+    }
+  }
+
+  assert.ok(downloaded);
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  const names = [];
+  let offset = 0;
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const size = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    names.push(buffer.subarray(nameStart, nameStart + nameLength).toString("utf8"));
+    offset = dataStart + size;
+  }
+
+  assert.deepEqual(names, ["One.json", "Two.json", "_export-report.json"]);
+  assert.doesNotMatch(buffer.toString("utf8"), /Secret|must not export|Duplicate|duplicate/);
+});
+
+test("multi-page PNG archive keeps part order when blob reads finish out of order", async () => {
+  let downloaded = null;
+  const previousCollector = globalThis.__chatgptUsageCollectMany;
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement() { return {}; } };
+  globalThis.__chatgptUsageCollectMany = async () => ({
+    conversations: [{
+      id: "chat-paged",
+      title: "Paged",
+      messages: [{ id: "m1", role: "assistant", text: "long answer" }]
+    }],
+    failures: [],
+    requestedCount: 1,
+    complete: true
+  });
+  const delayedBlob = (byte, delay) => ({
+    arrayBuffer() {
+      return new Promise((resolve) => {
+        setTimeout(() => resolve(Uint8Array.from([byte]).buffer), delay);
+      });
+    }
+  });
+  const archiveExporter = Object.assign({}, exporter, {
+    renderConversationsPngBlobs() {
+      return Promise.resolve([
+        delayedBlob(1, 30),
+        delayedBlob(2, 0)
+      ]);
+    },
+    downloadBlob(blob, filename) {
+      downloaded = { blob, filename };
+    }
+  });
+  const state = {
+    exportScope: "selected",
+    language: "en",
+    options: { surface: "page" },
+    container: { querySelector: () => null }
+  };
+
+  try {
+    await dashboard._test.downloadConversationArchiveByIds(
+      state,
+      archiveExporter,
+      { ids: ["chat-paged"], complete: true, warnings: [] },
+      "png"
+    );
+  } finally {
+    if (typeof previousCollector === "undefined") {
+      delete globalThis.__chatgptUsageCollectMany;
+    } else {
+      globalThis.__chatgptUsageCollectMany = previousCollector;
+    }
+    if (typeof previousDocument === "undefined") {
+      delete globalThis.document;
+    } else {
+      globalThis.document = previousDocument;
+    }
+  }
+
+  assert.ok(downloaded);
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  const names = [];
+  let offset = 0;
+  while (offset + 30 <= buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
+    const size = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    names.push(buffer.subarray(nameStart, nameStart + nameLength).toString("utf8"));
+    offset = dataStart + size;
+  }
+
+  assert.deepEqual(names, [
+    "Paged-part-001.png",
+    "Paged-part-002.png",
+    "_export-report.json"
+  ]);
+});
+
+test("archive filenames use the browser-local calendar date", () => {
+  assert.equal(dashboard._test.localExportDateStamp(new Date(2026, 7, 22, 23, 30)), "2026-08-22");
+});
+
+test("conversation archive basenames avoid case-insensitive and generated-suffix collisions", () => {
+  const bases = dashboard._test.uniqueConversationBases(exporter, [
+    { id: "chat-0001", title: "Report" },
+    { id: "chat-0002", title: "report" },
+    { id: "chat-0003", title: "Report-2" },
+    { id: "chat-0004", title: "CON" },
+    { id: "chat-0005", title: "con" }
+  ]);
+
+  assert.deepEqual(bases, ["Report", "report-2", "Report-2-2", "_CON", "_con-2"]);
+  assert.equal(new Set(bases.map((name) => name.toLowerCase())).size, bases.length);
+});

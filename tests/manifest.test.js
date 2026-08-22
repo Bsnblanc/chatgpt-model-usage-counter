@@ -19,6 +19,7 @@ test("manifest is MV3 and targets ChatGPT hosts", () => {
     "src/model-catalog.js",
     "src/detector.js",
     "src/exporter.js",
+    "src/conversation-source.js",
     "src/dashboard.js",
     "src/content.js"
   ]);

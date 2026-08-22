@@ -12,11 +12,13 @@ Usage statistics do not store raw prompts, raw responses, passwords, cookies, au
 
 ## Conversation Export
 
-Conversation export runs only after the user selects one or more conversations and clicks the export action.
+Conversation export is user initiated. Opening the Export view reads the conversation index (conversation IDs, titles, and timestamps) needed for the Current, Selected, and All scopes. Conversation bodies are read only after the user clicks a format button.
 
-The extension reads selected conversation content from the user's logged-in ChatGPT session and saves the exported JSON, PDF, Markdown, DOCX, or PNG file locally through Chrome downloads.
+For complete-history export, the extension requests `/backend-api/conversations` and `/backend-api/conversation/{id}` from the same ChatGPT origin and uses the browser's existing signed-in session through standard same-origin credential handling. It does not read cookies, authorization headers, passwords, or access tokens. If these requests are unavailable, it falls back to the currently rendered page and conversation links already loaded in the sidebar, and marks the result incomplete.
 
-The extension does not automatically export conversations.
+The extension converts JSON, PDF, Markdown, DOCX, PNG, and ZIP files locally in the browser. A single conversation downloads directly. Multiple conversations download as one ZIP containing one file per conversation and an integrity report. No conversation content is uploaded to a publisher server.
+
+The extension does not export conversations in the background or without a user action.
 
 ## Status Requests
 
@@ -30,7 +32,7 @@ This request is used only to show public service health information in the exten
 - `downloads`: save user-initiated export files to the local computer.
 - `scripting`: show the panel and restore page-side extension behavior on ChatGPT pages.
 - `webRequest`: identify model, parameter, and feature metadata from ChatGPT requests for local statistics.
-- `https://chatgpt.com/*` and `https://chat.openai.com/*`: run on ChatGPT pages and read selected conversations only for user-initiated export.
+- `https://chatgpt.com/*` and `https://chat.openai.com/*`: run on ChatGPT pages, observe request model metadata for local statistics, and read the user-requested current, selected, or complete conversation history for export.
 - `https://status.openai.com/*`: read public service status for the status view.
 
 ## Data Sharing
@@ -57,11 +59,13 @@ ChatGPT Model Usage Counter 是一个 Chrome 扩展，用于本地 ChatGPT 使�
 
 ## 对话导出
 
-对话导出只在用户选择一个或多个对话并点击导出操作后执行。
+对话导出由用户主动触发。用户打开「导出」页后，扩展会读取“当前 / 选中 / 全部”范围所需的对话索引（对话 ID、标题和时间）；只有用户点击格式按钮后，扩展才读取对话正文。
 
-扩展会从用户已登录的 ChatGPT 会话读取所选对话内容，并通过 Chrome downloads 把 JSON、PDF、Markdown、DOCX 或 PNG 导出文件保存到本机。
+为了导出完整历史，扩展会从当前 ChatGPT 同源请求 `/backend-api/conversations` 和 `/backend-api/conversation/{id}`，并由浏览器通过标准同源凭据机制使用现有登录会话。扩展不读取 Cookie、Authorization header、密码或访问令牌。接口不可用时，扩展会回退到当前已渲染页面和侧边栏已加载的对话链接，并标记结果不完整。
 
-扩展不会自动导出对话。
+扩展在本地浏览器内转换 JSON、PDF、Markdown、DOCX、PNG 和 ZIP。单个对话直接下载；多个对话下载为一个 ZIP，其中每段对话一个文件并附完整性报告。对话内容不会上传到发布者服务器。
+
+扩展不会在后台或没有用户操作时自动导出对话。
 
 ## 状态请求
 
@@ -75,7 +79,7 @@ ChatGPT Model Usage Counter 是一个 Chrome 扩展，用于本地 ChatGPT 使�
 - `downloads`：把用户主动导出的文件保存到本机。
 - `scripting`：在 ChatGPT 页面显示面板并恢复页面侧扩展能力。
 - `webRequest`：从 ChatGPT 请求中识别模型、参数和功能元数据，用于本地统计。
-- `https://chatgpt.com/*` 和 `https://chat.openai.com/*`：在 ChatGPT 页面运行，并且只在用户主动导出时读取所选对话。
+- `https://chatgpt.com/*` 和 `https://chat.openai.com/*`：在 ChatGPT 页面运行，为本地统计观察请求模型元数据，并在用户主动导出时读取当前、选中或全部范围内的对话历史。
 - `https://status.openai.com/*`：读取公开服务状态，用于状态视图。
 
 ## 数据共享

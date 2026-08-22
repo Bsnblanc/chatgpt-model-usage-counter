@@ -9,6 +9,7 @@
   }
 
   var detector = window.ChatGPTUsageDetector;
+  var modelCatalog = window.ChatGPTModelCatalog;
   if (!detector || typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
     return;
   }
@@ -54,17 +55,12 @@
   var MESSAGE_MATCH_WINDOW_MS = 60000;
   var COMPOSER_POLL_MS = 500;
   var MODEL_OBSERVATION_WAIT_MS = 12000;
-  var CONFIRMED_MODEL_CACHE_MS = 120000;
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var STATUS_KEY = "chatgptModelUsageOpenAIStatus.v1";
-  var CHATGPT_MODE_SLUG_RE = /^gpt-(?:(?:\d+(?:[-_.]\d+)*)|4o|4\.5|4\.1|4|3\.5)[-_.](thinking|instant|fast|auto|pro)$/i;
-  var CHATGPT_INTERNAL_FAMILY_RE = /^gpt-\d+-\d+(?:[-_.][a-z0-9][a-z0-9._-]*)?$/i;
   var lastSubmission = null;
   var lastDirectSubmission = null;
   var lastComposerSnapshot = null;
   var lastObservedModelInfo = null;
-  var lastConfirmedModelInfo = null;
-  var lastConfirmedModelTime = 0;
   var pendingSubmissions = [];
   var pendingSubmissionTimer = null;
   var seenUserMessages = new Set();
@@ -233,24 +229,30 @@
 
   function canonicalRequestModelSlug(value) {
     var clean = normalizePromptText(value).slice(0, 96);
-    var slug = clean.toLowerCase().replace(/[\u2010-\u2015]/g, "-").replace(/_/g, "-");
-    var numberedMode = slug.match(/^gpt-(\d+)-\d+[-_.](thinking|instant|fast|auto|pro)$/i);
-    return numberedMode ? "gpt-" + numberedMode[1] + "-" + numberedMode[2].toLowerCase() : slug;
+    if (modelCatalog && typeof modelCatalog.canonicalizeChatGPTModeSlug === "function") {
+      return modelCatalog.canonicalizeChatGPTModeSlug(clean);
+    }
+    return clean.toLowerCase().replace(/[\u2010-\u2015]/g, "-").replace(/_/g, "-");
   }
 
   function isActualRequestModelSlug(value) {
     var clean = canonicalRequestModelSlug(value);
+    if (modelCatalog && typeof modelCatalog.isRequestModelSlug === "function") {
+      return modelCatalog.isRequestModelSlug(clean);
+    }
+    if (modelCatalog && typeof modelCatalog.isModelSlug === "function" && modelCatalog.isModelSlug(clean)) {
+      return true;
+    }
     var normalized = clean.toLowerCase().replace(/_/g, "-");
     var key = clean.toLowerCase().replace(/[^a-z0-9]+/g, "");
-    var isInternalFamily = CHATGPT_INTERNAL_FAMILY_RE.test(normalized);
     return /^[a-z][a-z0-9._-]{1,95}$/i.test(clean) &&
       !/^(unknown|unknownmodel|unresolved|unresolvedmodel)$/.test(key) &&
       !/^(?:gpt)?lastusedmodel$/.test(key) &&
       !/^(auto|default|none|null|undefined|chatgpt)$/i.test(clean) &&
-      !/^gpt-5\.\d+(?:$|[-_.])/i.test(normalized) &&
       !isFeatureNamedRequestSlug(clean) &&
-      hasGenericRequestModelEvidence(normalized) &&
-      (!isInternalFamily || CHATGPT_MODE_SLUG_RE.test(normalized));
+      (hasGenericRequestModelEvidence(normalized) ||
+        (/(?=.*[a-z])(?=.*\d)(?=.*[-_.])^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+$/i.test(clean) &&
+          !/^(?:model|reasoning|text|tools?|temperature|max|response|request|conversation|metadata|stream|protocol|transport|endpoint|session)(?:[-_.]|$)/i.test(clean)));
   }
 
   function hasKnownRequestModelPrefix(value) {
@@ -720,67 +722,6 @@
     return info;
   }
 
-  function parseExplicitModelInfo(value, source, observedAt) {
-    var clean = normalizePromptText(value);
-    var resolved = resolveModelText(clean, source, observedAt);
-    if (resolved) {
-      return resolved;
-    }
-
-    var gpt = clean.match(/\b(?:GPT|gpt)[-\s]?(5|4o|4\.5|4\.1|4|3\.5)(?![.\-]\d)(?:[-\s]?(thinking|chat|mini|nano|pro|instant|fast))?\b/i);
-    if (gpt) {
-      var version = gpt[1];
-      var suffix = String(gpt[2] || "").toLowerCase();
-      var apiModel = "gpt-" + version.toLowerCase();
-      var label = "GPT-" + version;
-      if (suffix === "mini" || suffix === "nano" || suffix === "pro") {
-        label += " " + suffix;
-        apiModel += "-" + suffix;
-      }
-      return {
-        label: label,
-        apiModel: apiModel,
-        mode: suffix === "thinking" ? "thinking" : suffix,
-        parameters: { model: apiModel },
-        chatgptModel: clean,
-        observedSource: source || "explicit-page-text",
-        observedAt: observedAt || Date.now()
-      };
-    }
-
-    var reasoning = clean.match(/\bo(\d+)(?:[-\s]?(mini|pro|high|medium|low))?\b/i);
-    if (reasoning) {
-      var oSuffix = String(reasoning[2] || "").toLowerCase();
-      var oApiModel = "o" + reasoning[1] + (oSuffix ? "-" + oSuffix : "");
-      return {
-        label: "o" + reasoning[1] + (oSuffix ? "-" + oSuffix : ""),
-        apiModel: oApiModel,
-        mode: oSuffix,
-        parameters: { model: oApiModel },
-        chatgptModel: clean,
-        observedSource: source || "explicit-page-text",
-        observedAt: observedAt || Date.now()
-      };
-    }
-
-    return null;
-  }
-
-  function readExplicitModelDeclaration() {
-    var root = document.body || document.documentElement;
-    var text = normalizePromptText(root && (root.innerText || root.textContent));
-    if (!text || !/(当前模型|目前模型|Current model|Selected model|Active model)/i.test(text)) {
-      return null;
-    }
-
-    var match = text.match(/(?:当前模型|目前模型|Current model|Selected model|Active model)\s*[:：-]?\s*((?:GPT|gpt|ChatGPT)[A-Za-z0-9.\-\s]+|o\d+[A-Za-z0-9.\-\s]*|chat[-\s]?latest)/i);
-    if (!match) {
-      return null;
-    }
-
-    return parseExplicitModelInfo(match[1], "explicit-page-text", Date.now());
-  }
-
   function rememberObservedModel(value, source, observedAt, shouldFlush, observedParameters, observedFeatures) {
     if (!isRequestModelSource(source)) {
       return null;
@@ -802,40 +743,11 @@
     return info;
   }
 
-  // 从对话里最后一条带 data-message-model-slug 的消息读模型。ChatGPT 改版后顶部模型切换按钮
-  // 不再带 data-testid、文字也清空了,提交时读不到模型 → 提交被丢弃、计数停摆;而助手消息上的
-  // model-slug 一直稳定带着(如 gpt-5-5-thinking),据此兜底识别当前模型,是改版后最可靠的来源。
-  function modelInfoFromConversationDom() {
-    try {
-      var nodes = document.querySelectorAll("[data-message-model-slug]");
-      for (var i = nodes.length - 1; i >= 0; i -= 1) {
-        var slug = typeof nodes[i].getAttribute === "function" ? nodes[i].getAttribute("data-message-model-slug") : "";
-        if (!slug) { continue; }
-        var info = detector && typeof detector.resolveModelInfo === "function" ? detector.resolveModelInfo(slug) : null;
-        if (info && info.label) {
-          info.apiModel = info.apiModel || slug;
-          info.chatgptModel = info.chatgptModel || slug;
-          info.parameters = actualModelParameters(info.parameters && info.parameters.model ? info.parameters : { model: info.apiModel }, info.apiModel);
-          info.observedSource = "message-dom:assistant-slug";
-          if (hasResolvedModel(info)) { return info; }
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
   function readDomModel() {
     var info =
       typeof detector.findCurrentModelInfo === "function"
         ? detector.findCurrentModelInfo(document)
         : null;
-    if (!hasResolvedModel(info)) {
-      info = readExplicitModelDeclaration();
-    }
-    if (!hasResolvedModel(info)) {
-      // 顶部模型切换按钮改版后读不到模型时,退而从对话助手消息的 model-slug 兜底识别。
-      info = modelInfoFromConversationDom();
-    }
 
     if (hasResolvedModel(info)) {
       info.parameters = actualModelParameters({ model: info.apiModel }, info.apiModel);
@@ -845,13 +757,6 @@
       setDiagnostic("detected-api-model", info.apiModel);
       setDiagnostic("detected-model-source", info.observedSource);
       return info;
-    }
-
-    if (lastConfirmedModelInfo && lastConfirmedModelTime && (Date.now() - lastConfirmedModelTime) < CONFIRMED_MODEL_CACHE_MS) {
-      setDiagnostic("detected-model", lastConfirmedModelInfo.label || "");
-      setDiagnostic("detected-api-model", lastConfirmedModelInfo.apiModel || "");
-      setDiagnostic("detected-model-source", "confirmed-cache");
-      return lastConfirmedModelInfo;
     }
 
     return null;
@@ -881,13 +786,6 @@
           return lastObservedModelInfo;
         }
       }
-    }
-
-    if (lastConfirmedModelInfo && lastConfirmedModelTime && (now - lastConfirmedModelTime) < CONFIRMED_MODEL_CACHE_MS) {
-      setDiagnostic("detected-model", lastConfirmedModelInfo.label || "");
-      setDiagnostic("detected-api-model", lastConfirmedModelInfo.apiModel || "");
-      setDiagnostic("detected-model-source", "confirmed-cache");
-      return lastConfirmedModelInfo;
     }
 
     return null;
@@ -994,18 +892,6 @@
         setDiagnostic("last-record-status", "ok");
         setDiagnostic("last-record-total", response.stats && response.stats.totals ? response.stats.totals[event.model || model] || 0 : 0);
 
-        if (event.model && event.apiModel) {
-          lastConfirmedModelInfo = {
-            label: event.model,
-            apiModel: event.apiModel,
-            chatgptModel: event.chatgptModel || event.apiModel,
-            mode: event.modelMode || "",
-            parameters: event.modelParameters || { model: event.apiModel },
-            observedSource: event.modelObservedSource || "message-dom:confirmed-cache",
-            usageFeatures: event.usageFeatures || []
-          };
-          lastConfirmedModelTime = Date.now();
-        }
       }
     );
     } catch (sendError) {
@@ -1072,7 +958,17 @@
       return;
     }
     for (var i = 0; i < pendingSubmissions.length; i += 1) {
-      if (pendingSubmissions[i].hash === hash) {
+      var pending = pendingSubmissions[i];
+      if (pending.hash !== hash) {
+        continue;
+      }
+      var elapsed = Math.abs(now - pending.time);
+      var mirrorsSameSubmission = source === "message-dom" || pending.source === "message-dom";
+      // Pointer/click/Enter duplicates arrive almost together. A rendered
+      // user-message observation may arrive later, but still mirrors the same
+      // submission. Allow an intentional repeat of the same prompt once it is
+      // outside the short direct-event dedupe window.
+      if (elapsed < DEDUPE_WINDOW_MS || (mirrorsSameSubmission && elapsed < MESSAGE_MATCH_WINDOW_MS)) {
         return;
       }
     }
@@ -2011,9 +1907,8 @@
     installUsagePanel();
   }
 
-  // 导出对话的内容脚本接口。账号安全红线:只读取页面已渲染的对话 DOM,绝不调用任何
-  // ChatGPT/OpenAI 后端接口、不读取 cookie/token;多对话导出用「点击侧边栏链接」做 SPA 导航
-  // (等价于用户手动点击),逐个、带间隔、前台进行,属低风险的人类节奏浏览。
+  // 导出对话的内容脚本接口。优先使用当前 ChatGPT 页面的同源账号历史请求；
+  // 不读取 cookie/token/header。接口不可用时才通过侧边栏 SPA 导航读取已渲染 DOM。
   if (chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === "function") {
     var waitMs = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
@@ -2047,7 +1942,7 @@
       return folders.length;
     };
 
-    var listAllConversations = function () {
+    var listAllDomConversations = function () {
       var expanded = expandSidebarFolders();
       return waitMs(expanded ? 1300 : 0).then(function () {
         return listSidebarConversations();
@@ -2093,7 +1988,7 @@
       });
     };
 
-    var collectMany = function (ids, perDelayMs) {
+    var collectManyFromDom = function (ids, perDelayMs) {
       var exporter = window.ChatGPTUsageExporter;
       if (!exporter || typeof exporter.collectConversationFromDom !== "function") {
         return Promise.reject(new Error("exporter-unavailable"));
@@ -2127,7 +2022,7 @@
           return waitMs(250);
         }).then(function () {
           var conv = exporter.collectConversationFromDom(document);
-          if (conv && conv.messages && conv.messages.length) {
+          if (conv && conv.id === id && conv.messages && conv.messages.length) {
             // 标题一律以侧边栏里这条对话(按目标 id 取)的真实标题为准:即使切换太快、DOM 里
             // 还残留上一段对话的 document.title,也不会张冠李戴。侧边栏没标题时才退回 DOM 采到的。
             if (byId[id] && byId[id].title) {
@@ -2135,11 +2030,13 @@
             }
             results.push(conv);
           }
-          return step(i + 1);
-        });
+        }).catch(function skipFailedDomConversation() {
+          // One DOM-rendering failure must not abort the remaining selected
+          // conversations. The caller reports any still-missing ids.
+        }).then(function nextTarget() { return step(i + 1); });
       };
-      // 采集会沿侧边栏切换对话;结束后用 SPA 点击切回用户原来那段(仅点同源链接,不整页刷新,
-      // 以免打断随后的逐个下载)。原本在新对话/根路径(无对话链接)则不强行还原。
+      // 采集会沿侧边栏切换对话；结束后用 SPA 点击切回用户原来那段（仅点同源链接，不整页刷新，
+      // 以免打断随后的导出）。原本在新对话/根路径（无对话链接）则不强行还原。
       var restore = function () {
         if (!startId || conversationIdFromPath() === startId) { return Promise.resolve(); }
         var back = findConversationLink(startId);
@@ -2151,12 +2048,250 @@
       };
       return step(0).then(function (res) {
         return restore().then(function () { return res; });
+      }, function failed(error) {
+        return restore().then(function rethrow() { throw error; });
       });
     };
 
-    // 暴露给同一隔离世界里的页面内面板直接调用(弹窗面板则走 chrome.tabs 消息)。
-    window.__chatgptUsageListConversations = listAllConversations;
-    window.__chatgptUsageCollectMany = collectMany;
+    function accountSourceOptions() {
+      var source = window.ChatGPTConversationSource;
+      var exporter = window.ChatGPTUsageExporter;
+      if (!source || !exporter || typeof window.fetch !== "function") {
+        return null;
+      }
+      return {
+        source: source,
+        options: {
+          fetchImpl: window.fetch.bind(window),
+          exporter: exporter,
+          origin: location.origin,
+          includeArchived: true,
+          pageSize: 100,
+          concurrency: 4
+        }
+      };
+    }
+
+    function safeCollectionError(error) {
+      return String((error && error.message) || error || "conversation-unavailable").replace(/\s+/g, " ").trim().slice(0, 240);
+    }
+
+    function uniqueIds(ids) {
+      var seen = {};
+      return (Array.isArray(ids) ? ids : []).reduce(function (out, value) {
+        var id = String(value || "").trim();
+        if (/^[0-9a-zA-Z-]{6,160}$/.test(id) && !seen[id]) {
+          seen[id] = true;
+          out.push(id);
+        }
+        return out;
+      }, []);
+    }
+
+    function mergeCollectionResults(ids, primary, fallbackConversations, fallbackUsed) {
+      var targets = uniqueIds(ids);
+      var byId = {};
+      var primaryFailures = {};
+      var warnings = Array.isArray(primary && primary.warnings) ? primary.warnings.slice() : [];
+      (primary && Array.isArray(primary.conversations) ? primary.conversations : []).forEach(function addPrimary(conversation) {
+        if (conversation && conversation.id) {
+          byId[conversation.id] = conversation;
+        }
+      });
+      (Array.isArray(fallbackConversations) ? fallbackConversations : []).forEach(function addFallback(conversation) {
+        if (conversation && conversation.id && !byId[conversation.id]) {
+          byId[conversation.id] = conversation;
+        }
+      });
+      (primary && Array.isArray(primary.failures) ? primary.failures : []).forEach(function rememberFailure(failure) {
+        if (failure && failure.id) {
+          primaryFailures[failure.id] = failure.error;
+        }
+      });
+      var failures = [];
+      var conversations = [];
+      targets.forEach(function orderResult(id) {
+        if (byId[id]) {
+          conversations.push(byId[id]);
+        } else {
+          failures.push({
+            id: id,
+            error: primaryFailures[id] || "Conversation was not available from account history or the loaded sidebar."
+          });
+        }
+      });
+      if (fallbackUsed) {
+        warnings.push({
+          scope: "rendered-page-fallback",
+          error: "One or more conversations were read from the rendered ChatGPT page because account-history detail access was unavailable."
+        });
+      }
+      return {
+        conversations: conversations,
+        failures: failures,
+        warnings: warnings,
+        requestedCount: targets.length,
+        complete: failures.length === 0 && warnings.length === 0 && (!primary || primary.complete !== false)
+      };
+    }
+
+    function collectWithDomFallback(ids, primaryPromise, perDelayMs) {
+      var targets = uniqueIds(ids);
+      return Promise.resolve(primaryPromise).catch(function accountFailed(error) {
+        return {
+          conversations: [],
+          failures: targets.map(function failure(id) { return { id: id, error: safeCollectionError(error) }; }),
+          warnings: [{ scope: "account-details", error: safeCollectionError(error) }],
+          requestedCount: targets.length,
+          complete: false
+        };
+      }).then(function fallbackMissing(primary) {
+        var completed = {};
+        (primary.conversations || []).forEach(function mark(conversation) {
+          if (conversation && conversation.id) { completed[conversation.id] = true; }
+        });
+        var missing = targets.filter(function missingId(id) { return !completed[id]; });
+        if (!missing.length) {
+          return mergeCollectionResults(targets, primary, [], false);
+        }
+        // If the missing target is already open, read it directly before trying
+        // sidebar navigation. Shared, temporary, or otherwise unlisted chats
+        // can be fully rendered even when no matching sidebar link exists.
+        var directFallback = [];
+        var currentId = conversationIdFromPath();
+        if (currentId && missing.indexOf(currentId) !== -1) {
+          var exporter = window.ChatGPTUsageExporter;
+          try {
+            var current = exporter && typeof exporter.collectConversationFromDom === "function"
+              ? exporter.collectConversationFromDom(document)
+              : null;
+            if (current && current.id === currentId && current.messages && current.messages.length) {
+              directFallback.push(current);
+              missing = missing.filter(function notCurrent(id) { return id !== currentId; });
+            }
+          } catch (_) {}
+        }
+        if (!missing.length) {
+          return mergeCollectionResults(targets, primary, directFallback, true);
+        }
+        return collectManyFromDom(missing, perDelayMs).catch(function () { return []; }).then(function merge(fallback) {
+          return mergeCollectionResults(targets, primary, directFallback.concat(fallback), true);
+        });
+      });
+    }
+
+    function listConversationsForExport() {
+      var account = accountSourceOptions();
+      if (!account) {
+        return listAllDomConversations().then(function domOnly(conversations) {
+          return {
+            conversations: conversations,
+            total: conversations.length,
+            complete: false,
+            source: "sidebar",
+            warnings: [{ scope: "account", error: "Account history access is unavailable; showing loaded sidebar chats only." }]
+          };
+        });
+      }
+      return account.source.listAccountConversations(account.options).then(function accountList(result) {
+        return {
+          conversations: result.conversations || [],
+          total: (result.conversations || []).length,
+          complete: Boolean(result.complete),
+          source: "account",
+          warnings: result.warnings || []
+        };
+      }).catch(function accountListFailed(error) {
+        return listAllDomConversations().then(function fallbackList(conversations) {
+          return {
+            conversations: conversations,
+            total: conversations.length,
+            complete: false,
+            source: "sidebar",
+            warnings: [{ scope: "account", error: safeCollectionError(error) }]
+          };
+        });
+      });
+    }
+
+    function collectCurrentConversation() {
+      var id = conversationIdFromPath();
+      var account = accountSourceOptions();
+      if (id && account) {
+        return collectWithDomFallback([id], account.source.collectConversations([id], account.options));
+      }
+      var exporter = window.ChatGPTUsageExporter;
+      var conversation = exporter && typeof exporter.collectConversationFromDom === "function"
+        ? exporter.collectConversationFromDom(document)
+        : null;
+      var hasConversation = Boolean(conversation && conversation.messages && conversation.messages.length);
+      return Promise.resolve({
+        conversations: hasConversation ? [conversation] : [],
+        failures: hasConversation ? [] : [{ id: id, error: "No exportable conversation is open." }],
+        warnings: hasConversation ? [{
+          scope: "rendered-page-fallback",
+          error: "The current conversation was read from the rendered ChatGPT page; account-history completeness could not be verified."
+        }] : [],
+        requestedCount: 1,
+        complete: false
+      });
+    }
+
+    function collectSelectedConversations(ids, perDelayMs) {
+      var targets = uniqueIds(ids);
+      var account = accountSourceOptions();
+      var primary = account
+        ? account.source.collectConversations(targets, account.options)
+        : Promise.reject(new Error("Account history access is unavailable."));
+      return collectWithDomFallback(targets, primary, perDelayMs);
+    }
+
+    function collectAllConversations() {
+      var account = accountSourceOptions();
+      if (!account) {
+        return listAllDomConversations().then(function collectLoaded(list) {
+          return collectSelectedConversations(list.map(function id(item) { return item.id; })).then(function markSidebarOnly(result) {
+            result.warnings = (result.warnings || []).concat([{
+              scope: "account",
+              error: "Account history access is unavailable; only loaded sidebar chats were collected."
+            }]);
+            result.complete = false;
+            return result;
+          });
+        });
+      }
+      return account.source.collectAllConversations(account.options).then(function fallbackFailedDetails(primary) {
+        var ids = (primary.index || []).map(function id(item) { return item.id; });
+        return collectWithDomFallback(ids, Promise.resolve(primary)).then(function attachWarnings(result) {
+          // collectWithDomFallback already carries account-index warnings and
+          // adds an explicit rendered-page warning when any detail request
+          // required DOM fallback. Preserve both; fallback must never be
+          // reported as a verified complete account export.
+          result.complete = primary.indexComplete !== false &&
+            result.complete !== false &&
+            result.failures.length === 0 &&
+            (result.warnings || []).length === 0;
+          return result;
+        });
+      }).catch(function accountAllFailed(error) {
+        return listAllDomConversations().then(function collectLoaded(list) {
+          return collectSelectedConversations(list.map(function id(item) { return item.id; })).then(function markFallback(result) {
+            result.warnings = (result.warnings || []).concat([{
+              scope: "account",
+              error: safeCollectionError(error)
+            }]);
+            result.complete = false;
+            return result;
+          });
+        });
+      });
+    }
+
+    // 暴露给同一隔离世界里的页面内面板直接调用；弹窗面板走 chrome.tabs 消息。
+    window.__chatgptUsageListConversations = listConversationsForExport;
+    window.__chatgptUsageCollectCurrent = collectCurrentConversation;
+    window.__chatgptUsageCollectMany = collectSelectedConversations;
+    window.__chatgptUsageCollectAll = collectAllConversations;
 
     chrome.runtime.onMessage.addListener(function handleConversationMessage(message, sender, sendResponse) {
       if (!message) {
@@ -2166,21 +2301,66 @@
       var exporterReady = exporter && typeof exporter.collectConversationFromDom === "function";
       if (message.type === "conversation.collect") {
         if (!exporterReady) { sendResponse({ ok: false, error: "exporter-unavailable" }); return true; }
-        try { sendResponse({ ok: true, conversation: exporter.collectConversationFromDom(document) }); }
-        catch (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); }
+        collectCurrentConversation()
+          .then(function (result) {
+            sendResponse({
+              ok: true,
+              conversation: result.conversations[0] || null,
+              conversations: result.conversations,
+              failures: result.failures,
+              warnings: result.warnings || [],
+              requestedCount: result.requestedCount,
+              complete: result.complete
+            });
+          })
+          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
         return true;
       }
       if (message.type === "conversation.list") {
-        listAllConversations()
-          .then(function (conversations) { sendResponse({ ok: true, conversations: conversations }); })
-          .catch(function (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); });
+        listConversationsForExport()
+          .then(function (result) {
+            sendResponse({
+              ok: true,
+              conversations: result.conversations,
+              total: result.total,
+              complete: result.complete,
+              source: result.source,
+              warnings: result.warnings
+            });
+          })
+          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
         return true;
       }
       if (message.type === "conversation.collectMany") {
         if (!exporterReady) { sendResponse({ ok: false, error: "exporter-unavailable" }); return true; }
-        collectMany(message.ids, message.perDelayMs)
-          .then(function (results) { sendResponse({ ok: true, conversations: results }); })
-          .catch(function (e) { sendResponse({ ok: false, error: String((e && e.message) || e) }); });
+        collectSelectedConversations(message.ids, message.perDelayMs)
+          .then(function (result) {
+            sendResponse({
+              ok: true,
+              conversations: result.conversations,
+              failures: result.failures,
+              warnings: result.warnings || [],
+              requestedCount: result.requestedCount,
+              complete: result.complete
+            });
+          })
+          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
+        return true;
+      }
+      if (message.type === "conversation.collectAll") {
+        if (!exporterReady) { sendResponse({ ok: false, error: "exporter-unavailable" }); return true; }
+        collectAllConversations()
+          .then(function (result) {
+            sendResponse({
+              ok: true,
+              conversations: result.conversations,
+              failures: result.failures,
+              warnings: result.warnings || [],
+              requestedCount: result.requestedCount,
+              complete: result.complete
+            });
+          })
+          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
         return true;
       }
       return undefined;

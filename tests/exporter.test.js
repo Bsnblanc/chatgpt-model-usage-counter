@@ -53,7 +53,7 @@ const chineseConversations = [
         role: "assistant",
         text: "结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。",
         metadata: {
-          model_slug: "gpt-中文-2026",
+          model_slug: "gpt-6-1-aurora",
           reasoning_effort: "medium",
           top_p: 0.8
         }
@@ -288,23 +288,41 @@ async function withMockCanvasDocument(assertion) {
 
     getContext(type) {
       assert.equal(type, "2d");
+      const canvas = this;
       return {
         fillStyle: "#000000",
         font: "24px sans-serif",
         strokeStyle: "#000000",
+        arcTo() {},
         beginPath() {},
+        closePath() {},
         drawImage() {},
+        fill() {},
         fillRect() {},
         fillText(text) {
           drawnText.push(String(text));
+        },
+        getImageData() {
+          const data = new Uint8ClampedArray(canvas.width * canvas.height * 4);
+          for (let index = 0; index < data.length; index += 4) {
+            data[index] = 255;
+            data[index + 1] = 255;
+            data[index + 2] = 255;
+            data[index + 3] = 255;
+          }
+          return { data };
         },
         lineTo() {},
         measureText(text) {
           return { width: Array.from(String(text || "")).length * 12 };
         },
         moveTo() {},
+        restore() {},
+        save() {},
+        scale() {},
         stroke() {},
-        strokeRect() {}
+        strokeRect() {},
+        translate() {}
       };
     }
 
@@ -497,7 +515,7 @@ test("exportJson returns stable normalized JSON payload", () => {
   assertNoInternalExportFields(json);
 });
 
-test("exports keep exact ChatGPT thinking slugs and drop invalid GPT-5.5-like variants", () => {
+test("exports keep exact slugs and public dotted GPT labels distinct", () => {
   const modelConversations = [
     {
       id: "model-metadata-conversation",
@@ -523,9 +541,9 @@ test("exports keep exact ChatGPT thinking slugs and drop invalid GPT-5.5-like va
           }
         },
         {
-          id: "invalid-model-message",
+          id: "public-model-message",
           role: "assistant",
-          text: "The model metadata should not be trusted when it names a GPT-5.5 display label.",
+          text: "The model metadata names a public dotted GPT label.",
           metadata: {
             model_slug: "GPT-5.5 Thinking",
             reasoning_effort: "medium"
@@ -555,7 +573,7 @@ test("exports keep exact ChatGPT thinking slugs and drop invalid GPT-5.5-like va
   assert.deepEqual(payload.conversations[0].messages[1].parameters, {
     "reasoning.effort": "medium"
   });
-  assert.equal(payload.conversations[0].messages[2].model, "gpt-5-5-thinking");
+  assert.equal(payload.conversations[0].messages[2].model, "gpt-5.5-thinking");
   assert.deepEqual(payload.conversations[0].messages[2].parameters, {
     "reasoning.effort": "medium"
   });
@@ -563,8 +581,32 @@ test("exports keep exact ChatGPT thinking slugs and drop invalid GPT-5.5-like va
   assert.equal(payload.conversations[0].messages[3].parameters.model, undefined);
   assert.match(markdown, /gpt-5-thinking/);
   assert.match(markdown, /gpt-5-5-thinking/);
-  assert.doesNotMatch(markdown, /GPT-5\.5 Thinking/);
+  assert.match(markdown, /gpt-5\.5-thinking/);
   assert.match(markdown, /future-family-2026-thinking/);
+});
+
+test("exports preserve direct request model and usage-feature aliases", () => {
+  const output = JSON.parse(exporter.exportJson([
+    {
+      id: "direct-aliases",
+      title: "Direct aliases",
+      messages: [
+        { id: "u1", role: "user", text: "Question" },
+        {
+          id: "a1",
+          role: "assistant",
+          text: "Answer",
+          apiModel: "aurora-7",
+          usageFeatures: ["web_search", "code_interpreter"]
+        }
+      ]
+    }
+  ]));
+  const assistant = output.conversations[0].messages[1];
+
+  assert.equal(assistant.model, "aurora-7");
+  assert.deepEqual(assistant.features, ["code_interpreter", "web_search"]);
+  assert.deepEqual(output.featureUsage.byFeature, { code_interpreter: 1, web_search: 1 });
 });
 
 test("exports fill missing assistant models from the same conversation only", () => {
@@ -589,12 +631,12 @@ test("exports fill missing assistant models from the same conversation only", ()
     },
     {
       id: "invalid-candidate",
-      title: "Invalid model candidate",
+      title: "Public dotted model candidate",
       messages: [
         { id: "u4", role: "user", text: "Prompt" },
         { id: "a4", role: "assistant", text: "Valid answer", metadata: { model_slug: "gpt-5-thinking" } },
         { id: "u5", role: "user", text: "Prompt" },
-        { id: "a5", role: "assistant", text: "Invalid display model", metadata: { model_slug: "GPT-5.5 Thinking" } }
+        { id: "a5", role: "assistant", text: "Public dotted model", metadata: { model_slug: "GPT-5.5 Thinking" } }
       ]
     }
   ]));
@@ -603,7 +645,7 @@ test("exports fill missing assistant models from the same conversation only", ()
   assert.equal(output.conversations[0].messages[3].model, "gpt-5-thinking");
   assert.equal(output.conversations[1].messages[1].model, "");
   assert.equal(output.conversations[2].messages[1].model, "gpt-5-thinking");
-  assert.equal(output.conversations[2].messages[3].model, "gpt-5-thinking");
+  assert.equal(output.conversations[2].messages[3].model, "gpt-5.5-thinking");
 });
 
 test("exports keep model parameters separate from attachment metadata", () => {
@@ -656,7 +698,7 @@ test("text exports preserve readable Chinese content and normalized parameters",
   assertPublicJsonShape(payload);
   assert.equal(payload.conversations[0].title, "中文标题：导出检查");
   assert.equal(payload.conversations[0].messages[0].text, "请总结：模型、角色、参数需要清晰，不要乱码。");
-  assert.equal(payload.conversations[0].messages[1].model, "gpt-中文-2026");
+  assert.equal(payload.conversations[0].messages[1].model, "gpt-6-1-aurora");
   assert.deepEqual(payload.conversations[0].messages[1].parameters, {
     "reasoning.effort": "medium",
     top_p: 0.8
@@ -668,7 +710,7 @@ test("text exports preserve readable Chinese content and normalized parameters",
   assert.doesNotMatch(markdown, /\*\*Content\*\*/);
   assert.doesNotMatch(markdown, /```text\n请总结：模型、角色、参数需要清晰，不要乱码。/);
   // 模型作为附注;参数只保留在 JSON 数据里,可读面不展开
-  assert.match(markdown, /\*gpt-中文-2026\*/);
+  assert.match(markdown, /\*gpt-6-1-aurora\*/);
   assert.doesNotMatch(markdown, /reasoning\.effort/);
   assertNoInternalExportFields(json);
   assertNoInternalExportFields(markdown);
@@ -889,7 +931,7 @@ test("PDF export keeps Chinese readable in metadata and UTF-16 text stream", asy
   assert.match(buffer.toString("latin1"), /\/Subtype \/Type0/);
   assert.match(buffer.toString("latin1"), /\/Encoding \/UniGB-UCS2-H/);
   assert.match(streamText, /中文标题：导出检查/);
-  assert.match(streamText, /gpt-中文-2026/);
+  assert.match(streamText, /gpt-6-1-aurora/);
   assert.doesNotMatch(streamText, /Role: (?:user|assistant)/);
   assert.doesNotMatch(streamText, /reasoning\.effort:/);
   assert.match(streamText, /结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。/);
@@ -908,7 +950,7 @@ test("PNG export stores Chinese source text in UTF-8 iTXt metadata", async () =>
   assert.match(text, /中文标题：导出检查/);
   assert.match(text, /请总结：模型、角色、参数需要清晰，不要乱码。/);
   assert.match(text, /结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。/);
-  assert.match(text, /gpt-中文-2026/);
+  assert.match(text, /gpt-6-1-aurora/);
   assert.doesNotMatch(text, /\uFFFD|\?{2,}/);
   assertNoInternalExportFields(text);
 });
@@ -927,6 +969,144 @@ test("PNG browser export draws Chinese text directly instead of Unicode codepoin
     assert.match(visualText, /请总结：模型、角色、参数需要清晰，不要乱码。/);
     assert.match(visualText, /结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。/);
     assert.doesNotMatch(visualText, /U\+[0-9A-F]{4}/);
+  });
+});
+
+test("browser canvas export wraps long code lines instead of clipping them", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    const longCode = "X".repeat(180);
+    const longParagraph = "Y".repeat(180);
+    exporter.renderConversationsCanvas([
+      {
+        id: "long-code",
+        title: "Long code",
+        messages: [
+          { role: "assistant", text: longParagraph + "\n\n```text\n" + longCode + "\n```" }
+        ]
+      }
+    ]);
+
+    const codeChunks = drawnText.filter((text) => /^X+$/.test(text));
+    const paragraphChunks = drawnText.filter((text) => /^Y+$/.test(text));
+    assert.ok(codeChunks.length >= 3);
+    assert.ok(paragraphChunks.length >= 3);
+    assert.equal(codeChunks.join(""), longCode);
+    assert.equal(paragraphChunks.join(""), longParagraph);
+    assert.ok(codeChunks.every((text) => text.length <= 64));
+    assert.ok(paragraphChunks.every((text) => text.length <= 66));
+  });
+});
+
+test("browser canvas export renders Markdown links as readable labels and URLs", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    exporter.renderConversationsCanvas([{
+      id: "canvas-link",
+      title: "Canvas link",
+      messages: [{
+        id: "answer",
+        role: "assistant",
+        text: "参考：[ChatGPT](https://chatgpt.com/)"
+      }]
+    }]);
+
+    const visualText = drawnText.join("");
+    assert.match(visualText, /ChatGPT/);
+    assert.match(visualText, /https:\/\/chatgpt\.com\//);
+    assert.doesNotMatch(visualText, /\[ChatGPT\]\(/);
+  });
+});
+
+test("renderConversationsCanvasPages splits super-long readable exports before browser canvas limits", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    const longConversation = [{
+      id: "long-canvas",
+      title: "Super-long export",
+      messages: [{
+        id: "long-answer",
+        role: "assistant",
+        text: Array.from({ length: 900 }, (_, index) => `Readable line ${index + 1}`).join("\n")
+      }]
+    }];
+    const pages = exporter.renderConversationsCanvasPages(longConversation, { pageHeight: 700 });
+
+    assert.ok(pages.length > 10, "long output should be split into many bounded pages");
+    pages.forEach((page) => {
+      assert.equal(page.width, 1720);
+      assert.ok(page.height > 0 && page.height <= 1400, "DPR-scaled page height must stay bounded");
+    });
+    const readableLineNumbers = drawnText
+      .filter((text) => /^\d+$/.test(text))
+      .map(Number)
+      .filter((value) => value >= 1 && value <= 900);
+    const firstMismatch = readableLineNumbers.findIndex((value, index) => value !== index + 1);
+    assert.equal(
+      firstMismatch,
+      -1,
+      `source line order diverged near ${JSON.stringify(readableLineNumbers.slice(Math.max(0, firstMismatch - 3), firstMismatch + 5))}`
+    );
+    assert.equal(readableLineNumbers.length, 900, "every source line must be rendered exactly once across pages");
+    assert.equal(readableLineNumbers[0], 1);
+    assert.equal(readableLineNumbers.at(-1), 900);
+    assert.equal(new Set(readableLineNumbers).size, 900);
+
+    const tallPages = exporter.renderConversationsCanvasPages(longConversation, { pageHeight: 14000 });
+    assert.equal(tallPages[0].width, 860, "very tall PNG pages must use DPR 1 to avoid excessive canvas memory");
+  });
+});
+
+test("buildPdfBlobFromCanvases creates one PDF page per rendered canvas", async () => {
+  function canvas(width, height, shade) {
+    return {
+      width,
+      height,
+      getContext() {
+        return {
+          getImageData() {
+            const data = new Uint8ClampedArray(width * height * 4);
+            for (let index = 0; index < data.length; index += 4) {
+              data[index] = shade;
+              data[index + 1] = shade;
+              data[index + 2] = shade;
+              data[index + 3] = 255;
+            }
+            return { data };
+          }
+        };
+      }
+    };
+  }
+
+  const blob = await exporter.buildPdfBlobFromCanvases([canvas(4, 6, 255), canvas(4, 3, 220)]);
+  const buffer = await blobBuffer(blob);
+  const pdf = buffer.toString("latin1");
+
+  assert.equal(blob.type, exporter.MIME.pdf);
+  assertPdfStructure(buffer);
+  assert.match(pdf, /\/Type \/Pages \/Kids \[3 0 R 6 0 R\] \/Count 2/);
+});
+
+test("memory-safe browser renderers create paged PDF and PNG output directly from conversations", async () => {
+  await withMockCanvasDocument(async () => {
+    const longConversation = [{
+      id: "streamed-pages",
+      title: "Memory-safe pages",
+      messages: [{
+        id: "answer",
+        role: "assistant",
+        text: Array.from({ length: 90 }, (_, index) => `Page line ${index + 1}`).join("\n")
+      }]
+    }];
+
+    const pngPages = await exporter.renderConversationsPngBlobs(longConversation, { pageHeight: 700 });
+    assert.ok(pngPages.length > 2);
+    pngPages.forEach((blob) => assert.equal(blob.type, exporter.MIME.png));
+
+    const pdfBlob = await exporter.buildPdfBlobFromConversations(longConversation, { pageHeight: 700 });
+    const pdf = (await blobBuffer(pdfBlob)).toString("latin1");
+    const pageCount = Number((pdf.match(/\/Type \/Pages \/Kids \[[^\]]+\] \/Count (\d+)/) || [])[1]);
+    assert.equal(pdfBlob.type, exporter.MIME.pdf);
+    assert.ok(pageCount > 2);
+    assertPdfStructure(Buffer.from(await pdfBlob.arrayBuffer()));
   });
 });
 
@@ -974,17 +1154,24 @@ test("buildDocxRenderedBlob (runtime Word path) renders Markdown into Word struc
     messages: [{
       id: "a",
       role: "assistant",
-      text: "## 标题\n**粗体** 与 `代码`\n\n- 项目一\n- 项目二\n\n| A | B |\n|---|---|\n| 1 | 2 |"
+      text: "## 标题\n**粗体** 与 `代码`\n\n- 项目一\n- 项目二\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n参考：[ChatGPT](https://chatgpt.com/)"
     }]
   }];
   const blob = exporter.buildDocxRenderedBlob(md, {});
   const buffer = await blobBuffer(blob);
-  const xml = parseStoredZip(buffer)["word/document.xml"].toString("utf8");
+  const entries = parseStoredZip(buffer);
+  const xml = entries["word/document.xml"].toString("utf8");
+  const relationships = entries["word/_rels/document.xml.rels"].toString("utf8");
   assert.equal(blob.type, exporter.MIME.docx);
   assert.match(xml, /<w:tbl>/); // 表格渲染成 Word 表格
   assert.match(xml, /<w:b\/>/); // 行内加粗
+  assert.match(xml, /<w:hyperlink r:id="rIdLink1">/);
+  assert.match(xml, /ChatGPT \(https:\/\/chatgpt\.com\/\)/);
+  assert.match(relationships, /relationships\/hyperlink/);
+  assert.match(relationships, /Target="https:\/\/chatgpt\.com\/"/);
   assert.match(xml, /标题/);
   assert.doesNotMatch(xml, /\*\*粗体\*\*/); // 不再是原始 Markdown 记号
+  assert.doesNotMatch(xml, /\[ChatGPT\]\(/);
   assert.doesNotMatch(xml, /## 标题/);
   assert.doesNotMatch(xml, /\| A \| B \|/);
 });
@@ -1001,7 +1188,7 @@ test("createExport docx preserves Chinese content and declares East Asian run fo
   assert.match(documentXml, /中文标题：导出检查/);
   assert.match(documentXml, /请总结：模型、角色、参数需要清晰，不要乱码。/);
   assert.match(documentXml, /结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。/);
-  assert.match(documentXml, /gpt-中文-2026/);
+  assert.match(documentXml, /gpt-6-1-aurora/);
   assert.doesNotMatch(documentXml, /Role: (?:user|assistant)/);
   assert.doesNotMatch(documentXml, /reasoning\.effort:/);
   assert.doesNotMatch(documentXml, /\uFFFD|\?{2,}/);
@@ -1169,6 +1356,16 @@ test("exportPngDataUrl reports browser Canvas requirement outside browsers", asy
     exporter.exportPngDataUrl(conversations),
     /PNG export requires a browser environment/
   );
+});
+
+test("safeName produces portable filenames", () => {
+  assert.equal(exporter.safeName("CON"), "_CON");
+  assert.equal(exporter.safeName("nul.json"), "_nul.json");
+  assert.equal(exporter.safeName("COM1 report"), "COM1 report");
+  assert.equal(exporter.safeName("AUX.   "), "_AUX");
+  assert.equal(exporter.safeName("\x00Quarterly\x1f export.  "), "Quarterly export");
+  assert.equal(exporter.safeName("..."), "chatgpt-export");
+  assert.equal(exporter.safeName("   "), "chatgpt-export");
 });
 
 test("export functions reject non-array input", () => {
