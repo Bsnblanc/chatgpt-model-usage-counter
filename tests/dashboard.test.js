@@ -612,8 +612,9 @@ test("dashboard prefers stored session counts when cached range events undercoun
   });
 
   assert.match(html, /Stored capped session/);
-  assert.match(html, /3 times/);
-  assert.doesNotMatch(html, /Event capped session/);
+  assert.match(html, /Historical records not linked/);
+  assert.match(html, /Stored capped session[\s\S]*2 times/);
+  assert.match(html, /Event capped session[\s\S]*1 times/);
 });
 
 test("modelVariants falls back to stored variants when selected range events are empty", () => {
@@ -946,7 +947,28 @@ test("the default date range ends on the browser-local current day", () => {
   assert.equal(data.series[0].values.at(-1), 1);
 });
 
-test("renderModelTextList keeps parameters and conversation index inside each exact model record", () => {
+test("saved or entered future dates are clamped to the browser-local current day", () => {
+  const today = localDateKey();
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = localDateKey(tomorrowDate);
+
+  assert.equal(dashboard._test.dateNoLaterThanToday(tomorrow), today);
+  assert.equal(
+    dashboard._test.dateNoLaterThanToday("2026-05-30"),
+    "2026-05-30",
+  );
+
+  const controls = dashboard.renderDateControls({
+    language: "en",
+    startDate: today,
+    endDate: today,
+  });
+  assert.match(controls, new RegExp(`max="${today}"`, "g"));
+  assert.doesNotMatch(controls, new RegExp(`value="${tomorrow}"`));
+});
+
+test("renderModelTextList keeps legacy aggregate details and conversations inside each model record", () => {
   const html = dashboard.renderModelTextList(createStats(), { language: "en" });
 
   assert.match(html, /usage-model-record/);
@@ -961,13 +983,14 @@ test("renderModelTextList keeps parameters and conversation index inside each ex
   assert.match(html, /Features/);
   assert.match(html, /Deep Research/);
   assert.match(html, /Image generation/);
-  assert.match(html, /Conversations/);
+  assert.match(html, /Related conversations/);
   assert.match(html, /Thinking conversation/);
   assert.match(html, /Instant conversation/);
-  assert.match(html, /usage-record-sessions/);
+  assert.match(html, /usage-relation-conversation/);
+  assert.match(html, /Historical records not linked/);
 });
 
-test("renderModelTextList nests the conversation index in the matching exact model record", () => {
+test("renderModelTextList nests related conversations in the matching model record", () => {
   const html = dashboard.renderModelTextList(createStats(), { language: "en" });
   const recordStart = html.indexOf('<div class="usage-model-record">');
   const nextRecordStart = html.indexOf('<div class="usage-model-record">', recordStart + 1);
@@ -975,19 +998,18 @@ test("renderModelTextList nests the conversation index in the matching exact mod
 
   assert.notEqual(recordStart, -1);
   assert.match(modelRecord, /future-family-2026-thinking/);
-  assert.match(modelRecord, /usage-record-sessions/);
+  assert.match(modelRecord, /usage-relation-conversation/);
   assert.match(modelRecord, /data-session-id="conversation-alpha"/);
   assert.doesNotMatch(modelRecord, /data-session-id="conversation-beta"/);
 });
 
-test("model conversation index renders title links without selection controls", () => {
+test("related conversation rows render title links without selection controls", () => {
   const html = dashboard.renderModelTextList(createStats(), { language: "en" });
-  const rowStart = html.indexOf('<div class="usage-record-session-row">');
+  const rowStart = html.indexOf('<div class="usage-relation-conversation">');
   const metaStart = html.indexOf("<small>", rowStart);
   const indexRow = html.slice(rowStart, metaStart);
 
   assert.notEqual(rowStart, -1);
-  assert.match(indexRow, /usage-index-number/);
   assert.match(indexRow, /usage-index-link/);
   assert.match(indexRow, /data-session-id="conversation-alpha"/);
   assert.match(indexRow, /Thinking conversation/);
@@ -996,7 +1018,7 @@ test("model conversation index renders title links without selection controls", 
   assert.doesNotMatch(indexRow, />Open</);
 });
 
-test("usage count details keep model index in one flat hierarchy", () => {
+test("usage count details keep request-response relations and their conversations in one hierarchy", () => {
   const html = dashboard.renderActiveView(
     {
       language: "en",
@@ -1017,15 +1039,14 @@ test("usage count details keep model index in one flat hierarchy", () => {
   assert.match(html, /<div class="usage-count-row">/);
   assert.doesNotMatch(html, /data-model-record-toggle/);
   assert.doesNotMatch(html, /usage-count-caret/);
-  assert.match(details, /Parameters/);
+  assert.match(details, /future-family-2026-thinking[\s\S]*Response pending/);
+  assert.match(details, /Reasoning effort/);
   assert.match(details, /Features/);
-  assert.match(details, /Conversations/);
-  assert.match(details, /usage-record-sessions/);
+  assert.match(details, /Related conversations/);
+  assert.match(details, /usage-relation-conversation/);
   assert.doesNotMatch(details, /usage-session-titlebar/);
   assert.match(source, /\.usage-count-record\{[^}]*border:0;[^}]*border-bottom:1px solid var\(--usage-border-divider\);[^}]*background:transparent/);
-  assert.match(source, /\.usage-record-session-row\{[^}]*border:0;[^}]*background:transparent/);
-  assert.doesNotMatch(source, /\.usage-record-session-row\{[^}]*box-shadow/);
-  assert.doesNotMatch(source, /\.usage-record-session-row\{[^}]*border-radius/);
+  assert.match(source, /\.usage-model-relation\{[^}]*border:1px solid var\(--usage-border-panel\)/);
 });
 
 test("usage count details render inline without popup row toggles", () => {
@@ -1094,7 +1115,7 @@ test("usage date range filters model counts, features, parameters, and conversat
 
   assert.match(html, /future-family-2026-thinking[\s\S]*<b>2<\/b>/);
   assert.match(html, /Deep Research <b>2<\/b>/);
-  assert.match(html, /reasoning\.effort=high/);
+  assert.match(html, /Reasoning effort[\s\S]*<b>high<\/b> 2 times/);
   assert.match(html, /Thinking conversation/);
   assert.doesNotMatch(html, /Web search/);
   assert.doesNotMatch(html, /reasoning\.effort=low/);
@@ -1234,7 +1255,7 @@ test("modelVariants uses responseModel instead of the requested route for actual
   assert.equal(variants[0].apiModel, "gpt-5-6-pro");
 });
 
-test("request-only events remain pending and never appear as actual response models", () => {
+test("request-only events stay in a pending request-response relation", () => {
   const stats = createStats();
   stats.totals = { "GPT-5.6 Sol": 2 };
   stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 2 } };
@@ -1265,16 +1286,13 @@ test("request-only events remain pending and never appear as actual response mod
 
   assert.deepEqual(variants.map((variant) => [variant.name, variant.count]), [["gpt-5-6-pro", 1]]);
   assert.deepEqual(requests.map((request) => [request.name, request.count]), [["gpt-5-6-thinking", 2]]);
-  assert.match(html, /实际回复型号[\s\S]*gpt-5-6-pro/);
+  assert.match(html, /gpt-5-6-thinking<\/code><i>&rarr;<\/i><code>gpt-5-6-pro/);
   assert.match(html, /待确认实际回复/);
-  assert.match(html, /请求型号[\s\S]*gpt-5-6-thinking/);
-  assert.equal(
-    html.slice(html.indexOf("实际回复型号"), html.indexOf("请求型号")).includes("gpt-5-6-thinking"),
-    false
-  );
+  assert.equal((html.match(/gpt-5-6-pro/g) || []).length, 1);
+  assert.equal((html.match(/待确认实际回复/g) || []).length, 1);
 });
 
-test("chart count details also separate actual response, request, and pending models", () => {
+test("chart count details show each request-response pair and pending pair together", () => {
   const stats = createStats();
   stats.totals = { "GPT-5.6 Sol": 3 };
   stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 3 } };
@@ -1314,13 +1332,68 @@ test("chart count details also separate actual response, request, and pending mo
     ["GPT-5.6 Sol"]
   );
 
-  assert.match(html, /实际回复型号[\s\S]*gpt-5-6[\s\S]*gpt-5-6-thinking/);
+  assert.match(html, /gpt-5-6-thinking<\/code><i>&rarr;<\/i><code>gpt-5-6-thinking/);
+  assert.match(html, /gpt-5-6<\/code><i>&rarr;<\/i><code>gpt-5-6/);
   assert.match(html, /待确认实际回复/);
-  assert.match(html, /请求型号[\s\S]*gpt-5-6-thinking[\s\S]*gpt-5-6/);
-  assert.equal(
-    html.slice(html.indexOf("实际回复型号"), html.indexOf("请求型号")).includes("待确认实际回复"),
-    true
-  );
+  assert.equal((html.match(/class="usage-model-relation"/g) || []).length, 3);
+});
+
+test("Chat and Work contributions stay under the same exact request-response relation and their own conversations", () => {
+  const model = "5.6 Terra";
+  const stats = {
+    totals: { [model]: 2 },
+    byDate: { "2026-08-22": { [model]: 2 } },
+    models: { [model]: { label: model } },
+    sessionsByModel: {},
+    variantsByModel: {},
+    featuresByModel: {},
+    parametersByModel: {},
+    relationsByModel: {},
+    events: [
+      {
+        model,
+        requestModel: "gpt-5.6-terra-wm",
+        responseModel: "gpt-5.6-terra-wm",
+        modelParameters: { model: "gpt-5.6-terra-wm", "reasoning.effort": "high" },
+        usageFeatures: ["web_search"],
+        sourceMode: "work",
+        conversationId: "work-0001",
+        pageTitle: "Work research",
+        pageUrl: "https://chatgpt.com/c/work-0001",
+        submittedAt: "2026-08-22T16:10:00.000Z"
+      },
+      {
+        model,
+        requestModel: "gpt-5.6-terra-wm",
+        responseModel: "gpt-5.6-terra-wm",
+        modelParameters: { model: "gpt-5.6-terra-wm", "reasoning.effort": "low" },
+        usageFeatures: ["connectors"],
+        sourceMode: "chat",
+        conversationId: "chat-0001",
+        pageTitle: "Chat research",
+        pageUrl: "https://chatgpt.com/c/chat-0001",
+        submittedAt: "2026-08-22T16:00:00.000Z"
+      }
+    ]
+  };
+  const state = {
+    language: "en",
+    startDate: "2026-08-22",
+    endDate: "2026-08-22"
+  };
+  const relations = dashboard.modelRelations(stats, model, state);
+  const html = dashboard.renderModelTextList(stats, state);
+
+  assert.equal(relations.length, 1);
+  assert.equal(relations[0].count, 2);
+  assert.deepEqual(relations[0].efforts, { high: 1, low: 1 });
+  assert.deepEqual(relations[0].features, { web_search: 1, connectors: 1 });
+  assert.equal(Object.values(relations[0].conversations).reduce((sum, item) => sum + item.count, 0), 2);
+  assert.match(html, /gpt-5\.6-terra-wm<\/code><i>&rarr;<\/i><code>gpt-5\.6-terra-wm/);
+  assert.match(html, /Work research/);
+  assert.match(html, /Chat research/);
+  assert.match(html, /class="usage-source-mode work">Work/);
+  assert.match(html, /class="usage-source-mode chat">Chat/);
 });
 
 test("parameterCombinations prefers stored aggregate when available", () => {
@@ -1379,9 +1452,10 @@ test("renderOpenAIStatusPanel shows ChatGPT web availability without unrelated p
     }
   });
 
-  assert.match(html, /ChatGPT web status/);
+  assert.doesNotMatch(html, /ChatGPT web status/);
   assert.match(html, /Partially degraded service/);
   assert.match(html, /Last checked/);
+  assert.equal((html.match(/>From status\.openai\.com</g) || []).length, 1);
   assert.match(html, /Conversations/);
   assert.match(html, /Degraded performance/);
   assert.match(html, /ChatGPT/);
@@ -1881,6 +1955,55 @@ test("export checkbox changes update only existing controls without rebuilding o
   assert.equal(format.disabled, true);
   assert.equal(container.innerHTML, originalHtml);
   assert.equal(container.scrollTop, 137);
+});
+
+test("the current conversation is first and selected only on the first export-list load", () => {
+  const container = new DashboardTestContainer();
+  const state = {
+    container,
+    options: { surface: "page" },
+    language: "en",
+    activeView: "export",
+    startDate: "2026-08-01",
+    endDate: "2026-08-22",
+    selectedModels: {},
+    knownModels: {},
+    modelSelectionInitialized: true,
+    stats: {
+      totals: {},
+      byDate: {},
+      models: {},
+      sessionsByModel: {},
+      variantsByModel: {},
+      featuresByModel: {},
+      parametersByModel: {},
+      relationsByModel: {},
+      events: []
+    },
+    exportSelected: {},
+    exportSelectionInitialized: false,
+    exportBusy: false,
+    statusText: "",
+    statusError: false
+  };
+  const result = {
+    currentConversationId: "chat-current",
+    conversations: [
+      { id: "chat-old", title: "Older", updateTime: "2026-08-22T16:00:00.000Z" },
+      { id: "chat-current", title: "Current", updateTime: "2026-08-22T15:00:00.000Z" }
+    ],
+    complete: true,
+    source: "account"
+  };
+
+  dashboard._test.applyExportConversationList(state, result);
+  assert.deepEqual(state.exportConversationList.map((item) => item.id), ["chat-current", "chat-old"]);
+  assert.deepEqual(state.exportSelected, { "chat-current": true });
+  assert.match(container.innerHTML, /Current chat/);
+
+  state.exportSelected = {};
+  dashboard._test.applyExportConversationList(state, result);
+  assert.deepEqual(state.exportSelected, {}, "a user-cleared current conversation stays cleared on refresh");
 });
 
 test("export view reports an unavailable account index instead of showing an unexplained empty list", () => {

@@ -27,6 +27,7 @@
   var EXPLICIT_MODEL_CONTEXT_RE = /(?:当前模型|目前模型|模型|current model|selected model|active model)\s*[:：-]?\s*((?:GPT|ChatGPT|gpt)[A-Za-z0-9.\-\s]+|o\d+[A-Za-z0-9.\-\s]*|chat[-\s]?latest)/i;
 
   var MODEL_SELECTOR_HINTS = [
+    '[class*="SliderTriggerModelLabel"]',
     '[data-testid="model-switcher-dropdown-button"]',
     '[data-testid*="model-switcher" i]',
     '[aria-label*="model" i]',
@@ -76,6 +77,24 @@
     clean = clean.replace(/^ChatGPT/i, "GPT").replace(/^gpt/i, "GPT");
     if (modelCatalog && typeof modelCatalog.sanitizePublicModelLabel === "function") {
       return modelCatalog.sanitizePublicModelLabel(clean);
+    }
+    return clean.slice(0, MAX_LABEL_LENGTH);
+  }
+
+  function workPublicModelLabelFromElement(element) {
+    if (!element) {
+      return "";
+    }
+    var className = String(element.className || "");
+    if (!/SliderTriggerModelLabel/i.test(className)) {
+      return "";
+    }
+    var clean = normalizeWhitespace(element.innerText || element.textContent || "");
+    // Work exposes the public model and effort in separate explicit elements,
+    // for example "5.6 Terra" + "Light". Accept the model element only; never
+    // scan ordinary page text for this shorter non-GPT naming shape.
+    if (!/^\d+(?:\.\d+)+(?:\s+[A-Za-z][A-Za-z0-9.-]*){1,3}$/.test(clean)) {
+      return "";
     }
     return clean.slice(0, MAX_LABEL_LENGTH);
   }
@@ -207,6 +226,20 @@
       return null;
     }
 
+    var workPublicModel = workPublicModelLabelFromElement(element);
+    if (workPublicModel) {
+      return {
+        label: workPublicModel,
+        apiModel: "",
+        chatgptModel: "",
+        parameters: {},
+        selectedText: workPublicModel,
+        publicModel: workPublicModel,
+        selectedPublicModel: workPublicModel,
+        selectedPublicModelSource: "work-selector-dom"
+      };
+    }
+
     // Resolve each semantic source independently. Combining visible text with
     // data-testid/id values can turn UI implementation names such as
     // "model-switcher-dropdown-button" into a fake model suffix.
@@ -314,6 +347,7 @@
     var ariaLabel = getAttributeText(element, "aria-label");
     var role = getAttributeText(element, "role");
 
+    if (/SliderTriggerModelLabel/i.test(String(element && element.className || ""))) score += 100;
     if (/model-switcher/i.test(testId)) score += 80;
     if (/model/i.test(ariaLabel) || /模型/.test(ariaLabel)) score += 45;
     if (getAttributeText(element, "data-model") || getAttributeText(element, "data-model-id")) score += 55;
@@ -334,7 +368,8 @@
   }
 
   function hasExplicitModelSemantics(element) {
-    return /model-switcher/i.test(getAttributeText(element, "data-testid")) ||
+    return /SliderTriggerModelLabel/i.test(String(element && element.className || "")) ||
+      /model-switcher/i.test(getAttributeText(element, "data-testid")) ||
       /(?:model|模型)/i.test(getAttributeText(element, "aria-label")) ||
       Boolean(getAttributeText(element, "data-model") || getAttributeText(element, "data-model-id"));
   }

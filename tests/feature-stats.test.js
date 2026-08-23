@@ -193,7 +193,7 @@ test("future O-series labels become valid model identities and are counted", () 
   const stats = background.applyIncrement(background.createEmptyStats(), {
     model: info.label,
     apiModel: info.apiModel,
-    modelObservedSource: "message-dom:model-switcher",
+    modelObservedSource: "fetch-request:model",
     modelParameters: info.parameters,
     submittedAt: now.toISOString(),
     promptHash: "future-o-series",

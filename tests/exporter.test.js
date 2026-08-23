@@ -1155,9 +1155,9 @@ test("createExport docx returns an Office docx ZIP with selected content", async
   assert.ok(entries["_rels/.rels"]);
   assert.ok(entries["word/_rels/document.xml.rels"]);
   assert.ok(entries["word/styles.xml"]);
+  assert.ok(entries["word/footer1.xml"]);
   assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="Heading2"/);
   assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="ContentLabel"/);
-  assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="PromoFooter"/);
   assert.match(documentXml, /ChatGPT Conversation Export/);
   assert.match(documentXml, /· 4 条消息/);
   assert.match(documentXml, /Escaping &lt;check&gt;/);
@@ -1175,8 +1175,11 @@ test("createExport docx returns an Office docx ZIP with selected content", async
   assert.match(documentXml, /Hello \*\*world\*\*/);
   assert.match(documentXml, /Line &lt;2&gt;/);
   assert.match(documentXml, /Assistant answer with export details\./);
-  assert.match(documentXml, /ChatGPT Model Usage Counter · https:\/\/github\.com\/Bsnblanc\/chatgpt-model-usage-counter/);
-  assert.equal((documentXml.match(/w:pStyle w:val="PromoFooter"/g) || []).length, 1);
+  assert.match(documentXml, /w:footerReference w:type="default" r:id="rIdFooter"/);
+  assert.match(
+    entries["word/footer1.xml"].toString("utf8"),
+    /ChatGPT Model Usage Counter · https:\/\/github\.com\/Bsnblanc\/chatgpt-model-usage-counter/
+  );
   assert.doesNotMatch(documentXml, /Line <2>/);
   assertNoInternalExportFields(documentXml);
 });

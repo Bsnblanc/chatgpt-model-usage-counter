@@ -25,9 +25,13 @@
   var STORAGE_KEY = "chatgptModelUsageStats.v1";
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var STATUS_KEY = "chatgptModelUsageOpenAIStatus.v1";
+  var CATALOG_SESSION_KEY = "chatgptModelUsageCatalog.session.v1";
+  var CATALOG_REFRESH_SESSION_KEY = "chatgptModelUsageCatalogRefresh.session.v1";
   var STATUS_ALARM_NAME = "chatgpt-model-usage-openai-status";
   var STATUS_ALARM_PERIOD_MINUTES = 5;
   var MAX_EVENTS = 500;
+  var catalogRefreshClaimQueue = Promise.resolve();
+  var inMemoryCatalogRefreshClaims = {};
   var MAX_PARAMETER_KEYS = 48;
   var MAX_PARAMETER_ARRAY_ITEMS = 16;
   var MAX_PARAMETER_COMBINATIONS_PER_MODEL = 120;
@@ -76,6 +80,7 @@
       variantsByModel: {},
       featuresByModel: {},
       parametersByModel: {},
+      relationsByModel: {},
       events: [],
       lastUpdated: null
     };
@@ -98,13 +103,22 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : "";
   }
 
+  function dateSettingNoLaterThanToday(value, date) {
+    var clean = sanitizeDateSetting(value);
+    if (!clean) {
+      return "";
+    }
+    var today = todayKey(date);
+    return clean > today ? today : clean;
+  }
+
   function sanitizeSettings(settings) {
     var base = settings && typeof settings === "object" ? settings : createDefaultSettings();
     return {
       version: 1,
       language: normalizeLanguage(base.language),
-      startDate: sanitizeDateSetting(base.startDate),
-      endDate: sanitizeDateSetting(base.endDate)
+      startDate: dateSettingNoLaterThanToday(base.startDate),
+      endDate: dateSettingNoLaterThanToday(base.endDate)
     };
   }
 
@@ -118,7 +132,10 @@
 
   function cloneStats(stats) {
     var base = stats && typeof stats === "object" ? stats : createEmptyStats();
-    activeRuntimeModelCatalog = sanitizeRuntimeModelCatalog(base.runtimeModelCatalog);
+    var migratedCatalog = sanitizeRuntimeModelCatalog(base.runtimeModelCatalog);
+    if (migratedCatalog) {
+      activeRuntimeModelCatalog = migratedCatalog;
+    }
     var rebuiltFromEvents = rebuildStatsFromCompleteEventHistory(base);
     if (rebuiltFromEvents) {
       return rebuiltFromEvents;
@@ -130,6 +147,7 @@
     var variantsByModel = {};
     var featuresByModel = {};
     var parametersByModel = {};
+    var relationsByModel = {};
     var sourceTotals = base.totals || {};
     var sourceByDate = base.byDate || {};
     var sourceModels = base.models || {};
@@ -137,6 +155,7 @@
     var sourceVariantsByModel = base.variantsByModel || {};
     var sourceFeaturesByModel = base.featuresByModel || {};
     var sourceParametersByModel = base.parametersByModel || {};
+    var sourceRelationsByModel = base.relationsByModel || {};
 
     Object.keys(sourceTotals).forEach(function copyTotal(model) {
       var metadata = sourceModels[model];
@@ -249,6 +268,21 @@
       }
     });
 
+    Object.keys(sourceRelationsByModel).forEach(function copyModelRelations(model) {
+      var metadata = sourceModels[model];
+      var canonicalModel = canonicalStoredModelName(model, metadata);
+      if (!isStoredModelValid(canonicalModel, metadata, model)) {
+        return;
+      }
+      var cleanRelations = sanitizeModelRelationStats(sourceRelationsByModel[model]);
+      if (Object.keys(cleanRelations).length) {
+        relationsByModel[canonicalModel] = mergeModelRelationStats(
+          relationsByModel[canonicalModel],
+          cleanRelations
+        );
+      }
+    });
+
     var cloned = {
       version: 1,
       totals: totals,
@@ -258,6 +292,7 @@
       variantsByModel: variantsByModel,
       featuresByModel: featuresByModel,
       parametersByModel: parametersByModel,
+      relationsByModel: relationsByModel,
       events: Array.isArray(base.events)
         ? base.events.reduce(function copyEvents(events, event) {
             if (!event) {
@@ -277,9 +312,6 @@
         : [],
       lastUpdated: base.lastUpdated || null
     };
-    if (activeRuntimeModelCatalog) {
-      cloned.runtimeModelCatalog = activeRuntimeModelCatalog;
-    }
     return cloned;
   }
 
@@ -390,11 +422,284 @@
     };
   }
 
+  function directWorkPublicModel(requestModel, responseModel, metadata, selectedMetadata) {
+    var source = metadata && typeof metadata === "object" ? metadata : {};
+    var selected = selectedMetadata || resolveSelectedPublicModelMetadata(requestModel, source);
+    var requestSlug = sanitizeChatGPTModel(requestModel);
+    var responseSlug = sanitizeChatGPTModel(responseModel);
+    if (
+      normalizeSourceMode(source.sourceMode) !== "work" ||
+      !/^work-selector-dom$/i.test(String(selected.selectedPublicModelSource || "")) ||
+      !selected.selectedPublicModel ||
+      !isChatGPTRequestRoute(requestSlug) ||
+      (responseSlug && responseSlug !== requestSlug)
+    ) {
+      return "";
+    }
+    return sanitizePublicModelName(selected.selectedPublicModel);
+  }
+
   function sanitizeTitle(value) {
     return String(value || "")
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 180);
+  }
+
+  function normalizeSourceMode(value) {
+    var clean = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    if (clean === "chat" || clean === "work") {
+      return clean;
+    }
+    return "unknown";
+  }
+
+  function reasoningEffortFromEvent(event) {
+    var parameters = event && event.modelParameters && typeof event.modelParameters === "object"
+      ? event.modelParameters
+      : {};
+    var value = parameters["reasoning.effort"] || parameters.reasoning_effort;
+    if (!value && parameters.reasoning && typeof parameters.reasoning === "object") {
+      value = parameters.reasoning.effort;
+    }
+    var clean = String(value || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 32);
+    return clean || "unspecified";
+  }
+
+  function relationKey(requestModel, responseModel) {
+    return String(requestModel || "") + "\u0001" + String(responseModel || "");
+  }
+
+  function sanitizeRelationConversation(value, conversationId) {
+    var source = value && typeof value === "object" ? value : {};
+    var id = String(conversationId || source.conversationId || "").trim().slice(0, 128);
+    if (!id) {
+      return null;
+    }
+    var pending = /^pending:/.test(id);
+    return {
+      conversationId: id,
+      title: pending ? sanitizeTitle(source.title || source.pageTitle) : sanitizeTitle(source.title || source.pageTitle || id),
+      count: sanitizeCount(source.count),
+      firstSubmittedAt: String(source.firstSubmittedAt || "").slice(0, 48),
+      lastSubmittedAt: String(source.lastSubmittedAt || "").slice(0, 48),
+      lastPageUrl: pending ? "" : String(source.lastPageUrl || source.pageUrl || "").slice(0, 500),
+      sourceMode: normalizeSourceMode(source.sourceMode)
+    };
+  }
+
+  function sanitizeModelRelationStats(value) {
+    var source = value && typeof value === "object" ? value : {};
+    var clean = {};
+    Object.keys(source).slice(0, 400).forEach(function copyRelation(key) {
+      var relation = source[key] && typeof source[key] === "object" ? source[key] : {};
+      var requestModel = sanitizeChatGPTModel(relation.requestModel);
+      var responseModel = sanitizeChatGPTModel(relation.responseModel);
+      if (!isChatGPTRequestRoute(requestModel) || (responseModel && !isActualRequestModel(responseModel))) {
+        return;
+      }
+      var count = sanitizeCount(relation.count);
+      if (count <= 0) {
+        return;
+      }
+      var efforts = {};
+      Object.keys(relation.efforts || {}).slice(0, 40).forEach(function copyEffort(effort) {
+        var effortKey = String(effort || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 32) || "unspecified";
+        var effortCount = sanitizeCount(relation.efforts[effort]);
+        if (effortCount > 0) {
+          efforts[effortKey] = (efforts[effortKey] || 0) + effortCount;
+        }
+      });
+      var features = {};
+      Object.keys(relation.features || {}).slice(0, 40).forEach(function copyFeature(feature) {
+        var featureId = sanitizeUsageFeatureId(feature);
+        var featureCount = sanitizeCount(relation.features[feature]);
+        if (featureId && featureCount > 0) {
+          features[featureId] = (features[featureId] || 0) + featureCount;
+        }
+      });
+      var sourceModes = {};
+      Object.keys(relation.sourceModes || {}).slice(0, 4).forEach(function copySourceMode(mode) {
+        var sourceMode = normalizeSourceMode(mode);
+        var sourceModeCount = sanitizeCount(relation.sourceModes[mode]);
+        if (sourceModeCount > 0) {
+          sourceModes[sourceMode] = (sourceModes[sourceMode] || 0) + sourceModeCount;
+        }
+      });
+      var conversations = {};
+      Object.keys(relation.conversations || {}).slice(0, 5000).forEach(function copyConversation(id) {
+        var conversation = sanitizeRelationConversation(relation.conversations[id], id);
+        if (conversation && conversation.count > 0) {
+          conversations[conversation.conversationId] = conversation;
+        }
+      });
+      clean[relationKey(requestModel, responseModel)] = {
+        requestModel: requestModel,
+        responseModel: responseModel,
+        count: count,
+        efforts: efforts,
+        features: features,
+        sourceModes: sourceModes,
+        conversations: conversations,
+        firstSubmittedAt: String(relation.firstSubmittedAt || "").slice(0, 48),
+        lastSubmittedAt: String(relation.lastSubmittedAt || "").slice(0, 48)
+      };
+    });
+    return clean;
+  }
+
+  function mergeModelRelationStats(left, right) {
+    var merged = sanitizeModelRelationStats(left);
+    var source = sanitizeModelRelationStats(right);
+    Object.keys(source).forEach(function mergeRelation(key) {
+      var incoming = source[key];
+      var existing = merged[key];
+      if (!existing) {
+        merged[key] = incoming;
+        return;
+      }
+      existing.count += incoming.count;
+      Object.keys(incoming.efforts).forEach(function addEffort(effort) {
+        existing.efforts[effort] = (existing.efforts[effort] || 0) + incoming.efforts[effort];
+      });
+      Object.keys(incoming.features).forEach(function addFeature(feature) {
+        existing.features[feature] = (existing.features[feature] || 0) + incoming.features[feature];
+      });
+      Object.keys(incoming.sourceModes).forEach(function addSourceMode(sourceMode) {
+        existing.sourceModes[sourceMode] = (existing.sourceModes[sourceMode] || 0) + incoming.sourceModes[sourceMode];
+      });
+      Object.keys(incoming.conversations).forEach(function addConversation(id) {
+        var next = incoming.conversations[id];
+        var current = existing.conversations[id];
+        if (!current) {
+          existing.conversations[id] = next;
+          return;
+        }
+        current.count += next.count;
+        current.firstSubmittedAt = mergeTimestamp(current.firstSubmittedAt, next.firstSubmittedAt, true);
+        if (String(next.lastSubmittedAt || "") >= String(current.lastSubmittedAt || "")) {
+          current.lastSubmittedAt = next.lastSubmittedAt;
+          current.lastPageUrl = next.lastPageUrl || current.lastPageUrl;
+          current.title = next.title || current.title;
+          current.sourceMode = next.sourceMode || current.sourceMode;
+        }
+      });
+      existing.firstSubmittedAt = mergeTimestamp(existing.firstSubmittedAt, incoming.firstSubmittedAt, true);
+      existing.lastSubmittedAt = mergeTimestamp(existing.lastSubmittedAt, incoming.lastSubmittedAt, false);
+    });
+    return merged;
+  }
+
+  function updateRelationStats(stats, model, event) {
+    var requestModel = exactRequestModelFromMetadata(event);
+    var responseModel = exactResponseModelFromMetadata(event);
+    if (!model || !requestModel) {
+      return;
+    }
+    if (!stats.relationsByModel) {
+      stats.relationsByModel = {};
+    }
+    var relations = sanitizeModelRelationStats(stats.relationsByModel[model]);
+    var key = relationKey(requestModel, responseModel);
+    var submittedAt = String((event && event.submittedAt) || new Date().toISOString()).slice(0, 48);
+    var relation = relations[key] || {
+      requestModel: requestModel,
+      responseModel: responseModel,
+      count: 0,
+      efforts: {},
+      features: {},
+      sourceModes: {},
+      conversations: {},
+      firstSubmittedAt: submittedAt,
+      lastSubmittedAt: ""
+    };
+    relation.count += 1;
+    relation.firstSubmittedAt = relation.firstSubmittedAt || submittedAt;
+    relation.lastSubmittedAt = submittedAt;
+    var effort = reasoningEffortFromEvent(event);
+    relation.efforts[effort] = (relation.efforts[effort] || 0) + 1;
+    normalizeUsageFeatures(event && event.usageFeatures, event && event.modelParameters, model).forEach(function addFeature(feature) {
+      relation.features[feature] = (relation.features[feature] || 0) + 1;
+    });
+    var sourceMode = normalizeSourceMode(event && event.sourceMode);
+    relation.sourceModes[sourceMode] = (relation.sourceModes[sourceMode] || 0) + 1;
+    var actualConversationId = String(
+      (event && event.conversationId) || extractConversationId(event && event.pageUrl)
+    ).slice(0, 128);
+    var pendingConversationId = !actualConversationId && event && event.submissionId
+      ? "pending:" + String(event.submissionId).slice(0, 96)
+      : "";
+    var conversationId = actualConversationId || pendingConversationId;
+    if (conversationId) {
+      var conversation = relation.conversations[conversationId] || {
+        conversationId: conversationId,
+        title: actualConversationId
+          ? (sanitizeTitle(event && event.pageTitle) || conversationId)
+          : "",
+        count: 0,
+        firstSubmittedAt: submittedAt,
+        lastSubmittedAt: "",
+        lastPageUrl: String((event && event.pageUrl) || "").slice(0, 500),
+        sourceMode: sourceMode
+      };
+      conversation.count += 1;
+      conversation.firstSubmittedAt = conversation.firstSubmittedAt || submittedAt;
+      if (submittedAt >= String(conversation.lastSubmittedAt || "")) {
+        conversation.lastSubmittedAt = submittedAt;
+        conversation.lastPageUrl = actualConversationId
+          ? String((event && event.pageUrl) || conversation.lastPageUrl || "").slice(0, 500)
+          : "";
+        conversation.title = actualConversationId
+          ? (sanitizeTitle(event && event.pageTitle) || conversation.title)
+          : "";
+        conversation.sourceMode = sourceMode;
+      }
+      relation.conversations[conversationId] = conversation;
+    }
+    relations[key] = relation;
+    stats.relationsByModel[model] = relations;
+  }
+
+  function removeRelationContribution(stats, model, event) {
+    var relations = stats.relationsByModel && sanitizeModelRelationStats(stats.relationsByModel[model]);
+    var requestModel = exactRequestModelFromMetadata(event);
+    var responseModel = exactResponseModelFromMetadata(event);
+    if (!relations || !requestModel) {
+      return;
+    }
+    var key = relationKey(requestModel, responseModel);
+    var relation = relations[key];
+    if (!relation) {
+      return;
+    }
+    relation.count = Math.max(0, relation.count - 1);
+    decrementCountEntry(relation.efforts, reasoningEffortFromEvent(event), 1);
+    normalizeUsageFeatures(event && event.usageFeatures, event && event.modelParameters, model).forEach(function removeFeature(feature) {
+      decrementCountEntry(relation.features, feature, 1);
+    });
+    decrementCountEntry(relation.sourceModes, normalizeSourceMode(event && event.sourceMode), 1);
+    var actualConversationId = String(
+      (event && event.conversationId) || extractConversationId(event && event.pageUrl)
+    ).slice(0, 128);
+    var conversationId = actualConversationId || (
+      event && event.submissionId ? "pending:" + String(event.submissionId).slice(0, 96) : ""
+    );
+    if (conversationId && relation.conversations[conversationId]) {
+      relation.conversations[conversationId].count = Math.max(0, relation.conversations[conversationId].count - 1);
+      if (!relation.conversations[conversationId].count) {
+        delete relation.conversations[conversationId];
+      }
+    }
+    if (relation.count > 0) {
+      relations[key] = relation;
+    } else {
+      delete relations[key];
+    }
+    if (Object.keys(relations).length) {
+      stats.relationsByModel[model] = relations;
+    } else {
+      delete stats.relationsByModel[model];
+    }
   }
 
   function extractConversationId(pageUrl) {
@@ -496,7 +801,7 @@
   }
 
   function isTrustedRequestModelSource(source) {
-    return /^(webRequest|fetch-request|xhr-request|fetch-response|xhr-response|fetch-url|xhr-url|message-dom)(?::|$)/i.test(String(source || ""));
+    return /^(webRequest|fetch-request|xhr-request|fetch-response|xhr-response|fetch-url|xhr-url)(?::|$)/i.test(String(source || ""));
   }
 
   function isAmbiguousChatGPTFamilySlug(model) {
@@ -560,6 +865,9 @@
 
   function exactRequestModelFromMetadata(metadata) {
     var source = metadata && typeof metadata === "object" ? metadata : {};
+    if (source.requestModelEvidence === "unavailable") {
+      return "";
+    }
     var sourceParameters = modelParametersFromMetadata(source);
     var candidates = [
       source.requestModel,
@@ -678,6 +986,19 @@
     if (runtimePublic && runtimePublic.mappingStatus === "mapped" && runtimePublic.publicModel) {
       return sanitizePublicModelName(runtimePublic.publicModel);
     }
+    var selectedMetadata = resolveSelectedPublicModelMetadata(
+      exactRequestModelFromMetadata(metadata),
+      metadata
+    );
+    var workPublicModel = directWorkPublicModel(
+      exactRequestModelFromMetadata(metadata),
+      exactResponseModelFromMetadata(metadata),
+      metadata,
+      selectedMetadata
+    );
+    if (workPublicModel) {
+      return workPublicModel;
+    }
     if (exactResponseModelFromMetadata(metadata)) {
       if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
         var responseResolved = modelCatalog.resolveModelInfo(exactModel);
@@ -788,9 +1109,17 @@
         selectedPublicModelSource: source.selectedPublicModelSource || previous.selectedPublicModelSource
       })
     );
+    var sourceMode = normalizeSourceMode(source.sourceMode || previous.sourceMode);
+    var workPublicModel = directWorkPublicModel(
+      requestModel,
+      responseModel,
+      Object.assign({}, previous, source, { sourceMode: sourceMode }),
+      selectedMetadata
+    );
     var publicModel = responseModel
       ? sanitizePublicModelName(
           (runtimePublic && runtimePublic.mappingStatus === "mapped" && runtimePublic.publicModel) ||
+          workPublicModel ||
           canonicalModel
         )
       : sanitizePublicModelName(
@@ -827,11 +1156,22 @@
       mode: mode,
       modelIdentitySource: responseModel ? "response-model" : "request-model",
       observedSource: observedSource,
-      modelMappingStatus: String((runtimePublic && runtimePublic.mappingStatus) || source.modelMappingStatus || previous.modelMappingStatus || "").slice(0, 24),
+      sourceMode: sourceMode,
+      modelMappingStatus: String(
+        runtimePublic && runtimePublic.mappingStatus === "mapped"
+          ? "mapped"
+          : workPublicModel
+            ? "selector"
+            : (runtimePublic && runtimePublic.mappingStatus) || source.modelMappingStatus || previous.modelMappingStatus || ""
+      ).slice(0, 24),
       publicModelSource: String(
-        responseModel && runtimePublic && runtimePublic.mappingStatus !== "mapped"
-          ? "unmapped-response-slug"
-          : (runtimePublic && runtimePublic.source) || source.publicModelSource || previous.publicModelSource || ""
+        runtimePublic && runtimePublic.mappingStatus === "mapped"
+          ? runtimePublic.source
+          : workPublicModel
+            ? "work-selector+same-route"
+            : responseModel && runtimePublic && runtimePublic.mappingStatus !== "mapped"
+              ? "unmapped-response-slug"
+              : (runtimePublic && runtimePublic.source) || source.publicModelSource || previous.publicModelSource || ""
       ).slice(0, 80),
       catalogObservedAt: String((runtimePublic && runtimePublic.catalogObservedAt) || source.catalogObservedAt || previous.catalogObservedAt || "").slice(0, 48),
       deprecated: Boolean(source.deprecated || previous.deprecated || (resolved && resolved.deprecated)),
@@ -841,10 +1181,30 @@
 
   function canonicalizeStoredEvent(event, canonicalModel, metadata) {
     var sourceEvent = event && typeof event === "object" ? event : {};
-    var requestModel = exactRequestModelFromMetadata(sourceEvent) || exactRequestModelFromMetadata(metadata);
+    var requestModelUnavailable = metadata && metadata.requestModelEvidence === "unavailable";
+    var requestModel = requestModelUnavailable
+      ? ""
+      : exactRequestModelFromMetadata(sourceEvent) || exactRequestModelFromMetadata(metadata);
     var responseModel = exactResponseModelFromMetadata(sourceEvent) || exactResponseModelFromMetadata(metadata);
     var identityModel = responseModel || requestModel;
     var eventParameters = sanitizeModelParameters(sourceEvent.modelParameters || sourceEvent.parameters || {}, "");
+    if (requestModelUnavailable) {
+      [
+        "model",
+        "api_model",
+        "apimodel",
+        "chatgpt_model",
+        "chatgptmodel",
+        "selected_model",
+        "selectedmodel",
+        "model_slug",
+        "modelslug",
+        "model_id",
+        "modelid"
+      ].forEach(function removeUnprovenRequestModel(key) {
+        delete eventParameters[key];
+      });
+    }
     if (requestModel) {
       eventParameters.model = requestModel;
     }
@@ -860,10 +1220,18 @@
         selectedPublicModelSource: sourceEvent.selectedPublicModelSource || (metadata && metadata.selectedPublicModelSource)
       })
     );
-    var apiModel = requestModel || sanitizeApiModel(sourceEvent.apiModel);
+    var sourceMode = normalizeSourceMode(sourceEvent.sourceMode);
+    var workPublicModel = directWorkPublicModel(
+      requestModel,
+      responseModel,
+      Object.assign({}, metadata || {}, sourceEvent, { sourceMode: sourceMode }),
+      selectedMetadata
+    );
+    var apiModel = requestModelUnavailable ? "" : requestModel || sanitizeApiModel(sourceEvent.apiModel);
     var publicModel = responseModel
       ? sanitizePublicModelName(
           (runtimePublic && runtimePublic.mappingStatus === "mapped" && runtimePublic.publicModel) ||
+          workPublicModel ||
           canonicalModel
         )
       : sanitizePublicModelName(
@@ -884,24 +1252,36 @@
       selectedPublicModel: selectedMetadata.selectedPublicModel,
       selectedPublicModelSource: selectedMetadata.selectedPublicModelSource,
       requestModel: requestModel,
+      requestModelEvidence: requestModelUnavailable ? "unavailable" : "trusted",
       responseModel: responseModel,
       apiModel: apiModel,
       chatgptModel: chatgptModel,
       modelMode: modelMode,
       modelIdentitySource: responseModel ? "response-model" : "request-model",
-      modelMappingStatus: String((runtimePublic && runtimePublic.mappingStatus) || sourceEvent.modelMappingStatus || (metadata && metadata.modelMappingStatus) || "").slice(0, 24),
+      modelMappingStatus: String(
+        runtimePublic && runtimePublic.mappingStatus === "mapped"
+          ? "mapped"
+          : workPublicModel
+            ? "selector"
+            : (runtimePublic && runtimePublic.mappingStatus) || sourceEvent.modelMappingStatus || (metadata && metadata.modelMappingStatus) || ""
+      ).slice(0, 24),
       publicModelSource: String(
-        responseModel && runtimePublic && runtimePublic.mappingStatus !== "mapped"
-          ? "unmapped-response-slug"
-          : (runtimePublic && runtimePublic.source) || sourceEvent.publicModelSource || (metadata && metadata.publicModelSource) || ""
+        runtimePublic && runtimePublic.mappingStatus === "mapped"
+          ? runtimePublic.source
+          : workPublicModel
+            ? "work-selector+same-route"
+            : responseModel && runtimePublic && runtimePublic.mappingStatus !== "mapped"
+              ? "unmapped-response-slug"
+              : (runtimePublic && runtimePublic.source) || sourceEvent.publicModelSource || (metadata && metadata.publicModelSource) || ""
       ).slice(0, 80),
       catalogObservedAt: String((runtimePublic && runtimePublic.catalogObservedAt) || sourceEvent.catalogObservedAt || (metadata && metadata.catalogObservedAt) || "").slice(0, 48),
       modelParameters: eventParameters,
       usageFeatures: normalizeUsageFeatures(sourceEvent.usageFeatures, eventParameters, canonicalModel)
     });
-    // The account catalog is stored once at stats.runtimeModelCatalog. Keeping
-    // the same catalog inside every event wastes extension storage and can make
-    // long histories exceed Chrome's local-storage budget.
+    cleanEvent.sourceMode = sourceMode;
+    // The account catalog is kept in chrome.storage.session. Keeping the same
+    // catalog inside every event wastes local storage and can make long
+    // histories exceed Chrome's storage budget.
     delete cleanEvent.runtimeModelCatalog;
     return cleanEvent;
   }
@@ -1682,6 +2062,7 @@
     if (/^(canvas|canvases|canvas_mode|canvasmode)$/.test(versionless)) return "canvas";
     if (/^(file_upload|fileupload|attachment|attachments|file_attachment)$/.test(versionless)) return "file_upload";
     if (/^(code_interpreter|codeinterpreter|data_analysis|dataanalysis|python)$/.test(versionless)) return "code_interpreter";
+    if (/^(connectors|connector|apps|connected_apps|connectedapps)$/.test(versionless)) return "connectors";
     if (/^(gpts|gpt_id|gptid|gizmo|gizmo_id|gizmoid|custom_gpt|customgpt)$/.test(versionless)) return "gpts";
     if (/^(tasks|scheduled_task|scheduledtask|scheduled_tasks)$/.test(versionless)) return "tasks";
     return "";
@@ -1698,6 +2079,7 @@
     if (clean === "canvas") return "Canvas";
     if (clean === "file_upload") return "File upload";
     if (clean === "code_interpreter") return "Code interpreter";
+    if (clean === "connectors") return "Connectors";
     if (clean === "gpts") return "GPTs";
     if (clean === "tasks") return "Tasks";
     return clean;
@@ -1824,6 +2206,9 @@
     if (/code[_\-\s]?interpreter|(?:^|[._\-\s])python(?:$|[._\-\s])|data[_\-\s]?analysis/.test(combined)) {
       addUsageFeature(target, "code_interpreter");
     }
+    if (/(?:^|[._\-\s])connectors?(?:$|[._\-\s])|connected[_\-\s]?apps?/.test(combined)) {
+      addUsageFeature(target, "connectors");
+    }
     if (/(?:^|[._\-\s])gpts(?:$|[._\-\s])|gizmo(?:[_\-\s]?id)?|gpt[_\-\s]?id|custom[_\-\s]?gpt/.test(combined)) {
       addUsageFeature(target, "gpts");
     }
@@ -1833,7 +2218,7 @@
   }
 
   function isUsageFeatureSignalRoot(part) {
-    return /^(?:model|features?|enabled[-_]?features?|capabilities|enabled[-_]?capabilities|tools?|enabled[-_]?tools|conversation[-_]?mode|agent|agent[-_]?mode|agentmode|research|deep[-_]?(?:research|search)|deepresearch|deepsearch|imagegen|gpt[-_]?image|dall[-_]?e|dalle|image[-_]?generation(?:[-_]?options)?|imagegeneration(?:[-_]?options)?|web[-_]?search(?:[-_]?options)?|websearch(?:[-_]?options)?|search|input[-_]?audio|output[-_]?audio|input[-_]?audio[-_]?transcription|audio|modalities|output[-_]?modalities|input[-_]?audio[-_]?format|output[-_]?audio[-_]?format|transcription|transcribe|tts|whisper|realtime|real[-_]?time|realtime[-_]?mode|real[-_]?time[-_]?mode|audio[-_]?mode|voice[-_]?mode|voice|advanced[-_]?voice|canvas[-_]?mode|canvas|canvases|file[-_]?upload|attachments?|uploads?|code[-_]?interpreter|python|data[-_]?analysis|gpts|gizmo|gizmo[-_]?id|gpt[-_]?id|custom[-_]?gpt|tasks?|scheduled[-_]?tasks?|system[-_]?hints?|force[-_]?use[-_]?search|client[-_]?reported[-_]?search[-_]?source|search[-_]?source)$/i.test(part);
+    return /^(?:model|features?|enabled[-_]?features?|capabilities|enabled[-_]?capabilities|tools?|enabled[-_]?tools|conversation[-_]?mode|agent|agent[-_]?mode|agentmode|research|deep[-_]?(?:research|search)|deepresearch|deepsearch|imagegen|gpt[-_]?image|dall[-_]?e|dalle|image[-_]?generation(?:[-_]?options)?|imagegeneration(?:[-_]?options)?|web[-_]?search(?:[-_]?options)?|websearch(?:[-_]?options)?|search|input[-_]?audio|output[-_]?audio|input[-_]?audio[-_]?transcription|audio|modalities|output[-_]?modalities|input[-_]?audio[-_]?format|output[-_]?audio[-_]?format|transcription|transcribe|tts|whisper|realtime|real[-_]?time|realtime[-_]?mode|real[-_]?time[-_]?mode|audio[-_]?mode|voice[-_]?mode|voice|advanced[-_]?voice|canvas[-_]?mode|canvas|canvases|file[-_]?upload|attachments?|uploads?|code[-_]?interpreter|python|data[-_]?analysis|connectors?|connected[-_]?apps?|gpts|gizmo|gizmo[-_]?id|gpt[-_]?id|custom[-_]?gpt|tasks?|scheduled[-_]?tasks?|system[-_]?hints?|force[-_]?use[-_]?search|client[-_]?reported[-_]?search[-_]?source|search[-_]?source)$/i.test(part);
   }
 
   function isUsageFeatureSignalPath(parts) {
@@ -1930,7 +2315,7 @@
 
   function collectUsageFeaturesFromText(text, target) {
     var clean = String(text || "").trim();
-    if (!clean || !/(image|imagegen|gpt[_-]?image|dall|dall[_-]?e|deep.?research|deep.?search|deepsearch|agent|web.?search|\bsearch\b|force[_-]?use[_-]?search|system[_-]?hints?|search[_-]?source|realtime|real.?time|audio|input[_-]?audio|output[_-]?audio|voice|advanced[_-]?voice|transcription|tts|whisper|conversation_mode|canvas|canvases)/i.test(clean)) {
+    if (!clean || !/(image|imagegen|gpt[_-]?image|dall|dall[_-]?e|deep.?research|deep.?search|deepsearch|agent|web.?search|\bsearch\b|force[_-]?use[_-]?search|system[_-]?hints?|search[_-]?source|realtime|real.?time|audio|input[_-]?audio|output[_-]?audio|voice|advanced[_-]?voice|transcription|tts|whisper|conversation_mode|canvas|canvases|file.?upload|attachments?|code.?interpreter|data.?analysis|python|connectors?|connected.?apps?|gpts?|gizmo|tasks?)/i.test(clean)) {
       return;
     }
     collectUsageFeaturesFromRawText(clean, target);
@@ -2222,6 +2607,7 @@
     removeParameterContribution(stats, model, event);
     removeFeatureContribution(stats, model, event);
     removeSessionContribution(stats, model, event);
+    removeRelationContribution(stats, model, event);
     if (!sanitizeCount(stats.totals[model])) {
       delete stats.models[model];
     }
@@ -2251,6 +2637,7 @@
       promptLength: Number((event && event.promptLength) || 0),
       submittedAt: submittedAt
     });
+    updateRelationStats(stats, model, event);
   }
 
   function addNetworkParameter(parameters, key, value, priority) {
@@ -2366,15 +2753,105 @@
     return "";
   }
 
+  function sourceModeFromExplicitValue(value, depth) {
+    if (depth > 4 || value == null) {
+      return "unknown";
+    }
+    if (typeof value === "string") {
+      var direct = normalizeSourceMode(value);
+      if (direct !== "unknown") {
+        return direct;
+      }
+      try {
+        return sourceModeFromExplicitValue(JSON.parse(value), depth + 1);
+      } catch (_) {
+        return "unknown";
+      }
+    }
+    if (Array.isArray(value)) {
+      for (var arrayIndex = 0; arrayIndex < Math.min(16, value.length); arrayIndex += 1) {
+        var arrayMode = sourceModeFromExplicitValue(value[arrayIndex], depth + 1);
+        if (arrayMode !== "unknown") {
+          return arrayMode;
+        }
+      }
+      return "unknown";
+    }
+    if (typeof value !== "object") {
+      return "unknown";
+    }
+    var keys = Object.keys(value).slice(0, 48);
+    for (var index = 0; index < keys.length; index += 1) {
+      var key = normalizeParameterKeyPart(keys[index]);
+      if (!/^(?:conversation_mode|source_mode|product_mode|workspace_mode|kind|type|mode)$/.test(key)) {
+        continue;
+      }
+      var mode = sourceModeFromExplicitValue(value[keys[index]], depth + 1);
+      if (mode !== "unknown") {
+        return mode;
+      }
+    }
+    return "unknown";
+  }
+
+  function collectSourceModeFromValue(value) {
+    if (!value || typeof value !== "object") {
+      return "unknown";
+    }
+    var keys = Object.keys(value).slice(0, 160);
+    for (var index = 0; index < keys.length; index += 1) {
+      var key = normalizeParameterKeyPart(keys[index]);
+      if (!/^(?:conversation_mode|source_mode|product_mode|workspace_mode)$/.test(key)) {
+        continue;
+      }
+      var mode = sourceModeFromExplicitValue(value[keys[index]], 0);
+      if (mode !== "unknown") {
+        return mode;
+      }
+    }
+    return "unknown";
+  }
+
+  function collectSourceModeFromText(text) {
+    var clean = String(text || "").trim();
+    if (!clean || !/(conversation_mode|source_mode|product_mode|workspace_mode)/i.test(clean)) {
+      return "unknown";
+    }
+    try {
+      return collectSourceModeFromValue(JSON.parse(clean));
+    } catch (_) {
+      // Continue with URL/form encoded parsing.
+    }
+    if (typeof URLSearchParams !== "undefined" && /(?:^|[?&])[^=]+=/i.test(clean)) {
+      try {
+        var query = clean.indexOf("?") >= 0 ? clean.slice(clean.indexOf("?") + 1) : clean;
+        var params = new URLSearchParams(query);
+        var found = "unknown";
+        params.forEach(function inspect(value, key) {
+          if (found !== "unknown" || !/^(?:conversation_mode|source_mode|product_mode|workspace_mode)$/i.test(key)) {
+            return;
+          }
+          found = sourceModeFromExplicitValue(value, 0);
+        });
+        return found;
+      } catch (_) {
+        return "unknown";
+      }
+    }
+    return "unknown";
+  }
+
   function parseNetworkRequestBody(requestBody) {
     var parameters = {};
     var usageFeatures = {};
+    var sourceMode = "unknown";
     if (!requestBody || typeof requestBody !== "object") {
       return parameters;
     }
 
     var formData = requestBody.formData && typeof requestBody.formData === "object" ? requestBody.formData : {};
     collectUsageFeatures(formData, usageFeatures, 0, []);
+    sourceMode = collectSourceModeFromValue(formData);
     Object.keys(formData).forEach(function collectFormField(key) {
       addNetworkParameter(parameters, canonicalNetworkParameterKey([], key), formData[key], networkModelFieldPriority(key));
     });
@@ -2386,12 +2863,19 @@
       if (fullText) {
         collectNetworkParametersFromText(fullText, parameters);
         collectUsageFeaturesFromText(fullText, usageFeatures);
+        if (sourceMode === "unknown") {
+          sourceMode = collectSourceModeFromText(fullText);
+        }
       }
     }
 
     delete parameters.__modelFieldPriority;
     Object.defineProperty(parameters, "__usageFeatures", {
       value: Object.keys(usageFeatures).sort(),
+      configurable: true
+    });
+    Object.defineProperty(parameters, "__sourceMode", {
+      value: sourceMode,
       configurable: true
     });
     return parameters;
@@ -2408,10 +2892,18 @@
 
     collectNetworkParametersFromText(details && details.url, parameters);
     collectUsageFeaturesFromText(details && details.url, usageFeatures);
+    var sourceMode = normalizeSourceMode(parameters && parameters.__sourceMode);
+    if (sourceMode === "unknown") {
+      sourceMode = collectSourceModeFromText(details && details.url);
+    }
 
     delete parameters.__usageFeatures;
     Object.defineProperty(parameters, "__usageFeatures", {
       value: Object.keys(usageFeatures).sort(),
+      configurable: true
+    });
+    Object.defineProperty(parameters, "__sourceMode", {
+      value: sourceMode,
       configurable: true
     });
     delete parameters.__modelFieldPriority;
@@ -2441,6 +2933,7 @@
       apiModel: requestModel,
       chatgptModel: requestModel,
       modelMode: (resolved && resolved.mode) || "",
+      sourceMode: normalizeSourceMode(parameters && parameters.__sourceMode),
       usageFeatures: normalizeUsageFeatures([].concat(
         parameters && parameters.__usageFeatures || [],
         conversationMode ? [conversationMode.feature] : []
@@ -2576,6 +3069,9 @@
       apiModel: observation.apiModel,
       chatgptModel: selectedPublicModel || observation.chatgptModel,
       responseModel: sanitizeChatGPTModel(payload && payload.responseModel),
+      sourceMode: normalizeSourceMode(
+        observation.sourceMode !== "unknown" ? observation.sourceMode : payload && payload.sourceMode
+      ),
       modelMode: observation.modelMode,
       modelObservedSource: observation.source,
       usageFeatures: mergedUsageFeatures,
@@ -2623,16 +3119,36 @@
       parameters.model ||
       payloadParameters.model
     );
-    if (!isTrustedRequestModelSource(requestSource) || !isChatGPTRequestRoute(requestModel)) {
+    var responseCandidate = sanitizeChatGPTModel(payload && payload.responseModel);
+    var responseModel = isActualRequestModel(responseCandidate) ? responseCandidate : "";
+    var trustedRequestModel = isTrustedRequestModelSource(requestSource) && isChatGPTRequestRoute(requestModel);
+    if (!trustedRequestModel) {
       var conversationMode = conversationModeModelInfo(payload, requestSource);
       if (conversationMode) {
         return conversationMode;
       }
-      return null;
+      if (!responseModel || String(payload && payload.modelIdentitySource || "") !== "response-model") {
+        return null;
+      }
+      requestModel = "";
+      [
+        "model",
+        "api_model",
+        "apimodel",
+        "chatgpt_model",
+        "chatgptmodel",
+        "selected_model",
+        "selectedmodel",
+        "model_slug",
+        "modelslug",
+        "model_id",
+        "modelid"
+      ].forEach(function removeUnprovenRequestModel(key) {
+        delete parameters[key];
+      });
+    } else {
+      parameters.model = requestModel;
     }
-    parameters.model = requestModel;
-    var responseCandidate = sanitizeChatGPTModel(payload && payload.responseModel);
-    var responseModel = isActualRequestModel(responseCandidate) ? responseCandidate : "";
     // The assistant message's metadata.model_slug is the strongest evidence of
     // the model that actually generated the answer. The request body remains
     // the exact requested route and is retained separately for audit/Auto.
@@ -2647,13 +3163,6 @@
 
     var apiModel = requestModel;
     var runtimePublic = resolveRuntimePublicModel(identityModel, payload, payload && payload.runtimeModelCatalog);
-    var storedModel = sanitizePublicModelName(
-      (runtimePublic && runtimePublic.publicModel) ||
-      chatGPTModeLabelFromSlug(identityModel) ||
-      (resolved && resolved.label) ||
-      (identityModel === "auto" ? "Auto" : identityModel)
-    );
-    var chatgptModel = storedModel;
     var selectedMetadata = resolveSelectedPublicModelMetadata(
       requestModel,
       payload,
@@ -2661,6 +3170,31 @@
     );
     var selectedPublicModel = selectedMetadata.selectedPublicModel;
     var selectedPublicModelSource = selectedMetadata.selectedPublicModelSource;
+    var sourceMode = normalizeSourceMode(payload && payload.sourceMode);
+    // Work exposes its public product in an explicit model-only selector while
+    // the normal account model catalog can omit Work routes. Bind that visible
+    // selection only to the same submitted route: if the final response slug
+    // differs, keep the exact response slug rather than guessing.
+    var directWorkSelection = directWorkPublicModel(
+      requestModel,
+      responseModel,
+      Object.assign({}, payload || {}, { sourceMode: sourceMode }),
+      selectedMetadata
+    );
+    var storedModel = sanitizePublicModelName(
+      (runtimePublic && runtimePublic.mappingStatus === "mapped" && runtimePublic.publicModel) ||
+      directWorkSelection ||
+      chatGPTModeLabelFromSlug(identityModel) ||
+      (resolved && resolved.label) ||
+      (identityModel === "auto" ? "Auto" : identityModel)
+    );
+    var chatgptModel = storedModel;
+    var mappingStatus = runtimePublic && runtimePublic.mappingStatus === "mapped"
+      ? "mapped"
+      : directWorkSelection ? "selector" : "unmapped";
+    var publicModelSource = runtimePublic && runtimePublic.mappingStatus === "mapped"
+      ? runtimePublic.source
+      : directWorkSelection ? "work-selector+same-route" : (responseModel ? "unmapped-response-slug" : "unmapped-request-slug");
 
     return {
       label: storedModel,
@@ -2668,6 +3202,7 @@
       selectedPublicModel: selectedPublicModel,
       selectedPublicModelSource: selectedPublicModelSource,
       requestModel: requestModel,
+      requestModelEvidence: trustedRequestModel ? "trusted" : "unavailable",
       responseModel: responseModel,
       apiModel: apiModel,
       chatgptModel: chatgptModel,
@@ -2676,13 +3211,10 @@
         : sanitizeModelMode((payload && payload.modelMode) || (resolved && resolved.mode)),
       modelIdentitySource: responseModel ? "response-model" : "request-model",
       observedSource: String((payload && payload.modelObservedSource) || "").slice(0, 64),
-      modelMappingStatus: String((runtimePublic && runtimePublic.mappingStatus) || "unmapped").slice(0, 24),
-      publicModelSource: String(
-        responseModel && runtimePublic && runtimePublic.mappingStatus !== "mapped"
-          ? "unmapped-response-slug"
-          : (runtimePublic && runtimePublic.source) || (responseModel ? "unmapped-response-slug" : "unmapped-request-slug")
-      ).slice(0, 80),
+      modelMappingStatus: String(mappingStatus).slice(0, 24),
+      publicModelSource: String(publicModelSource).slice(0, 80),
       catalogObservedAt: String((runtimePublic && runtimePublic.catalogObservedAt) || "").slice(0, 48),
+      sourceMode: sourceMode,
       deprecated: Boolean(resolved && resolved.deprecated),
       parameters: parameters
     };
@@ -2778,7 +3310,7 @@
       ? Object.assign({}, existingStats)
       : createEmptyStats();
     if (incomingCatalog) {
-      sourceStats.runtimeModelCatalog = incomingCatalog;
+      activeRuntimeModelCatalog = incomingCatalog;
     }
     var stats = cloneStats(sourceStats);
     var now = nowDate || new Date();
@@ -2836,6 +3368,7 @@
       selectedPublicModel: modelInfo.selectedPublicModel || "",
       selectedPublicModelSource: modelInfo.selectedPublicModelSource || "",
       requestModel: modelInfo.requestModel || modelInfo.apiModel,
+      requestModelEvidence: modelInfo.requestModelEvidence || "trusted",
       responseModel: modelInfo.responseModel || "",
       apiModel: modelInfo.apiModel,
       chatgptModel: modelInfo.chatgptModel,
@@ -2848,6 +3381,7 @@
       modelParameters: modelInfo.parameters,
       usageFeatures: usageFeatures,
       source: String((payload && payload.source) || "unmarked-source").slice(0, 32),
+      sourceMode: normalizeSourceMode(payload && payload.sourceMode),
       submittedAt: submittedAt,
       pageUrl: pageUrl,
       pageTitle: pageTitle,
@@ -2855,6 +3389,7 @@
       promptHash: promptHash,
       promptLength: promptLength
     });
+    updateRelationStats(stats, model, stats.events[0]);
     stats.events = stats.events.slice(0, MAX_EVENTS);
 
     return stats;
@@ -2914,7 +3449,7 @@
       ? Object.assign({}, existingStats)
       : createEmptyStats();
     if (incomingCatalog) {
-      sourceStats.runtimeModelCatalog = incomingCatalog;
+      activeRuntimeModelCatalog = incomingCatalog;
     }
     var stats = cloneStats(sourceStats);
     var responseModel = sanitizeChatGPTModel(payload && payload.responseModel);
@@ -2937,10 +3472,16 @@
       (nowDate instanceof Date ? nowDate.toISOString() : new Date().toISOString())
     ).slice(0, 48);
     var observedSource = String((payload && payload.observedSource) || "message-dom:model-slug").slice(0, 64);
+    var observedConversationId = responseObservationConversationId(payload);
+    var observedPageUrl = String((payload && payload.pageUrl) || "").slice(0, 500);
+    var observedPageTitle = sanitizeTitle(payload && payload.pageTitle);
     var candidateEvent = Object.assign({}, previousEvent, {
       responseModel: responseModel,
       responseObservedAt: observedAt,
-      responseObservedSource: observedSource
+      responseObservedSource: observedSource,
+      conversationId: observedConversationId || previousEvent.conversationId,
+      pageUrl: observedConversationId && observedPageUrl ? observedPageUrl : previousEvent.pageUrl,
+      pageTitle: observedPageTitle || previousEvent.pageTitle
     });
     var modelInfo = resolvePayloadModelInfo(candidateEvent);
     if (!modelInfo || !modelInfo.label) {
@@ -3010,7 +3551,10 @@
       var sourceEvent = sourceEvents[i];
       var modelInfo = resolvePayloadModelInfo(sourceEvent);
       if (!modelInfo || !modelInfo.label) {
-        return null;
+        // Older builds could promote visible DOM labels into request models.
+        // Such records do not prove an actual request route and must not
+        // survive an auditable catalog rebuild.
+        continue;
       }
       mapped.push({ event: sourceEvent, modelInfo: modelInfo });
       mappedTotals[modelInfo.label] = (mappedTotals[modelInfo.label] || 0) + 1;
@@ -3021,9 +3565,6 @@
     }
 
     var rebuilt = createEmptyStats();
-    if (activeRuntimeModelCatalog) {
-      rebuilt.runtimeModelCatalog = activeRuntimeModelCatalog;
-    }
 
     // Stored events are newest-first. Replaying oldest-first preserves first
     // and last timestamps while unshift restores the original event order.
@@ -3073,12 +3614,13 @@
       canonicalEvent.promptHash = promptHash;
       canonicalEvent.promptLength = promptLength;
       canonicalEvent.usageFeatures = usageFeatures;
+      updateRelationStats(rebuilt, model, canonicalEvent);
       rebuilt.events.unshift(canonicalEvent);
       rebuilt.lastUpdated = submittedAt || rebuilt.lastUpdated;
     });
 
     rebuilt.events = rebuilt.events.slice(0, MAX_EVENTS);
-    return totalCount(rebuilt) === sourceTotal ? rebuilt : null;
+    return totalCount(rebuilt) === mapped.length ? rebuilt : null;
   }
 
   function updateSessionIndex(stats, model, conversationId, event) {
@@ -3569,6 +4111,11 @@
   function storageGet(callback) {
     chrome.storage.local.get([STORAGE_KEY], function handleGet(result) {
       var rawStats = result[STORAGE_KEY];
+      var migratedCatalog = sanitizeRuntimeModelCatalog(rawStats && rawStats.runtimeModelCatalog);
+      if (migratedCatalog) {
+        activeRuntimeModelCatalog = migratedCatalog;
+        sessionCatalogSet(migratedCatalog);
+      }
       var cleanStats = cloneStats(rawStats);
       if (rawStats && JSON.stringify(rawStats) !== JSON.stringify(cleanStats)) {
         chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleCleanedStats() {
@@ -3581,17 +4128,117 @@
   }
 
   function storageSet(stats, callback) {
-    chrome.storage.local.set({ [STORAGE_KEY]: stats }, function handleSet() {
+    var cleanStats = cloneStats(stats);
+    delete cleanStats.runtimeModelCatalog;
+    chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleSet() {
       statusGet(function updateBadgeWithStatus(statusRecord) {
-        setBadge(stats, statusRecord);
-        if (callback) callback(stats);
+        setBadge(cleanStats, statusRecord);
+        if (callback) callback(cleanStats);
       });
+    });
+  }
+
+  function sessionCatalogGet(callback) {
+    var session = typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
+    if (!session || typeof session.get !== "function") {
+      callback(activeRuntimeModelCatalog);
+      return;
+    }
+    session.get([CATALOG_SESSION_KEY], function read(result) {
+      var catalog = sanitizeRuntimeModelCatalog(result && result[CATALOG_SESSION_KEY]);
+      if (catalog) {
+        activeRuntimeModelCatalog = catalog;
+      }
+      callback(catalog || activeRuntimeModelCatalog);
+    });
+  }
+
+  function sessionCatalogSet(catalog, callback) {
+    var cleanCatalog = sanitizeRuntimeModelCatalog(catalog);
+    if (cleanCatalog) {
+      activeRuntimeModelCatalog = cleanCatalog;
+    }
+    var session = typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
+    if (!cleanCatalog || !session || typeof session.set !== "function") {
+      if (callback) callback(cleanCatalog);
+      return;
+    }
+    session.set({ [CATALOG_SESSION_KEY]: cleanCatalog }, function saved() {
+      if (callback) callback(cleanCatalog);
+    });
+  }
+
+  function catalogRefreshClaimKey(message) {
+    var reason = String((message && message.reason) || "panel-open")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+      .slice(0, 32);
+    var slug = sanitizeChatGPTModel(message && message.unknownSlug);
+    if (slug) {
+      return "unknown:" + slug;
+    }
+    return reason === "panel-open" ? "panel-open" : ("reason:" + reason);
+  }
+
+  function claimRuntimeCatalogRefresh(message, callback) {
+    var key = catalogRefreshClaimKey(message);
+    catalogRefreshClaimQueue = catalogRefreshClaimQueue
+      .catch(function ignorePreviousClaimFailure() {})
+      .then(function claim() {
+        return new Promise(function resolveClaim(resolve) {
+          var session = typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
+          if (!session || typeof session.get !== "function" || typeof session.set !== "function") {
+            var alreadyClaimed = Boolean(inMemoryCatalogRefreshClaims[key]);
+            if (!alreadyClaimed) {
+              inMemoryCatalogRefreshClaims[key] = new Date().toISOString();
+            }
+            resolve({ claimed: !alreadyClaimed, key: key });
+            return;
+          }
+          session.get([CATALOG_REFRESH_SESSION_KEY], function readClaims(result) {
+            var record = result && result[CATALOG_REFRESH_SESSION_KEY];
+            var claims = record && record.claims && typeof record.claims === "object"
+              ? Object.assign({}, record.claims)
+              : {};
+            if (claims[key]) {
+              resolve({ claimed: false, key: key });
+              return;
+            }
+            claims[key] = new Date().toISOString();
+            var orderedKeys = Object.keys(claims).sort(function oldestFirst(left, right) {
+              return String(claims[left]).localeCompare(String(claims[right]));
+            });
+            while (orderedKeys.length > 200) {
+              delete claims[orderedKeys.shift()];
+            }
+            session.set({
+              [CATALOG_REFRESH_SESSION_KEY]: {
+                claims: claims,
+                updatedAt: new Date().toISOString()
+              }
+            }, function savedClaim() {
+              resolve({ claimed: true, key: key });
+            });
+          });
+        });
+      });
+    catalogRefreshClaimQueue.then(callback).catch(function claimFailed() {
+      callback({ claimed: false, key: key });
     });
   }
 
   function settingsGet(callback) {
     chrome.storage.local.get([SETTINGS_KEY], function handleGet(result) {
-      callback(sanitizeSettings(result[SETTINGS_KEY]));
+      var storedSettings = result[SETTINGS_KEY];
+      var cleanSettings = sanitizeSettings(storedSettings);
+      if (JSON.stringify(storedSettings || {}) !== JSON.stringify(cleanSettings)) {
+        chrome.storage.local.set({ [SETTINGS_KEY]: cleanSettings }, function persistedCleanSettings() {
+          callback(cleanSettings);
+        });
+        return;
+      }
+      callback(cleanSettings);
     });
   }
 
@@ -3731,7 +4378,6 @@
     if (!cleanCatalog) {
       return cloneStats(source);
     }
-    source.runtimeModelCatalog = cleanCatalog;
     activeRuntimeModelCatalog = cleanCatalog;
     var rebuilt = rebuildStatsFromCompleteEventHistory(source, true);
     if (rebuilt) {
@@ -3742,13 +4388,18 @@
 
   function enqueueRuntimeModelCatalog(message, sendResponse) {
     var job = usageIncrementQueue.catch(function ignorePreviousFailure() {}).then(function updateCatalog() {
-      return storageGetPromise().then(function remap(stats) {
-        var nextStats = applyRuntimeModelCatalog(stats, message && message.catalog);
-        return storageSetPromise(nextStats).then(function respond(savedStats) {
-          sendResponse({
-            ok: true,
-            catalogObservedAt: String(savedStats.runtimeModelCatalog && savedStats.runtimeModelCatalog.observedAt || ""),
-            stats: savedStats
+      var cleanCatalog = sanitizeRuntimeModelCatalog(message && message.catalog);
+      return new Promise(function saveSession(resolve) {
+        sessionCatalogSet(cleanCatalog, resolve);
+      }).then(function remapFromSession() {
+        return storageGetPromise().then(function remap(stats) {
+          var nextStats = applyRuntimeModelCatalog(stats, cleanCatalog);
+          return storageSetPromise(nextStats).then(function respond(savedStats) {
+            sendResponse({
+              ok: true,
+              catalogObservedAt: String(cleanCatalog && cleanCatalog.observedAt || ""),
+              stats: savedStats
+            });
           });
         });
       });
@@ -3817,6 +4468,24 @@
 
     if (message.type === "usage.catalog") {
       enqueueRuntimeModelCatalog(message, sendResponse);
+      return true;
+    }
+
+    if (message.type === "usage.catalog.get") {
+      sessionCatalogGet(function respondCatalog(catalog) {
+        sendResponse({ ok: true, catalog: catalog || null });
+      });
+      return true;
+    }
+
+    if (message.type === "usage.catalog.refresh.claim") {
+      claimRuntimeCatalogRefresh(message, function respondClaim(result) {
+        sendResponse({
+          ok: true,
+          claimed: Boolean(result && result.claimed),
+          key: String((result && result.key) || "")
+        });
+      });
       return true;
     }
 
@@ -3940,6 +4609,7 @@
     isAbnormalOpenAIStatus: isAbnormalOpenAIStatus,
     openAIStatusState: openAIStatusState,
     sanitizeSettings: sanitizeSettings,
+    dateSettingNoLaterThanToday: dateSettingNoLaterThanToday,
     sanitizeOpenAIStatusRecord: sanitizeOpenAIStatusRecord,
     resolvePayloadModelInfo: resolvePayloadModelInfo,
     mergeRecentNetworkObservation: mergeRecentNetworkObservation,

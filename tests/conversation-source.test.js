@@ -212,6 +212,72 @@ test("a long Retry-After stops the item instead of retrying before ChatGPT allow
   assert.match(result.failures[0].error, /429/);
 });
 
+test("a long Retry-After stops the remaining selected conversation reads", async () => {
+  let calls = 0;
+  const result = await source.collectConversations(
+    ["chat-0001", "chat-0002", "chat-0003"],
+    {
+      exporter,
+      origin: "https://chatgpt.com",
+      concurrency: 1,
+      fetchImpl: async () => {
+        calls += 1;
+        return {
+          ok: false,
+          status: 429,
+          headers: { get: () => "120" },
+          json: async () => ({})
+        };
+      }
+    }
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(result.conversations.length, 0);
+  assert.deepEqual(result.failures.map((failure) => failure.id), ["chat-0001", "chat-0002", "chat-0003"]);
+});
+
+test("an authorization failure stops the remaining selected conversation reads", async () => {
+  let calls = 0;
+  const result = await source.collectConversations(
+    ["chat-0001", "chat-0002", "chat-0003"],
+    {
+      exporter,
+      origin: "https://chatgpt.com",
+      concurrency: 1,
+      fetchImpl: async () => {
+        calls += 1;
+        return response({}, 401);
+      }
+    }
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(result.conversations.length, 0);
+  assert.deepEqual(result.failures.map((failure) => failure.id), ["chat-0001", "chat-0002", "chat-0003"]);
+});
+
+test("model-catalog style reads can share pacing while disabling automatic retries", async () => {
+  let calls = 0;
+  await assert.rejects(
+    source.requestJson(
+      async () => {
+        calls += 1;
+        return {
+          ok: false,
+          status: 429,
+          headers: { get: () => "0" },
+          json: async () => ({})
+        };
+      },
+      "https://chatgpt.com/backend-api/models",
+      { requestGapMs: 150, maxAttempts: 1 }
+    ),
+    /429/
+  );
+  assert.equal(calls, 1);
+});
+
 test("modern account conversation API paginates every older message page before export", async () => {
   const calls = [];
   const directMessage = (id, role, text, model = "") => ({

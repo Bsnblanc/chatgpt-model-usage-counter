@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 const detector = require("../src/detector");
+const modelCatalog = require("../src/model-catalog");
 
 class FakeElement {
   constructor(options = {}) {
@@ -369,6 +370,7 @@ function runPanelContentScript(document, options = {}) {
   const context = {
     window: {
       ChatGPTUsageDetector: detector,
+      ChatGPTModelCatalog: options.modelCatalog,
       ChatGPTUsageDashboard: {
         init() {
           return { reload() {} };
@@ -383,7 +385,10 @@ function runPanelContentScript(document, options = {}) {
         id: options.runtimeId,
         sendMessage(message, callback) {
           messages.push(message);
-          if (callback) callback({ ok: true });
+          const response = typeof options.onRuntimeMessage === "function"
+            ? options.onRuntimeMessage(message)
+            : { ok: true };
+          if (callback) callback(response);
         }
       },
       storage: options.storageItems ? {
@@ -408,6 +413,7 @@ function runPanelContentScript(document, options = {}) {
     getComputedStyle: options.getComputedStyle,
     MutationObserver: options.MutationObserver,
     setInterval: options.setInterval,
+    fetch: options.fetch,
     Date,
     Math,
     String,
@@ -535,6 +541,124 @@ test("usage panel mounts into the ChatGPT main title bar", () => {
   assert.equal(host.parentNode, document.titleBar);
   assert.equal(host.classList.contains("is-embedded"), true);
   assert.equal(host.classList.contains("is-fallback"), false);
+});
+
+test("page load makes no model-directory request and opening the statistics panel fetches it at most once", async () => {
+  const document = createPanelDocument({ titleBar: true });
+  let modelFetches = 0;
+  let claimed = false;
+  const { messages } = runPanelContentScript(document, {
+    modelCatalog,
+    fetch: async (url) => {
+      if (String(url).includes("/backend-api/models")) {
+        modelFetches += 1;
+        return response(200, {
+          models: [{ slug: "gpt-5-6", title: "GPT-5.6 Luna" }],
+          versions: [],
+          categories: []
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    onRuntimeMessage(message) {
+      if (message.type === "usage.catalog.get") {
+        return { ok: true, catalog: null };
+      }
+      if (message.type === "usage.catalog.refresh.claim") {
+        const result = { ok: true, claimed: !claimed };
+        claimed = true;
+        return result;
+      }
+      return { ok: true };
+    }
+  });
+
+  assert.equal(modelFetches, 0);
+  assert.equal(messages.some((message) => message.type === "usage.catalog.get"), false);
+
+  const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
+  toggle.listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(modelFetches, 1, JSON.stringify(messages));
+
+  toggle.listeners.click();
+  toggle.listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(modelFetches, 1);
+});
+
+test("an immediately completed unmapped response requests one session catalog refresh", async () => {
+  const document = createPanelDocument({ titleBar: true });
+  const modelButton = document.querySelector('[data-testid="model-switcher-dropdown-button"]');
+  modelButton.innerText = "GPT-6 Aurora";
+  modelButton.setAttribute("data-model", "future-model-2027");
+  const send = new PanelTestElement({
+    tagName: "BUTTON",
+    attributes: { "data-testid": "send-button", "aria-label": "Send prompt" },
+    rect: { top: 720, left: 600, width: 40, height: 40, right: 640, bottom: 760 }
+  });
+  const textarea = new PanelTestElement({
+    tagName: "TEXTAREA",
+    rect: { top: 700, left: 280, width: 300, height: 60, right: 580, bottom: 760 }
+  });
+  textarea.value = "Test a newly returned model.";
+  document.main.appendChild(send);
+  document.main.appendChild(textarea);
+  let modelFetches = 0;
+  let claimed = false;
+  const { messages } = runPanelContentScript(document, {
+    modelCatalog,
+    fetch: async (url) => {
+      if (String(url).includes("/backend-api/models")) {
+        modelFetches += 1;
+        return response(200, {
+          models: [{ slug: "future-model-2027", title: "GPT-6 Aurora" }],
+          versions: [],
+          categories: []
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    onRuntimeMessage(message) {
+      if (message.type === "usage.increment") {
+        return {
+          ok: true,
+          recorded: true,
+          event: {
+            model: "future-model-2027",
+            responseModel: "future-model-2027",
+            modelMappingStatus: "unmapped"
+          },
+          stats: { totals: { "future-model-2027": 1 } }
+        };
+      }
+      if (message.type === "usage.catalog.get") {
+        return { ok: true, catalog: null };
+      }
+      if (message.type === "usage.catalog.refresh.claim") {
+        const result = { ok: true, claimed: !claimed };
+        claimed = true;
+        return result;
+      }
+      return { ok: true };
+    }
+  });
+
+  const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
+  document.listeners.pointerdown({ target: send });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(modelFetches, 1, JSON.stringify(messages));
+  assert.equal(
+    messages.filter((message) => message.type === "usage.catalog.refresh.claim").length,
+    1
+  );
+
+  toggle.listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(modelFetches, 1, "the panel reuses the session catalog published by the response refresh");
 });
 
 test("usage panel re-attaches its entry after ChatGPT re-renders the title bar (export navigation)", () => {
@@ -1203,7 +1327,7 @@ test("content script sends DOM model when visible model switcher detected", () =
   assert.equal(usage[0].payload.modelParameters.model, "gpt-5-thinking");
 });
 
-test("content script sends selected Search tool feature without prompt inference or parameter pollution", () => {
+test("visible selected Search control is not stored without exact request evidence", () => {
   const listeners = {};
   const messages = [];
   const modelButton = new FakeElement({
@@ -1277,12 +1401,12 @@ test("content script sends selected Search tool feature without prompt inference
   assert.equal(usage[0].payload.model, "gpt-5-thinking");
   assert.equal(usage[0].payload.chatgptModel, "gpt-5-thinking");
   assert.equal(usage[0].payload.modelObservedSource, "message-dom:dom");
-  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), ["web_search"]);
+  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
   assert.equal(usage[0].payload.modelParameters.model, "gpt-5-thinking");
   assert.equal(usage[0].payload.modelParameters.web_search, undefined);
 });
 
-test("content script sends selected Search feature from plain removable tool button", () => {
+test("plain removable Search button is not stored without exact request evidence", () => {
   const listeners = {};
   const messages = [];
   const modelButton = new FakeElement({
@@ -1348,11 +1472,11 @@ test("content script sends selected Search feature from plain removable tool but
 
   const usage = usageMessages(messages);
   assert.equal(usage.length, 1);
-  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), ["web_search"]);
+  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
   assert.equal(usage[0].payload.modelParameters.web_search, undefined);
 });
 
-test("content script sends selected Search feature from descendant accessibility label", () => {
+test("descendant Search accessibility label is not stored without exact request evidence", () => {
   const listeners = {};
   const messages = [];
   const modelButton = new FakeElement({
@@ -1421,11 +1545,11 @@ test("content script sends selected Search feature from descendant accessibility
 
   const usage = usageMessages(messages);
   assert.equal(usage.length, 1);
-  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), ["web_search"]);
+  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
   assert.equal(usage[0].payload.modelParameters.web_search, undefined);
 });
 
-test("content script sends selected Search feature from non-button selected sibling control", () => {
+test("selected sibling Search control is not stored without exact request evidence", () => {
   const listeners = {};
   const messages = [];
   const modelButton = new FakeElement({
@@ -1498,11 +1622,11 @@ test("content script sends selected Search feature from non-button selected sibl
 
   const usage = usageMessages(messages);
   assert.equal(usage.length, 1);
-  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), ["web_search"]);
+  assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
   assert.equal(usage[0].payload.modelParameters.web_search, undefined);
 });
 
-test("content script maps selected non-Search tool chips to usage features", () => {
+test("visible non-Search tool chips are not stored without exact request evidence", () => {
   for (const [toolText, expectedFeature] of [
     ["Image", "image_generation"],
     ["Images", "image_generation"],
@@ -1582,12 +1706,12 @@ test("content script maps selected non-Search tool chips to usage features", () 
 
     const usage = usageMessages(messages);
     assert.equal(usage.length, 1);
-    assert.deepEqual(Array.from(usage[0].payload.usageFeatures), [expectedFeature]);
+    assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
     assert.equal(usage[0].payload.modelParameters[expectedFeature], undefined);
   }
 });
 
-test("content script detects the current ChatGPT inline tool mention pill (data-system-hint-type / 中文 keyword)", () => {
+test("inline tool mention pills are not stored without exact request evidence", () => {
   // 实测:当前 ChatGPT 把已启用工具渲染成 composer 输入框里的内联 pill
   // <span data-symbol="ecosystemMention" data-id="search" data-system-hint-type="search" data-keyword="网页搜索">。
   for (const [pillAttrs, expectedFeature] of [
@@ -1655,7 +1779,7 @@ test("content script detects the current ChatGPT inline tool mention pill (data-
 
     const usage = usageMessages(messages);
     assert.equal(usage.length, 1, expectedFeature);
-    assert.deepEqual(Array.from(usage[0].payload.usageFeatures), [expectedFeature], expectedFeature);
+    assert.deepEqual(Array.from(usage[0].payload.usageFeatures), [], expectedFeature);
   }
 });
 
@@ -1779,7 +1903,7 @@ test("content script ignores sidebar/containers and never false-counts features 
   assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
 });
 
-test("content script maps selected realtime audio and canvas tool aliases", () => {
+test("visible realtime audio and canvas aliases are not stored without exact request evidence", () => {
   for (const [toolText, expectedFeature] of [
     ["real-time", "realtime"],
     ["input_audio", "audio"],
@@ -1856,7 +1980,7 @@ test("content script maps selected realtime audio and canvas tool aliases", () =
 
     const usage = usageMessages(messages);
     assert.equal(usage.length, 1);
-    assert.deepEqual(Array.from(usage[0].payload.usageFeatures), [expectedFeature]);
+    assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
   }
 });
 
@@ -2219,7 +2343,7 @@ test("account-history credentials stay in memory only and are released after 30 
   );
 });
 
-test("every 401 or 403 clears account-history credentials and the first failure retries once", async () => {
+test("every 401 or 403 clears account-history credentials without automatic retry", async () => {
   const listeners = {};
   let sessionFetches = 0;
   let historyFetches = 0;
@@ -2296,16 +2420,21 @@ test("every 401 or 403 clears account-history credentials and the first failure 
   vm.createContext(context);
   vm.runInContext(script, context);
   await context.window.__chatgptUsageListConversations();
-  assert.equal(historyFetches, 2, "the first authorization failure retries exactly once");
-  assert.equal(sessionFetches, 2);
-  assert.deepEqual(accountHeaders, ["Bearer refresh-token-1", "Bearer refresh-token-2"]);
+  assert.equal(historyFetches, 1, "an authorization failure is not retried automatically");
+  assert.equal(sessionFetches, 1);
+  assert.deepEqual(accountHeaders, ["Bearer refresh-token-1"]);
 
   await context.window.__chatgptUsageListConversations();
   assert.equal(
     sessionFetches,
-    3,
-    "a repeated 403 also clears the refreshed credential before the next user action"
+    2,
+    "the next explicit user action obtains a fresh in-memory credential"
   );
+  assert.equal(historyFetches, 2);
+  assert.equal(accountHeaders.at(-1), "Bearer refresh-token-2");
+
+  await context.window.__chatgptUsageListConversations();
+  assert.equal(sessionFetches, 3);
   assert.equal(historyFetches, 3);
   assert.equal(accountHeaders.at(-1), "Bearer refresh-token-3");
 });

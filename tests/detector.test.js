@@ -8,6 +8,7 @@ class FakeElement {
     this.innerText = options.innerText || "";
     this.textContent = options.textContent || "";
     this.value = options.value || "";
+    this.className = options.className || "";
     this.disabled = Boolean(options.disabled);
     this.style = options.style || {};
     this.attributes = options.attributes || {};
@@ -58,6 +59,9 @@ class FakeDocument {
   }
 
   querySelectorAll(selector) {
+    if (selector.includes("SliderTriggerModelLabel")) {
+      return this.elements.filter((element) => /SliderTriggerModelLabel/i.test(element.className || ""));
+    }
     if (selector.includes("model-switcher")) {
       return this.elements.filter((element) => /model-switcher/i.test(element.getAttribute("data-testid") || ""));
     }
@@ -163,6 +167,27 @@ test("findCurrentModelInfo recognizes future explicit model slugs from model swi
   assert.equal(info.apiModel, "future-family-2026-thinking");
   assert.equal(info.mode, "thinking");
   assert.equal(info.parameters.model, "future-family-2026-thinking");
+});
+
+test("findCurrentModelInfo reads the explicit Work public model label without treating effort as a model", () => {
+  const workModel = new FakeElement({
+    tagName: "SPAN",
+    innerText: "5.6 Terra",
+    className: "uFxlGa_SliderTriggerModelLabel"
+  });
+  const workEffort = new FakeElement({
+    tagName: "SPAN",
+    innerText: "Light",
+    className: "uFxlGa_SliderTriggerEffortLabel"
+  });
+  const info = detector.findCurrentModelInfo(new FakeDocument([workEffort, workModel]));
+
+  assert.equal(info.label, "5.6 Terra");
+  assert.equal(info.publicModel, "5.6 Terra");
+  assert.equal(info.selectedPublicModel, "5.6 Terra");
+  assert.equal(info.selectedPublicModelSource, "work-selector-dom");
+  assert.equal(info.apiModel, "");
+  assert.equal(info.parameters.model, undefined);
 });
 
 test("findCurrentModelInfo accepts an unknown versioned slug from an explicit data-model field", () => {

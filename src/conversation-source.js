@@ -102,7 +102,7 @@
       var retryDateDelay = Math.max(0, retryDate - Date.now());
       return retryDateDelay <= MAX_RETRY_AFTER_MS ? retryDateDelay : -1;
     }
-    return Math.min(8000, BASE_RETRY_DELAY_MS * Math.pow(2, attempt));
+    return attempt <= 0 ? BASE_RETRY_DELAY_MS : 3000;
   }
 
   function isTransientStatus(status) {
@@ -121,6 +121,7 @@
 
   function requestJson(fetchImpl, url, requestOptions) {
     var settings = requestOptions && typeof requestOptions === "object" ? requestOptions : {};
+    var maxAttempts = Math.max(1, Math.min(MAX_REQUEST_ATTEMPTS, Number(settings.maxAttempts) || MAX_REQUEST_ATTEMPTS));
     function attempt(index) {
       var response;
       return waitForRequestSlot(settings.requestGapMs).then(function request() {
@@ -141,20 +142,29 @@
         return response.json();
       }).catch(function retryTransient(error) {
         var status = Number(error && error.status) || 0;
+        if (status === 401 || status === 403) {
+          error.stopOperation = true;
+        }
         var retryable = isTransientStatus(status) || (!status && (!response || !response.ok));
-        if (!retryable || index + 1 >= MAX_REQUEST_ATTEMPTS) {
+        var delay = retryable ? retryDelayMs(response, index) : 0;
+        if (status === 429) {
+          if (delay < 0) {
+            error.stopOperation = true;
+          } else {
+            // One shared cooldown protects catalog, index, and detail reads
+            // that use this source instance.
+            requestCooldownUntil = Math.max(requestCooldownUntil, Date.now() + delay);
+          }
+        }
+        if (!retryable || index + 1 >= maxAttempts) {
           throw error;
         }
-        var delay = retryDelayMs(response, index);
         // A long Retry-After means ChatGPT explicitly asked the client to stop
         // for longer than an interactive export should remain active. End this
         // item as a visible failure instead of retrying early or hammering the
         // account endpoint.
         if (delay < 0) {
           throw error;
-        }
-        if (status === 429) {
-          requestCooldownUntil = Math.max(requestCooldownUntil, Date.now() + delay);
         }
         return wait(delay).then(function retry() {
           return attempt(index + 1);
@@ -225,12 +235,17 @@
 
     function fetchPage() {
       var url = conversationListUrl(origin, offset, limit, archived, omitArchivedFilter);
-      return requestJson(fetchImpl, url).catch(function retryActiveWithoutFilter(error) {
+      return requestJson(fetchImpl, url, { requestGapMs: options.requestGapMs }).catch(function retryActiveWithoutFilter(error) {
         // Some ChatGPT deployments accept the active-history endpoint only without
         // is_archived=false. Retry that first page once, then keep the same shape.
-        if (!archived && offset === 0 && !omitArchivedFilter) {
+        var status = Number(error && error.status) || 0;
+        if (!archived && offset === 0 && !omitArchivedFilter && [400, 404, 405].indexOf(status) !== -1) {
           omitArchivedFilter = true;
-          return requestJson(fetchImpl, conversationListUrl(origin, offset, limit, false, true));
+          return requestJson(
+            fetchImpl,
+            conversationListUrl(origin, offset, limit, false, true),
+            { requestGapMs: options.requestGapMs }
+          );
         }
         throw error;
       });
@@ -432,7 +447,7 @@
       })
       .catch(function legacyFallback(error) {
         var status = Number(error && error.status) || 0;
-        if ([401, 403, 404, 405].indexOf(status) === -1) {
+        if ([404, 405].indexOf(status) === -1) {
           throw error;
         }
         return requestJson(
@@ -479,8 +494,12 @@
     var results = new Array(targets.length);
     var failures = new Array(targets.length);
     var cursor = 0;
+    var stopError = null;
 
     function worker() {
+      if (stopError) {
+        return Promise.resolve();
+      }
       var index = cursor;
       cursor += 1;
       if (index >= targets.length) {
@@ -491,6 +510,10 @@
         results[index] = conversation;
       }).catch(function failed(error) {
         failures[index] = { id: id, error: safeText(error && error.message, 240) || "Conversation request failed." };
+        var status = Number(error && error.status) || 0;
+        if (error && (error.stopOperation || status === 401 || status === 403)) {
+          stopError = error;
+        }
       }).then(worker);
     }
 
@@ -499,6 +522,14 @@
       workers.push(worker());
     }
     return Promise.all(workers).then(function done() {
+      if (stopError) {
+        var stopMessage = safeText(stopError && stopError.message, 240) || "Conversation collection stopped.";
+        targets.forEach(function reportStopped(id, index) {
+          if (!results[index] && !failures[index]) {
+            failures[index] = { id: id, error: stopMessage };
+          }
+        });
+      }
       return {
         conversations: results.filter(Boolean),
         failures: failures.filter(Boolean),
@@ -532,6 +563,7 @@
     listAccountConversations: listAccountConversations,
     normalizeConversationIndexItem: normalizeConversationIndexItem,
     normalizeOrigin: normalizeOrigin,
+    requestJson: requestJson,
     uniqueConversationIds: uniqueConversationIds
   };
 });

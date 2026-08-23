@@ -157,6 +157,124 @@ test("GPT-5.6 Sol is the primary count while gpt-5-6-thinking remains an interna
   assert.deepEqual(next.parametersByModel["GPT-5.6 Sol"].fields.model, { "gpt-5-6-thinking": 1 });
 });
 
+test("Work keeps its explicit public model while preserving exact request, response, effort, features, and conversation", () => {
+  const now = new Date("2026-08-22T16:30:00.000Z");
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      model: "5.6 Terra",
+      publicModel: "5.6 Terra",
+      selectedPublicModel: "5.6 Terra",
+      selectedPublicModelSource: "work-selector-dom",
+      requestModel: "gpt-5.6-terra-wm",
+      responseModel: "gpt-5.6-terra-wm",
+      apiModel: "gpt-5.6-terra-wm",
+      modelObservedSource: "webRequest",
+      modelParameters: {
+        model: "gpt-5.6-terra-wm",
+        "reasoning.effort": "high"
+      },
+      usageFeatures: ["web_search", "connectors"],
+      sourceMode: "work",
+      source: "enter-key",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/c/work-terra-0001",
+      pageTitle: "Work Terra verification",
+      promptHash: "work-terra",
+      promptLength: 12
+    },
+    now
+  );
+
+  assert.deepEqual(next.totals, { "5.6 Terra": 1 });
+  assert.equal(next.events[0].sourceMode, "work");
+  assert.equal(next.events[0].selectedPublicModel, "5.6 Terra");
+  assert.equal(next.events[0].selectedPublicModelSource, "work-selector-dom");
+  assert.equal(next.events[0].requestModel, "gpt-5.6-terra-wm");
+  assert.equal(next.events[0].responseModel, "gpt-5.6-terra-wm");
+  assert.equal(next.events[0].modelParameters["reasoning.effort"], "high");
+  assert.deepEqual(next.events[0].usageFeatures, ["connectors", "web_search"]);
+
+  const relations = Object.values(next.relationsByModel["5.6 Terra"]);
+  assert.equal(relations.length, 1);
+  assert.equal(relations[0].count, 1);
+  assert.deepEqual(relations[0].efforts, { high: 1 });
+  assert.deepEqual(relations[0].features, { connectors: 1, web_search: 1 });
+  assert.deepEqual(relations[0].sourceModes, { work: 1 });
+  assert.equal(relations[0].conversations["work-terra-0001"].count, 1);
+  assert.equal(relations[0].conversations["work-terra-0001"].sourceMode, "work");
+
+  const afterAnotherSubmission = background.applyIncrement(
+    next,
+    {
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-pro",
+      modelObservedSource: "webRequest",
+      modelParameters: {
+        model: "gpt-5-6-pro",
+        "reasoning.effort": "xhigh",
+      },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      usageFeatures: ["file_upload"],
+      sourceMode: "chat",
+      source: "enter-key",
+      submittedAt: new Date(now.getTime() + 1000).toISOString(),
+      pageUrl: "https://chatgpt.com/c/chat-sol-0001",
+      pageTitle: "Chat Sol verification",
+      promptHash: "chat-sol",
+      promptLength: 8,
+    },
+    new Date(now.getTime() + 1000),
+  );
+  const preservedWorkEvent = afterAnotherSubmission.events.find(
+    (event) => event.conversationId === "work-terra-0001",
+  );
+  assert.equal(afterAnotherSubmission.totals["5.6 Terra"], 1);
+  assert.equal(afterAnotherSubmission.totals["gpt-5.6-terra-wm"], undefined);
+  assert.equal(preservedWorkEvent.model, "5.6 Terra");
+  assert.equal(preservedWorkEvent.modelMappingStatus, "selector");
+  assert.equal(preservedWorkEvent.publicModelSource, "work-selector+same-route");
+  assert.equal(
+    Object.values(afterAnotherSubmission.relationsByModel["5.6 Terra"])[0]
+      .conversations["work-terra-0001"].sourceMode,
+    "work",
+  );
+});
+
+test("a pending new chat keeps one temporary conversation contribution until the final response supplies its real id", () => {
+  const now = new Date("2026-08-22T16:31:00.000Z");
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "pending-root-0001",
+      requestModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      sourceMode: "chat",
+      source: "enter-key",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/",
+      pageTitle: "ChatGPT",
+      promptHash: "pending-root",
+      promptLength: 8
+    },
+    now
+  );
+
+  const model = Object.keys(next.totals)[0];
+  const relation = Object.values(next.relationsByModel[model])[0];
+  assert.equal(relation.count, 1);
+  assert.equal(Object.values(relation.conversations).reduce((sum, item) => sum + item.count, 0), 1);
+  assert.equal(relation.conversations["pending:pending-root-0001"].sourceMode, "chat");
+  assert.deepEqual(relation.sourceModes, { chat: 1 });
+});
+
 test("GPT-5.6 Pro effort counts under Sol while the internal pro slug remains a variant", () => {
   const now = new Date("2026-08-22T14:55:48.197Z");
   const next = background.applyIncrement(
@@ -563,7 +681,7 @@ test("account model catalog remaps existing GPT-5.6 internal counts without losi
   assert.deepEqual(remapped.byDate["2026-08-22"], { "GPT-5.6 Sol": 5 });
   assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 2);
   assert.equal(remapped.models["GPT-5.6 Sol"].requestModel, "gpt-5-6-thinking");
-  assert.equal(remapped.runtimeModelCatalog.observedAt, "2026-08-22T12:00:00.000Z");
+  assert.equal(remapped.runtimeModelCatalog, undefined, "the account catalog is session-only, not persisted with usage stats");
 });
 
 test("complete event history corrects both paid Instant and Pro routes to Sol", () => {
@@ -716,6 +834,106 @@ test("publishing the live catalog rebuilds stale variant and request-parameter d
     "gpt-5-6-pro": 1,
     "gpt-5-6-thinking": 1
   });
+});
+
+test("catalog rebuild removes legacy pending events whose request model came only from DOM text", () => {
+  const existing = background.createEmptyStats();
+  existing.totals["GPT-5.6 Sol"] = 1;
+  existing.totals["gpt-5.6-sol"] = 1;
+  existing.byDate["2026-08-22"] = {
+    "GPT-5.6 Sol": 1,
+    "gpt-5.6-sol": 1
+  };
+  existing.events = [
+    {
+      submissionId: "legacy-dom-only",
+      model: "gpt-5.6-sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5.6-sol",
+      responseModel: "",
+      apiModel: "gpt-5.6-sol",
+      modelObservedSource: "message-dom:dom",
+      modelParameters: { model: "gpt-5.6-sol" },
+      submittedAt: "2026-08-22T16:01:00.000Z",
+      pageUrl: "https://chatgpt.com/c/legacy-dom-only",
+      conversationId: "legacy-dom-only",
+      promptHash: "legacy",
+      promptLength: 6,
+      usageFeatures: []
+    },
+    {
+      submissionId: "auditable-request-response",
+      model: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: "2026-08-22T16:00:00.000Z",
+      pageUrl: "https://chatgpt.com/c/auditable",
+      conversationId: "auditable",
+      promptHash: "valid",
+      promptLength: 5,
+      usageFeatures: []
+    }
+  ];
+
+  const rebuilt = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+
+  assert.deepEqual(rebuilt.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(rebuilt.events.length, 1);
+  assert.equal(rebuilt.events[0].submissionId, "auditable-request-response");
+  assert.equal(
+    rebuilt.relationsByModel["GPT-5.6 Sol"]["gpt-5-6-thinking\u0001gpt-5-6-thinking"].count,
+    1
+  );
+});
+
+test("catalog rebuild preserves an exact legacy response while marking an unproven request unavailable", () => {
+  const existing = background.createEmptyStats();
+  existing.totals["gpt-5-6-thinking"] = 1;
+  existing.byDate["2026-08-22"] = { "gpt-5-6-thinking": 1 };
+  existing.events = [
+    {
+      submissionId: "legacy-response-only",
+      model: "gpt-5-6-thinking",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5.6-sol",
+      responseModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5.6-sol",
+      chatgptModel: "GPT-5.6 Sol",
+      modelIdentitySource: "response-model",
+      modelObservedSource: "message-dom:dom",
+      modelParameters: {
+        model: "gpt-5.6-sol",
+        "reasoning.effort": "high"
+      },
+      submittedAt: "2026-08-22T16:00:00.000Z",
+      pageUrl: "https://chatgpt.com/c/legacy-response-only",
+      conversationId: "legacy-response-only",
+      promptHash: "response",
+      promptLength: 8,
+      usageFeatures: ["web_search"]
+    }
+  ];
+
+  const rebuilt = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+
+  assert.deepEqual(rebuilt.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(rebuilt.events.length, 1);
+  assert.equal(rebuilt.events[0].requestModel, "");
+  assert.equal(rebuilt.events[0].requestModelEvidence, "unavailable");
+  assert.equal(rebuilt.events[0].responseModel, "gpt-5-6-thinking");
+  assert.equal(rebuilt.events[0].modelParameters.model, undefined);
+  assert.equal(rebuilt.events[0].modelParameters["reasoning.effort"], "high");
+  assert.deepEqual(rebuilt.relationsByModel, {});
 });
 
 test("cloning a public-model aggregate preserves every exact request model instead of replacing them with the latest route", () => {
@@ -3209,6 +3427,25 @@ test("sanitizeSettings keeps only supported UI languages", () => {
     endDate: "2026-05-30"
   });
   assert.deepEqual(background.sanitizeSettings(null), { version: 1, language: "zh", startDate: "", endDate: "" });
+});
+
+test("sanitizeSettings clamps stored future dates to the browser's local today", () => {
+  const today = background.todayKey();
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = background.todayKey(tomorrowDate);
+
+  assert.equal(background.dateSettingNoLaterThanToday(tomorrow), today);
+  assert.deepEqual(background.sanitizeSettings({
+    language: "en",
+    startDate: tomorrow,
+    endDate: tomorrow
+  }), {
+    version: 1,
+    language: "en",
+    startDate: today,
+    endDate: today
+  });
 });
 
 test("sanitizeOpenAIStatusPayload keeps only web ChatGPT availability without incident timeline data", () => {

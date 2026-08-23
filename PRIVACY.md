@@ -8,7 +8,9 @@ The extension stores usage statistics and interface settings locally in the curr
 
 Locally stored usage records may include public model names, selected public models, request slugs, actual response slugs, parameter combinations, feature tags, timestamps, page URL/title, conversation ID, prompt length, and prompt hash.
 
-To map an internal request or response slug to the public model name available to the signed-in account, the extension makes a read-only same-origin request to `/backend-api/models`. It stores one sanitized model-catalog snapshot containing model slugs, public titles, version/preset bindings, and category labels. It does not store the full account response, account ID, authorization header, or access token in usage events.
+To map an internal request or response slug to the public model name available to the signed-in account, the extension makes a read-only same-origin request to `/backend-api/models` only when the user opens the statistics panel or a new unmapped response slug appears. The sanitized model slugs, public titles, version/preset bindings, and category labels are stored only in `chrome.storage.session` and are cleared when the browser session ends. Page load does not request the catalog, and `401`, `403`, or `429` responses are not retried automatically. The extension does not store the full account response, account ID, authorization header, or access token in usage events.
+
+Chat and Work use the same passive event pipeline. The extension observes the request and final response that the user already initiated; it does not automatically send prompts, modify, block, or replay ChatGPT requests. Requested reasoning effort is recorded only when the request itself provides the field.
 
 Usage statistics do not store raw prompts, raw responses, passwords, cookies, authorization headers, or access tokens.
 
@@ -59,7 +61,9 @@ ChatGPT Model Usage Counter 是一个 Chrome 扩展，用于本地 ChatGPT 使�
 
 本地使用统计记录可能包含公开模型名称、用户所选公开模型、请求型号、实际回复型号、参数组合、功能标签、时间戳、页面 URL/标题、对话 ID、prompt 长度和 prompt 哈希。
 
-为了把内部请求或回复 slug 映射到当前登录账号可用的公开模型名称，扩展会同源只读请求 `/backend-api/models`。本地只保存一份经过清理的模型目录快照，包括模型 slug、公开标题、版本/预设绑定和分类名称；不会把完整账号响应、账号 ID、Authorization header 或访问令牌写入使用事件。
+为了把内部请求或回复 slug 映射到当前登录账号可用的公开模型名称，扩展只会在用户打开统计面板或出现新的未映射回复 slug 时同源只读请求 `/backend-api/models`。清理后的模型 slug、公开标题、版本/预设绑定和分类名称只保存在 `chrome.storage.session`，浏览器会话结束后自动清除；页面加载不会请求目录，`401`、`403`、`429` 不自动重试。扩展不会把完整账号响应、账号 ID、Authorization header 或访问令牌写入使用事件。
+
+普通 Chat 和 Work 使用同一套被动统计事件。扩展只观察用户原本发起的请求及其最终回复，不会自动发送 Prompt、改写、阻断或重放 ChatGPT 请求；请求思考强度只有在该次请求本身提供字段时才记录。
 
 使用统计不保存 prompt 原文、回答原文、密码、Cookie、Authorization header 或访问令牌。
 

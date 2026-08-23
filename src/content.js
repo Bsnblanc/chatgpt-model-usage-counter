@@ -58,12 +58,15 @@
   var FINAL_RESPONSE_MODEL_WAIT_MS = 1500;
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var STATUS_KEY = "chatgptModelUsageOpenAIStatus.v1";
+  var CATALOG_SESSION_KEY = "chatgptModelUsageCatalog.session.v1";
   var lastSubmission = null;
   var lastDirectSubmission = null;
   var lastComposerSnapshot = null;
   var lastObservedModelInfo = null;
   var runtimeModelCatalog = null;
   var runtimeModelCatalogPromise = null;
+  var runtimeModelCatalogSessionLoaded = false;
+  var runtimeModelCatalogRefreshAttempts = {};
   var pendingSubmissions = [];
   var pendingSubmissionTimer = null;
   var pendingResponseObservations = [];
@@ -169,31 +172,110 @@
     }
   }
 
-  function refreshRuntimeModelCatalog() {
+  function runtimeMessage(message) {
+    return new Promise(function send(resolve) {
+      var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
+      if (!runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
+        resolve(null);
+        return;
+      }
+      try {
+        runtime.sendMessage(message, function receive(response) {
+          if (runtime.lastError) {
+            if (/context invalidated|Extension context/i.test(String(runtime.lastError.message || runtime.lastError))) {
+              handleExtensionContextInvalidated();
+            }
+            resolve(null);
+            return;
+          }
+          resolve(response || null);
+        });
+      } catch (error) {
+        if (/context invalidated|Extension context/i.test(String((error && error.message) || error || ""))) {
+          handleExtensionContextInvalidated();
+        }
+        resolve(null);
+      }
+    });
+  }
+
+  function loadRuntimeModelCatalogFromSession(force) {
+    if (force && !runtimeModelCatalog) {
+      runtimeModelCatalogSessionLoaded = false;
+    }
+    if (runtimeModelCatalog || runtimeModelCatalogSessionLoaded) {
+      return Promise.resolve(runtimeModelCatalog);
+    }
+    runtimeModelCatalogSessionLoaded = true;
+    return runtimeMessage({ type: "usage.catalog.get", key: CATALOG_SESSION_KEY }).then(function remember(response) {
+      var catalog = sanitizeRuntimeModelCatalog(response && response.catalog);
+      if (catalog) {
+        runtimeModelCatalog = catalog;
+      }
+      return runtimeModelCatalog;
+    });
+  }
+
+  function runtimeModelIsMapped(slug) {
+    if (!runtimeModelCatalog || !modelCatalog || typeof modelCatalog.resolveRuntimePublicModelInfo !== "function") {
+      return false;
+    }
+    var resolved = modelCatalog.resolveRuntimePublicModelInfo(runtimeModelCatalog, slug, {});
+    return Boolean(resolved && resolved.mappingStatus === "mapped" && resolved.publicModel);
+  }
+
+  function refreshRuntimeModelCatalog(reason, unknownSlug) {
     if (runtimeModelCatalogPromise) {
       return runtimeModelCatalogPromise;
     }
     if (!modelCatalog || typeof modelCatalog.sanitizeRuntimeModelCatalog !== "function" || typeof fetch !== "function") {
       return Promise.resolve(null);
     }
-    runtimeModelCatalogPromise = fetch("/backend-api/models?history_and_training_disabled=false", {
-      credentials: "include",
-      cache: "no-store"
-    }).then(function parseCatalogResponse(response) {
-      if (!response || !response.ok || typeof response.json !== "function") {
-        throw new Error("model-catalog-http-" + (response && response.status));
+    var refreshKey = unknownSlug ? "unknown:" + canonicalRequestModelSlug(unknownSlug) : String(reason || "panel-open");
+    if (runtimeModelCatalogRefreshAttempts[refreshKey]) {
+      return Promise.resolve(runtimeModelCatalog);
+    }
+    runtimeModelCatalogRefreshAttempts[refreshKey] = true;
+    runtimeModelCatalogPromise = runtimeMessage({
+      type: "usage.catalog.refresh.claim",
+      reason: String(reason || "panel-open").slice(0, 32),
+      unknownSlug: canonicalRequestModelSlug(unknownSlug || "")
+    }).then(function refreshClaimed(response) {
+      if (!response || response.claimed !== true) {
+        return runtimeModelCatalog;
       }
-      return response.json();
-    }).then(function rememberCatalog(payload) {
-      var catalog = runtimeCatalogSnapshot(payload);
-      if (!catalog) {
-        throw new Error("model-catalog-empty");
-      }
-      runtimeModelCatalog = catalog;
-      setDiagnostic("model-catalog-status", "ok");
-      setDiagnostic("model-catalog-observed-at", catalog.observedAt || "");
-      publishRuntimeModelCatalog(catalog);
-      return catalog;
+      var source = window.ChatGPTConversationSource;
+      var catalogRequest = source && typeof source.requestJson === "function"
+        ? source.requestJson(
+            fetch,
+            "/backend-api/models?history_and_training_disabled=false",
+            { requestGapMs: 150, maxAttempts: 1 }
+          )
+        : fetch("/backend-api/models?history_and_training_disabled=false", {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { accept: "application/json" }
+          }).then(function parseCatalogResponse(catalogResponse) {
+            if (!catalogResponse || !catalogResponse.ok || typeof catalogResponse.json !== "function") {
+              var status = Number(catalogResponse && catalogResponse.status) || 0;
+              var error = new Error("model-catalog-http-" + status);
+              error.status = status;
+              throw error;
+            }
+            return catalogResponse.json();
+          });
+      return catalogRequest.then(function rememberCatalog(payload) {
+        var catalog = runtimeCatalogSnapshot(payload);
+        if (!catalog) {
+          throw new Error("model-catalog-empty");
+        }
+        runtimeModelCatalog = catalog;
+        setDiagnostic("model-catalog-status", "ok");
+        setDiagnostic("model-catalog-observed-at", catalog.observedAt || "");
+        publishRuntimeModelCatalog(catalog);
+        return catalog;
+      });
     }).catch(function catalogFailed(error) {
       setDiagnostic("model-catalog-status", "error:" + String((error && error.message) || error || "unknown").slice(0, 80));
       return null;
@@ -202,6 +284,15 @@
       return result;
     });
     return runtimeModelCatalogPromise;
+  }
+
+  function ensureRuntimeModelCatalog(reason, unknownSlug) {
+    return loadRuntimeModelCatalogFromSession(!runtimeModelCatalog).then(function loaded(catalog) {
+      if (catalog && (!unknownSlug || runtimeModelIsMapped(unknownSlug))) {
+        return catalog;
+      }
+      return refreshRuntimeModelCatalog(reason, unknownSlug);
+    });
   }
 
   function hashText(value) {
@@ -299,8 +390,19 @@
     );
   }
 
+  function hasPublicModelSelection(modelInfo) {
+    return Boolean(
+      modelInfo &&
+      normalizePromptText(modelInfo.selectedPublicModel || modelInfo.publicModel || modelInfo.label)
+    );
+  }
+
   function isRequestModelSource(source) {
     return /^(fetch-request|xhr-request|fetch-response|xhr-response|fetch-url|xhr-url|webRequest|message-dom)(?::|$)/i.test(String(source || ""));
+  }
+
+  function isExactRequestModelSource(source) {
+    return /^(fetch-request|xhr-request|fetch-response|xhr-response|fetch-url|xhr-url|webRequest)(?::|$)/i.test(String(source || ""));
   }
 
   function canonicalRequestModelSlug(value) {
@@ -393,7 +495,12 @@
       if (/^(realtime|real_time|realtime_mode|real_time_mode)$/.test(clean)) clean = "realtime";
       if (/^(audio|audiomode|audio_mode|voice|voicemode|voice_mode|advanced_voice|input_audio|output_audio|transcription|transcribe|tts|whisper)$/.test(clean)) clean = "audio";
       if (/^(canvas|canvases|canvas_mode|canvasmode)$/.test(clean)) clean = "canvas";
-      if (/^(image_generation|deep_research|agent_mode|web_search|realtime|audio|canvas)$/.test(clean)) {
+      if (/^(file_upload|fileupload|attachment|attachments|file_attachment)$/.test(clean)) clean = "file_upload";
+      if (/^(code_interpreter|codeinterpreter|data_analysis|dataanalysis|python)$/.test(clean)) clean = "code_interpreter";
+      if (/^(connectors|connector|apps|connected_apps|connectedapps)$/.test(clean)) clean = "connectors";
+      if (/^(gpts|gpt_id|gptid|gizmo|gizmo_id|gizmoid|custom_gpt|customgpt)$/.test(clean)) clean = "gpts";
+      if (/^(tasks|scheduled_task|scheduledtask|scheduled_tasks)$/.test(clean)) clean = "tasks";
+      if (/^(image_generation|deep_research|agent_mode|web_search|realtime|audio|canvas|file_upload|code_interpreter|connectors|gpts|tasks)$/.test(clean)) {
         seen[clean] = true;
       }
     });
@@ -554,6 +661,9 @@
     if (/image|dall|imagegen/.test(key) || /创建图片|生成图片|图片生成|画图/.test(keyword)) { return "image_generation"; }
     if (/canvas/.test(key) || /画布/.test(keyword)) { return "canvas"; }
     if (/audio|voice/.test(key) || /语音|听写|朗读/.test(keyword)) { return "audio"; }
+    if (/file|upload|attachment/.test(key) || /文件|上传|附件/.test(keyword)) { return "file_upload"; }
+    if (/code|python|analysis/.test(key) || /代码|数据分析/.test(keyword)) { return "code_interpreter"; }
+    if (/connector|connected.?app|app/.test(key) || /连接器|已连接应用/.test(keyword)) { return "connectors"; }
     return "";
   }
 
@@ -579,6 +689,15 @@
     }
     if (/\b(?:canvas|canvases)\b/i.test(lower)) {
       return "canvas";
+    }
+    if (/\b(?:file\s*upload|upload\s*file|attachments?)\b/i.test(lower) || /文件上传|上传文件|附件/.test(lower)) {
+      return "file_upload";
+    }
+    if (/\b(?:code\s*interpreter|data\s*analysis|python)\b/i.test(lower) || /代码解释器|数据分析/.test(lower)) {
+      return "code_interpreter";
+    }
+    if (/\b(?:connectors?|connected\s+apps?)\b/i.test(lower) || /连接器|已连接应用/.test(lower)) {
+      return "connectors";
     }
     return "";
   }
@@ -682,6 +801,11 @@
   function withSubmissionUsageFeatures(modelInfo, usageFeatures) {
     if (!hasResolvedModel(modelInfo)) {
       var onlyFeatures = normalizeUsageFeatures(usageFeatures);
+      if (modelInfo && typeof modelInfo === "object") {
+        var unresolvedCopy = Object.assign({}, modelInfo);
+        unresolvedCopy.usageFeatures = mergeUsageFeatures(modelInfo.usageFeatures, onlyFeatures);
+        return unresolvedCopy;
+      }
       return onlyFeatures.length ? { usageFeatures: onlyFeatures } : modelInfo;
     }
     var copy = Object.assign({}, modelInfo);
@@ -856,6 +980,17 @@
       return info;
     }
 
+    if (hasPublicModelSelection(info)) {
+      info = Object.assign({}, info);
+      info.publicModel = normalizePromptText(info.selectedPublicModel || info.publicModel || info.label).slice(0, 64);
+      info.selectedPublicModel = info.publicModel;
+      info.selectedPublicModelSource = String(info.selectedPublicModelSource || "selector-dom").slice(0, 80);
+      info.observedSource = info.observedSource || info.selectedPublicModelSource;
+      setDiagnostic("detected-public-model", info.selectedPublicModel);
+      setDiagnostic("detected-model-source", info.observedSource);
+      return info;
+    }
+
     return null;
   }
 
@@ -891,6 +1026,45 @@
   function conversationIdFromCurrentLocation() {
     var match = String(location && location.href || "").match(/\/c\/([^/?#]+)/i);
     return match ? match[1] : "";
+  }
+
+  function normalizeSourceMode(value) {
+    var clean = normalizePromptText(value).toLowerCase();
+    if (clean === "work") {
+      return "work";
+    }
+    if (clean === "chat") {
+      return "chat";
+    }
+    return "unknown";
+  }
+
+  function readSourceMode() {
+    if (!document || typeof document.querySelectorAll !== "function") {
+      return "unknown";
+    }
+    try {
+      var activeModes = Array.prototype.slice.call(
+        document.querySelectorAll('[role="radiogroup"] [role="radio"][data-state="on"],[role="radiogroup"] [role="radio"][aria-checked="true"]')
+      );
+      for (var index = 0; index < activeModes.length; index += 1) {
+        var selected = normalizeSourceMode(getElementText(activeModes[index]));
+        if (selected !== "unknown") {
+          return selected;
+        }
+      }
+      if (document.querySelector('[class*="SliderTriggerModelLabel"]')) {
+        return "work";
+      }
+      if (
+        document.querySelector(
+          '[data-testid="model-switcher-dropdown-button"],[data-testid*="model-switcher" i],button[aria-label*="model" i]'
+        )
+      ) {
+        return "chat";
+      }
+    } catch (_) {}
+    return "unknown";
   }
 
   function createSubmissionId(now, promptHash) {
@@ -957,6 +1131,8 @@
     }
 
     var pending = pendingResponseObservations.splice(matchIndex, 1)[0];
+    var currentConversationId = conversationIdFromCurrentLocation();
+    var currentPageUrl = String(location && location.href || "");
     var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
     if (!runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
       return false;
@@ -966,10 +1142,11 @@
         type: "usage.response",
         payload: {
           submissionId: pending.submissionId,
-          conversationId: pending.conversationId,
+          conversationId: pending.conversationId || currentConversationId,
           responseModel: model,
           runtimeModelCatalog: runtimeModelCatalog,
-          pageUrl: pending.pageUrl || location.href,
+          pageUrl: currentConversationId ? currentPageUrl : (pending.pageUrl || currentPageUrl),
+          pageTitle: document.title,
           observedSource: String(observedSource || "message-dom:model-slug").slice(0, 64),
           observedAt: new Date(Number(observedAt || Date.now())).toISOString()
         }
@@ -987,10 +1164,13 @@
       }
       return false;
     }
+    if (!runtimeModelIsMapped(model)) {
+      ensureRuntimeModelCatalog("unknown-response", model);
+    }
     return true;
   }
 
-  function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures, submissionId) {
+  function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures, submissionId, sourceMode) {
     var resolved = hasResolvedModel(modelInfo);
     var model = resolved ? modelInfo.label : "";
     var apiModel = resolved ? modelInfo.apiModel : "";
@@ -1062,6 +1242,7 @@
           modelObservedSource: observedSource,
           submissionId: submissionId,
           source: source,
+          sourceMode: normalizeSourceMode(sourceMode),
           pageUrl: location.href,
           pageTitle: document.title,
           submittedAt: new Date(now).toISOString(),
@@ -1073,6 +1254,9 @@
         if (runtime.lastError) {
           removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "error:" + runtime.lastError.message);
+          if (/context invalidated|Extension context/i.test(String(runtime.lastError.message || runtime.lastError))) {
+            handleExtensionContextInvalidated();
+          }
           return;
         }
         if (!response || !response.ok) {
@@ -1112,7 +1296,16 @@
         }
         setDiagnostic("last-record-status", "ok");
         setDiagnostic("last-record-total", response.stats && response.stats.totals ? response.stats.totals[event.model || model] || 0 : 0);
-
+        if (
+          event.responseModel &&
+          String(event.modelMappingStatus || "").toLowerCase() === "unmapped"
+        ) {
+          // A response slug can already be present in the first completed
+          // observation. Refresh the session catalog here as well as in the
+          // later DOM-reconciliation path, then let the background rebuild
+          // this same event without adding another count.
+          ensureRuntimeModelCatalog("unknown-response", event.responseModel);
+        }
       }
     );
     } catch (sendError) {
@@ -1142,6 +1335,7 @@
 
     items.forEach(function flushPendingItem(item) {
       var observed = freshObservedModel(Date.now(), item.time - 250);
+      var selectorInfo = hasPublicModelSelection(item.domModelInfo) ? Object.assign({}, item.domModelInfo) : null;
       var modelInfo = hasResolvedModel(item.domModelInfo) ? Object.assign({}, item.domModelInfo) : null;
       if (hasResolvedModel(observed)) {
         if (!modelInfo) {
@@ -1157,8 +1351,27 @@
           modelInfo.responseModel = observed.responseModel;
         }
       }
-      modelInfo = withSubmissionUsageFeatures(modelInfo, item.usageFeatures);
-      sendUsage(item.source, item.promptText, modelInfo, item.time, item.usageFeatures, item.submissionId);
+      if (hasResolvedModel(modelInfo) && selectorInfo) {
+        var selectedPublicModel = normalizePromptText(
+          selectorInfo.selectedPublicModel || selectorInfo.publicModel || selectorInfo.label
+        ).slice(0, 64);
+        if (selectedPublicModel) {
+          modelInfo.publicModel = selectedPublicModel;
+          modelInfo.selectedPublicModel = selectedPublicModel;
+          modelInfo.selectedPublicModelSource = String(
+            selectorInfo.selectedPublicModelSource || "selector-dom"
+          ).slice(0, 80);
+          modelInfo.selectedModelText = String(selectorInfo.selectedText || selectedPublicModel).slice(0, 160);
+        }
+      }
+      // Only exact request fields can prove a used feature. Visible composer
+      // controls remain diagnostics and never become stored usage evidence.
+      if (hasResolvedModel(modelInfo)) {
+        modelInfo.usageFeatures = hasResolvedModel(observed) && isExactRequestModelSource(observed.observedSource)
+          ? normalizeUsageFeatures(observed.usageFeatures)
+          : [];
+      }
+      sendUsage(item.source, item.promptText, modelInfo, item.time, [], item.submissionId, item.sourceMode);
     });
     return true;
   }
@@ -1185,7 +1398,7 @@
     pendingSubmissionTimer = setTimeout(finishPendingSubmission, MODEL_OBSERVATION_WAIT_MS);
   }
 
-  function queueSubmission(source, promptText, domModelInfo, now, usageFeatures) {
+  function queueSubmission(source, promptText, domModelInfo, now, usageFeatures, sourceMode) {
     var hash = hashText(promptText);
     if (source === "message-dom" && lastDirectSubmission && lastDirectSubmission.hash === hash && now - lastDirectSubmission.time < MESSAGE_MATCH_WINDOW_MS) {
       return;
@@ -1210,22 +1423,30 @@
       submissionId: createSubmissionId(now, hash),
       source: source,
       promptText: promptText,
-      domModelInfo: hasResolvedModel(domModelInfo) ? domModelInfo : null,
+      domModelInfo: hasResolvedModel(domModelInfo) || hasPublicModelSelection(domModelInfo) ? domModelInfo : null,
       usageFeatures: normalizeUsageFeatures(usageFeatures),
+      sourceMode: normalizeSourceMode(sourceMode),
       time: now,
       hash: hash
     });
     schedulePendingSubmissionFlush();
   }
 
-  function recordUsage(source, target, promptTextOverride) {
+  function recordUsage(source, target, promptTextOverride, sourceModeOverride) {
     var promptText = normalizePromptText(promptTextOverride || detector.getComposerText(document, target));
     if (!promptText) {
       return;
     }
 
     var now = Date.now();
-    queueSubmission(source, promptText, readDomModel(), now, readComposerSelectedUsageFeatures(target));
+    queueSubmission(
+      source,
+      promptText,
+      readDomModel(),
+      now,
+      [],
+      sourceModeOverride || readSourceMode()
+    );
   }
 
   function refreshComposerSnapshot() {
@@ -1237,6 +1458,7 @@
     lastComposerSnapshot = {
       hash: hashText(promptText),
       text: promptText,
+      sourceMode: readSourceMode(),
       time: Date.now()
     };
   }
@@ -1367,7 +1589,7 @@
         return;
       }
 
-      recordUsage("message-dom", message.element, message.text);
+      recordUsage("message-dom", message.element, message.text, snapshot.sourceMode);
       lastComposerSnapshot = null;
     });
   }
@@ -1386,7 +1608,7 @@
       message.model,
       "message-dom:model-slug",
       observedAt,
-      true,
+      false,
       { model: message.model },
       []
     );
@@ -2057,6 +2279,13 @@
     function openPanel() {
       panel.hidden = false;
       toggleButton.setAttribute("aria-expanded", "true");
+      // The account model catalog is optional account data. Load it only after
+      // the user opens the statistics panel, and reuse the session snapshot.
+      ensureRuntimeModelCatalog("panel-open").then(function refreshMappedStats() {
+        if (dashboard && typeof dashboard.reload === "function") {
+          dashboard.reload();
+        }
+      });
       if (!dashboard) {
         dashboard = window.ChatGPTUsageDashboard.init(body, { surface: "page", onClose: closePanel, onLanguageChange: applyPanelLanguage });
       } else {
@@ -2205,7 +2434,6 @@
   document.addEventListener("input", deferComposerRefresh, true);
   document.addEventListener("keyup", refreshComposerSnapshot, true);
   readDomModel();
-  refreshRuntimeModelCatalog();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startMessageObserver, { once: true });
@@ -2266,6 +2494,53 @@
     };
     var findConversationLink = function (id) {
       return document.querySelector('a[href$="/c/' + id + '"]') || document.querySelector('a[href*="/c/' + id + '"]');
+    };
+    var currentConversationIndexItem = function () {
+      var id = conversationIdFromPath();
+      if (!id) {
+        return null;
+      }
+      var link = findConversationLink(id);
+      var linkTitle = link && (link.innerText || link.textContent || "");
+      var pageTitle = String(document.title || "").replace(/\s*[-|]\s*ChatGPT\s*$/i, "");
+      var title = normalizePromptText(linkTitle || pageTitle);
+      if (!title || /^chatgpt$/i.test(title)) {
+        title = "Conversation " + id.slice(0, 8);
+      }
+      return {
+        id: id,
+        title: title.slice(0, 200),
+        createTime: "",
+        updateTime: "",
+        archived: false,
+        current: true
+      };
+    };
+    var prioritizeCurrentConversation = function (conversations) {
+      var current = currentConversationIndexItem();
+      var byId = {};
+      (Array.isArray(conversations) ? conversations : []).forEach(function remember(item) {
+        if (item && item.id && !byId[item.id]) {
+          byId[item.id] = Object.assign({}, item, { current: Boolean(current && item.id === current.id) });
+        }
+      });
+      if (current) {
+        byId[current.id] = Object.assign({}, byId[current.id] || {}, current, { current: true });
+      }
+      var ordered = Object.keys(byId).map(function toItem(id) { return byId[id]; });
+      ordered.sort(function currentFirst(left, right) {
+        if (Boolean(left.current) !== Boolean(right.current)) {
+          return left.current ? -1 : 1;
+        }
+        var byTime = String(right.updateTime || right.createTime || "").localeCompare(
+          String(left.updateTime || left.createTime || "")
+        );
+        return byTime || String(left.title || "").localeCompare(String(right.title || "")) || left.id.localeCompare(right.id);
+      });
+      return {
+        conversations: ordered,
+        currentConversationId: current ? current.id : ""
+      };
     };
     // 点开侧边栏链接后,轮询等地址真正切到目标对话(SPA 切换有延迟);
     // 超时返回 false,让调用方跳过收集,避免抓到上一段对话。
@@ -2388,8 +2663,8 @@
         : null;
     }
 
-    function loadAccountHistoryAuth(forceRefresh) {
-      if (accountHistoryAuthPromise && !forceRefresh) {
+    function loadAccountHistoryAuth() {
+      if (accountHistoryAuthPromise) {
         return accountHistoryAuthPromise;
       }
       accountHistoryAuthPromise = window.fetch("/api/auth/session", {
@@ -2422,8 +2697,34 @@
       return accountHistoryAuthPromise;
     }
 
-    function accountHistoryFetch(url, init, refreshed) {
-      return loadAccountHistoryAuth(Boolean(refreshed)).then(function authorizedFetch(auth) {
+    function accountHistoryFetch(url, init) {
+      var parsedUrl;
+      try {
+        if (typeof URL === "function") {
+          parsedUrl = new URL(String(url || ""), location.origin);
+        } else {
+          var rawUrl = String(url || "");
+          var fallbackHref = rawUrl.charAt(0) === "/"
+            ? String(location.origin || "") + rawUrl
+            : rawUrl;
+          parsedUrl = {
+            href: fallbackHref,
+            origin: fallbackHref.indexOf(String(location.origin || "")) === 0
+              ? String(location.origin || "")
+              : ""
+          };
+        }
+      } catch (_) {
+        return Promise.reject(new Error("ChatGPT account history URL is invalid."));
+      }
+      if (parsedUrl.origin !== location.origin) {
+        return Promise.reject(new Error("ChatGPT account history requests must remain same-origin."));
+      }
+      var requestedMethod = String((init && init.method) || "GET").toUpperCase();
+      if (requestedMethod !== "GET") {
+        return Promise.reject(new Error("ChatGPT account history access is read-only."));
+      }
+      return loadAccountHistoryAuth().then(function authorizedFetch(auth) {
         scheduleAccountHistoryAuthClear();
         var options = Object.assign({}, init || {});
         var headers;
@@ -2440,15 +2741,13 @@
           });
         }
         options.headers = headers;
+        options.method = "GET";
         options.credentials = "include";
         options.cache = "no-store";
-        return window.fetch(url, options);
+        return window.fetch(parsedUrl.href, options);
       }).then(function refreshExpiredSession(response) {
         if (response && (response.status === 401 || response.status === 403)) {
           clearAccountHistoryAuth();
-          if (!refreshed) {
-            return accountHistoryFetch(url, init, true);
-          }
         }
         return response;
       });
@@ -2584,8 +2883,9 @@
 
     function listConversationsForExport() {
       var account = accountSourceOptions();
+      var listPromise;
       if (!account) {
-        return listAllDomConversations().then(function domOnly(conversations) {
+        listPromise = listAllDomConversations().then(function domOnly(conversations) {
           return {
             conversations: conversations,
             total: conversations.length,
@@ -2594,8 +2894,8 @@
             warnings: [{ scope: "account", error: "Account history access is unavailable; showing loaded sidebar chats only." }]
           };
         });
-      }
-      return account.source.listAccountConversations(account.options).then(function accountList(result) {
+      } else {
+        listPromise = account.source.listAccountConversations(account.options).then(function accountList(result) {
         var accountConversations = result.conversations || [];
         if (!accountConversations.length) {
           return listAllDomConversations().then(function useVisibleSidebarWhenAccountIndexIsEmpty(sidebarConversations) {
@@ -2636,6 +2936,15 @@
             source: "sidebar",
             warnings: [{ scope: "account", error: safeCollectionError(error) }]
           };
+        });
+        });
+      }
+      return listPromise.then(function putCurrentFirst(result) {
+        var prioritized = prioritizeCurrentConversation(result && result.conversations);
+        return Object.assign({}, result || {}, {
+          conversations: prioritized.conversations,
+          total: prioritized.conversations.length,
+          currentConversationId: prioritized.currentConversationId
         });
       });
     }
@@ -2751,7 +3060,8 @@
               total: result.total,
               complete: result.complete,
               source: result.source,
-              warnings: result.warnings
+              warnings: result.warnings,
+              currentConversationId: result.currentConversationId || ""
             });
           })
           .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });

@@ -31,6 +31,28 @@ function createStats() {
         }
       }
     },
+    relationsByModel: {
+      "future-family-2026-thinking": {
+        "future-family-2026-thinking\u0001future-family-2026-pro": {
+          requestModel: "future-family-2026-thinking",
+          responseModel: "future-family-2026-pro",
+          count: 3,
+          efforts: { high: 3 },
+          features: { web_search: 1 },
+          sourceModes: { chat: 3 },
+          conversations: {
+            "conversation-alpha": {
+              conversationId: "conversation-alpha",
+              title: "Alpha research",
+              count: 3,
+              lastSubmittedAt: "2026-05-30T15:00:00.000Z",
+              lastPageUrl: "https://chatgpt.com/c/conversation-alpha",
+              sourceMode: "chat"
+            }
+          }
+        }
+      }
+    },
     events: []
   };
 }
@@ -115,15 +137,21 @@ test("dashboard popup owns the single scroll layer", () => {
   assert.doesNotMatch(source, /\.usage-view-panel\{[^}]*overflow:auto/);
 });
 
-test("model conversation index renders as an index, not selection controls", () => {
+test("model conversations stay inside their request-response relation and are not selection controls", () => {
   const html = dashboard.renderModelTextList(createStats(), { language: "en" });
   const source = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf8");
-  const sessionsStart = html.indexOf('<div class="usage-record-sessions">');
-  const sessionsEnd = html.indexOf("</div></div>", sessionsStart);
+  const sessionsStart = html.indexOf('<div class="usage-relation-conversation-list">');
+  const sessionsEnd = html.indexOf("</details>", sessionsStart);
   const sessionsHtml = html.slice(sessionsStart, sessionsEnd);
 
   assert.notEqual(sessionsStart, -1);
-  assert.match(sessionsHtml, /usage-index-number/);
+  assert.match(html, /usage-model-relation/);
+  assert.match(html, /future-family-2026-thinking/);
+  assert.match(html, /future-family-2026-pro/);
+  assert.match(html, /Reasoning effort/);
+  assert.match(html, /Web search/);
+  assert.match(sessionsHtml, /usage-relation-conversation/);
+  assert.match(sessionsHtml, /usage-source-mode/);
   assert.match(sessionsHtml, /usage-index-link/);
   assert.match(sessionsHtml, /data-session-id="conversation-alpha"/);
   assert.match(sessionsHtml, /Alpha research/);
@@ -135,14 +163,11 @@ test("model conversation index renders as an index, not selection controls", () 
   assert.doesNotMatch(sessionsHtml, /type="checkbox"/);
   assert.doesNotMatch(sessionsHtml, /usage-session-titlebar/);
   assert.doesNotMatch(html, /usage-session-pill/);
-  assert.match(source, /\.usage-record-session-row\{[^}]*border:0/);
-  assert.match(source, /\.usage-record-session-row\{[^}]*grid-template-columns:16px minmax\(0,1fr\);[^}]*align-items:baseline;[^}]*padding:0;[^}]*background:transparent;[^}]*line-height:17px/);
+  assert.match(source, /\.usage-relation-conversation\{[^}]*grid-template-columns:auto minmax\(0,1fr\);[^}]*align-items:start/);
   assert.match(source, /\.usage-index-content\{[^}]*display:flex;[^}]*align-items:baseline;[^}]*overflow:hidden/);
   assert.match(source, /\.usage-index-content small\{[^}]*flex:0 0 auto;[^}]*white-space:nowrap/);
-  assert.doesNotMatch(source, /\.usage-record-session-row\{[^}]*border-radius/);
-  assert.doesNotMatch(source, /\.usage-record-session-row\{[^}]*box-shadow/);
-  assert.doesNotMatch(source, /\.usage-record-session-row\+\.usage-record-session-row/);
-  assert.doesNotMatch(source, /\.usage-record-sessions\{[^}]*border/);
+  assert.doesNotMatch(source, /\.usage-relation-conversation\{[^}]*border-radius/);
+  assert.doesNotMatch(source, /\.usage-relation-conversation\{[^}]*box-shadow/);
 });
 
 test("usage view keeps exact and public model labels while omitting unresolved placeholders", () => {

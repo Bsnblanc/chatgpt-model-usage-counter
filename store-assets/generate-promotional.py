@@ -246,7 +246,7 @@ def readable_exports():
         (18, 132, 139),
         scale,
     )
-    text(draw, (88 * scale, 73 * scale), "ACTUAL BROWSER EXPORTS · v1.3.1", 12 * scale, (84, 238, 222), "semibold", "lm")
+    text(draw, (88 * scale, 73 * scale), "ACTUAL BROWSER EXPORTS · v1.3.2", 12 * scale, (84, 238, 222), "semibold", "lm")
     text(draw, (70 * scale, 142 * scale), "One chat.", 48 * scale, (245, 249, 255), "bold")
     text(draw, (70 * scale, 197 * scale), "Five readable formats.", 48 * scale, (59, 226, 207), "bold")
     text(
@@ -273,7 +273,7 @@ def readable_exports():
         chip_x = pill(draw, chip_x, 570 * scale, label, scale) + 10 * scale
 
     text(draw, (72 * scale, 724 * scale), "ChatGPT Model Usage Counter", 14 * scale, (142, 171, 194), "regular")
-    text(draw, (319 * scale, 724 * scale), "v1.3.1", 14 * scale, (84, 238, 222), "bold")
+    text(draw, (319 * scale, 724 * scale), "v1.3.2", 14 * scale, (84, 238, 222), "bold")
 
     audit_root = (
         ROOT.parent
@@ -281,11 +281,11 @@ def readable_exports():
         / "cdp"
         / "live-export-qa"
         / "audit"
-        / "render-v1.3.1"
+        / "render-v1.3.2-final2"
     )
     preview_paths = [
-        (audit_root / "pdf-structured" / "page-1.png", "PDF"),
-        (audit_root / "docx-word" / "structuredDocx" / "page-01.png", "DOCX"),
+        (audit_root / "pdf-structured" / "page.png", "PDF"),
+        (audit_root / "structured-pages" / "page.png", "DOCX"),
         (audit_root.parent / "visual" / "structuredPng.png", "PNG"),
     ]
     missing = [str(path) for path, _ in preview_paths if not path.is_file()]

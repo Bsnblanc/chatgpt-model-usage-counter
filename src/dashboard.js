@@ -293,6 +293,7 @@
     exportSelectedCount: "已选 {count} 个",
     exportSelectionHint: "单选直接下载一个文件；多选下载一个 ZIP，每段对话一个独立文件。",
     exportArchived: "已归档",
+    exportCurrent: "当前对话",
     exportUpdated: "更新于 {time}",
     exportListEmpty: "未找到可导出的账号对话。",
     exportNoSelection: "请先勾选要导出的对话。",
@@ -305,10 +306,15 @@
     featureAgentMode: "Agent Mode",
     featureAudio: "音频",
     featureCanvas: "Canvas",
+    featureCodeInterpreter: "代码解释器",
+    featureConnectors: "连接器",
     featureDeepResearch: "Deep Research",
+    featureFileUpload: "文件",
+    featureGpts: "GPTs",
     featureImageGeneration: "图片生成",
     featureRealtime: "Realtime",
     featureStats: "功能",
+    featureTasks: "任务",
     featureWebSearch: "联网搜索",
     formatImage: "PNG",
     languageToggleEn: "EN",
@@ -328,6 +334,15 @@
     parameterCombinations: "参数",
     parameterLatest: "最新参数",
     requestModels: "请求型号",
+    modelRelation: "请求 → 回复",
+    legacyUnlinked: "历史记录未关联",
+    legacyUnlinkedHint: "升级前的聚合记录缺少逐次事件关系，保留原始统计，但不猜测请求型号、回复型号与对话之间的配对。",
+    reasoningEffort: "思考强度",
+    reasoningUnspecified: "未提供",
+    relationConversations: "关联对话",
+    sourceModeChat: "对话",
+    sourceModeWork: "Work",
+    sourceModeUnknown: "未识别模式",
     responsePending: "待确认实际回复",
     refresh: "刷新",
     selected: "已选择 {count} 个模型",
@@ -372,6 +387,7 @@
     exportSelectedCount: "{count} selected",
     exportSelectionHint: "One selection downloads one file. Multiple selections download one ZIP with one file per conversation.",
     exportArchived: "Archived",
+    exportCurrent: "Current chat",
     exportUpdated: "Updated {time}",
     exportListEmpty: "No account conversations are available to export.",
     exportNoSelection: "Select at least one conversation to export.",
@@ -383,10 +399,15 @@
     featureAgentMode: "Agent Mode",
     featureAudio: "Audio",
     featureCanvas: "Canvas",
+    featureCodeInterpreter: "Code interpreter",
+    featureConnectors: "Connectors",
     featureDeepResearch: "Deep Research",
+    featureFileUpload: "Files",
+    featureGpts: "GPTs",
     featureImageGeneration: "Image generation",
     featureRealtime: "Realtime",
     featureStats: "Features",
+    featureTasks: "Tasks",
     featureWebSearch: "Web search",
     languageToggleEn: "EN",
     languageToggleZh: "中文",
@@ -398,6 +419,15 @@
     parameterCombinations: "Parameters",
     parameterLatest: "Latest parameters",
     requestModels: "Request model",
+    modelRelation: "Request → response",
+    legacyUnlinked: "Historical records not linked",
+    legacyUnlinkedHint: "Older aggregate records do not contain event-level links. Their original counts are preserved without guessing request, response, or conversation pairings.",
+    reasoningEffort: "Reasoning effort",
+    reasoningUnspecified: "Not provided",
+    relationConversations: "Related conversations",
+    sourceModeChat: "Chat",
+    sourceModeWork: "Work",
+    sourceModeUnknown: "Unknown mode",
     responsePending: "Response pending",
     startDate: "Start",
     todayOnly: "Today {today}",
@@ -546,6 +576,7 @@
       variantsByModel: {},
       featuresByModel: {},
       parametersByModel: {},
+      relationsByModel: {},
       events: [],
       lastUpdated: null
     };
@@ -593,7 +624,7 @@
       }
     });
 
-    ["parametersByModel", "featuresByModel"].forEach(function copyAggregate(collection) {
+    ["parametersByModel", "featuresByModel", "relationsByModel"].forEach(function copyAggregate(collection) {
       Object.keys(source[collection] || {}).forEach(function copyModel(model) {
         var metadata = sourceModels[model];
         if (isDashboardModelValid(model, metadata, model)) {
@@ -943,6 +974,239 @@
     }, 0);
   }
 
+  function normalizeDashboardSourceMode(value) {
+    var clean = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    return clean === "chat" || clean === "work" ? clean : "unknown";
+  }
+
+  function eventReasoningEffort(event) {
+    var parameters = event && event.modelParameters && typeof event.modelParameters === "object"
+      ? event.modelParameters
+      : {};
+    var value = parameters["reasoning.effort"] || parameters.reasoning_effort;
+    if (!value && parameters.reasoning && typeof parameters.reasoning === "object") {
+      value = parameters.reasoning.effort;
+    }
+    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 32) || "unspecified";
+  }
+
+  function relationKey(requestModel, responseModel) {
+    return String(requestModel || "") + "\u0001" + String(responseModel || "");
+  }
+
+  function addEventToRelation(groups, event) {
+    if (!event) {
+      return;
+    }
+    var requestModel = String(
+      event.requestModel ||
+      (event.modelParameters && event.modelParameters.model) ||
+      event.apiModel ||
+      ""
+    ).replace(/\s+/g, " ").trim();
+    var responseModel = String(event.responseModel || "").replace(/\s+/g, " ").trim();
+    if (!requestModel) {
+      return;
+    }
+    var key = relationKey(requestModel, responseModel);
+    var relation = groups[key] || {
+      requestModel: requestModel,
+      responseModel: responseModel,
+      count: 0,
+      efforts: {},
+      features: {},
+      sourceModes: {},
+      conversations: {},
+      firstSubmittedAt: String(event.submittedAt || ""),
+      lastSubmittedAt: ""
+    };
+    relation.count += 1;
+    var effort = eventReasoningEffort(event);
+    relation.efforts[effort] = (relation.efforts[effort] || 0) + 1;
+    (Array.isArray(event.usageFeatures) ? event.usageFeatures : []).forEach(function addFeature(rawFeature) {
+      var feature = normalizeDashboardFeatureId(rawFeature);
+      if (feature) {
+        relation.features[feature] = (relation.features[feature] || 0) + 1;
+      }
+    });
+    var sourceMode = normalizeDashboardSourceMode(event.sourceMode);
+    relation.sourceModes[sourceMode] = (relation.sourceModes[sourceMode] || 0) + 1;
+    var actualConversationId = String(event.conversationId || "").trim();
+    var conversationId = actualConversationId || (
+      event.submissionId ? "pending:" + String(event.submissionId).slice(0, 96) : ""
+    );
+    if (conversationId) {
+      var conversation = relation.conversations[conversationId] || {
+        conversationId: conversationId,
+        title: actualConversationId ? (event.pageTitle || conversationId) : "",
+        count: 0,
+        firstSubmittedAt: String(event.submittedAt || ""),
+        lastSubmittedAt: "",
+        lastPageUrl: actualConversationId ? (event.pageUrl || ("https://chatgpt.com/c/" + conversationId)) : "",
+        sourceMode: sourceMode
+      };
+      conversation.count += 1;
+      if (String(event.submittedAt || "") >= String(conversation.lastSubmittedAt || "")) {
+        conversation.lastSubmittedAt = String(event.submittedAt || "");
+        conversation.lastPageUrl = actualConversationId ? (event.pageUrl || conversation.lastPageUrl) : "";
+        conversation.title = actualConversationId ? (event.pageTitle || conversation.title) : "";
+        conversation.sourceMode = sourceMode;
+      }
+      relation.conversations[conversationId] = conversation;
+    }
+    if (String(event.submittedAt || "") > String(relation.lastSubmittedAt || "")) {
+      relation.lastSubmittedAt = String(event.submittedAt || "");
+    }
+    groups[key] = relation;
+  }
+
+  function eventModelRelations(stats, model, events) {
+    var groups = {};
+    (events || stats.events || []).forEach(function collect(event) {
+      if (event && event.model === model) {
+        addEventToRelation(groups, event);
+      }
+    });
+    return Object.keys(groups).map(function toRelation(key) { return groups[key]; });
+  }
+
+  function storedModelRelations(stats, model) {
+    var source = stats && stats.relationsByModel && stats.relationsByModel[model];
+    return Object.keys(source || {}).map(function toRelation(key) {
+      var relation = source[key] || {};
+      return {
+        requestModel: String(relation.requestModel || ""),
+        responseModel: String(relation.responseModel || ""),
+        count: Number(relation.count) || 0,
+        efforts: Object.assign({}, relation.efforts || {}),
+        features: Object.assign({}, relation.features || {}),
+        sourceModes: Object.assign({}, relation.sourceModes || {}),
+        conversations: Object.assign({}, relation.conversations || {}),
+        firstSubmittedAt: String(relation.firstSubmittedAt || ""),
+        lastSubmittedAt: String(relation.lastSubmittedAt || "")
+      };
+    }).filter(function valid(relation) {
+      return relation.requestModel && relation.count > 0;
+    });
+  }
+
+  function isFullDashboardRange(stats, state) {
+    if (!hasExplicitDateRange(state || {})) {
+      return true;
+    }
+    return normalizeDateInput(state && state.startDate) === defaultStartDate(stats || {}) &&
+      normalizeDateInput(state && state.endDate) === defaultEndDate();
+  }
+
+  function relationConversationRemainder(stats, model, state, relations) {
+    var covered = {};
+    (relations || []).forEach(function countCovered(relation) {
+      Object.keys(relation && relation.conversations || {}).forEach(function addCovered(id) {
+        var conversation = relation.conversations[id] || {};
+        covered[id] = (covered[id] || 0) + (Number(conversation.count) || 0);
+      });
+    });
+    var remainder = {};
+    modelSessions(stats, model, state).forEach(function addSession(session) {
+      if (!session || !session.conversationId) {
+        return;
+      }
+      var remaining = Math.max(0, (Number(session.count) || 0) - (covered[session.conversationId] || 0));
+      if (!remaining) {
+        return;
+      }
+      remainder[session.conversationId] = {
+        conversationId: session.conversationId,
+        title: session.title || session.conversationId,
+        count: remaining,
+        firstSubmittedAt: session.firstSubmittedAt || "",
+        lastSubmittedAt: session.lastSubmittedAt || "",
+        lastPageUrl: session.lastPageUrl || "",
+        sourceMode: normalizeDashboardSourceMode(session.sourceMode)
+      };
+    });
+    return remainder;
+  }
+
+  function augmentOnlyRelationFromModelAggregates(stats, model, state, relation, targetCount) {
+    if (!relation || relation.legacyUnlinked || Number(relation.count) !== Number(targetCount)) {
+      return relation;
+    }
+    modelFeatures(stats, model, state, 100).forEach(function mergeFeature(feature) {
+      var count = Math.min(Number(relation.count) || 0, Number(feature && feature.count) || 0);
+      if (feature && feature.id && count > Number(relation.features[feature.id] || 0)) {
+        relation.features[feature.id] = count;
+      }
+    });
+    var sessions = modelSessions(stats, model, state);
+    var sessionTotal = sessions.reduce(function sum(total, session) {
+      return total + (Number(session && session.count) || 0);
+    }, 0);
+    if (sessionTotal > 0 && sessionTotal <= Number(relation.count)) {
+      sessions.forEach(function mergeSession(session) {
+        if (!session || !session.conversationId) {
+          return;
+        }
+        var current = relation.conversations[session.conversationId];
+        if (!current || Number(session.count) > Number(current.count)) {
+          relation.conversations[session.conversationId] = {
+            conversationId: session.conversationId,
+            title: session.title || session.conversationId,
+            count: Number(session.count) || 0,
+            firstSubmittedAt: session.firstSubmittedAt || "",
+            lastSubmittedAt: session.lastSubmittedAt || "",
+            lastPageUrl: session.lastPageUrl || "",
+            sourceMode: normalizeDashboardSourceMode(session.sourceMode || (current && current.sourceMode))
+          };
+        }
+      });
+    }
+    return relation;
+  }
+
+  function modelRelations(stats, model, state) {
+    stats = sanitizeDashboardStats(stats || {});
+    var relations = isFullDashboardRange(stats, state)
+      ? storedModelRelations(stats, model)
+      : eventModelRelations(stats, model, rangeEvents(stats, state, model));
+    if (!relations.length) {
+      relations = eventModelRelations(stats, model, rangeEvents(stats, state, model));
+    }
+    var targetCount = hasExplicitDateRange(state || {})
+      ? (Number(modelTotalsInRange(stats, state)[model]) || 0)
+      : (Number(stats.totals && stats.totals[model]) || 0);
+    if (relations.length === 1) {
+      relations[0] = augmentOnlyRelationFromModelAggregates(stats, model, state, relations[0], targetCount);
+    }
+    var linkedCount = relations.reduce(function sum(total, relation) {
+      return total + (Number(relation && relation.count) || 0);
+    }, 0);
+    if (targetCount > linkedCount) {
+      relations.push({
+        legacyUnlinked: true,
+        showAggregateDetails: linkedCount === 0,
+        requestModel: "",
+        responseModel: "",
+        count: targetCount - linkedCount,
+        efforts: {},
+        features: {},
+        sourceModes: {},
+        conversations: relationConversationRemainder(stats, model, state, relations),
+        firstSubmittedAt: "",
+        lastSubmittedAt: ""
+      });
+    }
+    return relations.sort(function byCountThenRecent(left, right) {
+      if (Boolean(left.legacyUnlinked) !== Boolean(right.legacyUnlinked)) {
+        return left.legacyUnlinked ? 1 : -1;
+      }
+      return right.count - left.count ||
+        String(right.lastSubmittedAt || "").localeCompare(String(left.lastSubmittedAt || "")) ||
+        left.requestModel.localeCompare(right.requestModel) ||
+        left.responseModel.localeCompare(right.responseModel);
+    });
+  }
+
   function featureLabel(state, id) {
     var key = {
       image_generation: "featureImageGeneration",
@@ -951,7 +1215,12 @@
       web_search: "featureWebSearch",
       realtime: "featureRealtime",
       audio: "featureAudio",
-      canvas: "featureCanvas"
+      canvas: "featureCanvas",
+      file_upload: "featureFileUpload",
+      code_interpreter: "featureCodeInterpreter",
+      connectors: "featureConnectors",
+      gpts: "featureGpts",
+      tasks: "featureTasks"
     }[id];
     return key ? text(state, key) : id;
   }
@@ -972,6 +1241,11 @@
     if (/^(realtime|real_time|realtime_mode|real_time_mode)$/.test(versionless)) return "realtime";
     if (/^(audio|audiomode|audio_mode|voice|voicemode|voice_mode|advanced_voice|input_audio|output_audio|transcription|transcribe|tts|whisper)$/.test(versionless)) return "audio";
     if (/^(canvas|canvases|canvas_mode|canvasmode)$/.test(versionless)) return "canvas";
+    if (/^(file_upload|fileupload|attachment|attachments|file_attachment)$/.test(versionless)) return "file_upload";
+    if (/^(code_interpreter|codeinterpreter|data_analysis|dataanalysis|python)$/.test(versionless)) return "code_interpreter";
+    if (/^(connectors|connector|apps|connected_apps|connectedapps)$/.test(versionless)) return "connectors";
+    if (/^(gpts|gpt_id|gptid|gizmo|gizmo_id|gizmoid|custom_gpt|customgpt)$/.test(versionless)) return "gpts";
+    if (/^(tasks|scheduled_task|scheduledtask|scheduled_tasks)$/.test(versionless)) return "tasks";
     return "";
   }
 
@@ -1150,8 +1424,8 @@
       type: "settings.set",
       settings: {
         language: normalizeLanguage(state.language),
-        startDate: normalizeDateInput(state.startDate),
-        endDate: normalizeDateInput(state.endDate)
+        startDate: dateNoLaterThanToday(state.startDate),
+        endDate: dateNoLaterThanToday(state.endDate) || defaultEndDate()
       }
     }, state);
   }
@@ -1173,9 +1447,18 @@
     return todayKey();
   }
 
+  function dateNoLaterThanToday(value) {
+    var clean = normalizeDateInput(value);
+    if (!clean) {
+      return "";
+    }
+    var today = defaultEndDate();
+    return clean > today ? today : clean;
+  }
+
   function dateRange(stats, startDate, endDate) {
-    var startKey = normalizeDateInput(startDate) || defaultStartDate(stats || {});
-    var endKey = normalizeDateInput(endDate) || defaultEndDate();
+    var startKey = dateNoLaterThanToday(startDate) || defaultStartDate(stats || {});
+    var endKey = dateNoLaterThanToday(endDate) || defaultEndDate();
     if (startKey > endKey) {
       var swap = startKey;
       startKey = endKey;
@@ -1480,17 +1763,13 @@
           }).join("") + "</div>"
         : "";
       var summary = [
-        renderModelVariants(stats, row.model, state),
-        renderRequestModels(stats, row.model, state),
-        renderParameterCombinations(stats, row.model, state),
-        renderFeatureSummary(stats, row.model, state),
-        '<div class="usage-session-summary usage-session-block"><span class="usage-record-label">' + escapeHtml(text(state, "conversationIndex")) + '</span><div class="usage-record-sessions">' + renderModelSessions(stats, row.model, state) + "</div></div>"
+        renderModelRelations(stats, row.model, state)
       ].join("");
       return [
         '<div class="usage-count-record">',
         '<div class="usage-count-row">',
         '<span><strong>' + escapeHtml(row.model) + '</strong>' + features + "</span>",
-        '<span class="usage-count-numbers"><b>' + row.total + '</b><small>' + escapeHtml(text(state, "rangeTotal", { count: row.total })) + text(state, "separator") + escapeHtml(text(state, "allTimeTotal", { count: row.allTimeTotal })) + text(state, "separator") + escapeHtml(text(state, "todayOnly", { today: row.today })) + "</small></span>",
+        '<span class="usage-count-numbers"><b>' + row.total + "</b></span>",
         "</div>",
         '<div class="usage-count-details" data-model-record-details="' + escapeHtml(row.model) + '">' + summary + "</div>",
         "</div>"
@@ -1639,6 +1918,110 @@
     }).join("");
   }
 
+  function sourceModeLabel(state, mode) {
+    var normalized = normalizeDashboardSourceMode(mode);
+    if (normalized === "chat") return text(state, "sourceModeChat");
+    if (normalized === "work") return text(state, "sourceModeWork");
+    return text(state, "sourceModeUnknown");
+  }
+
+  function countMapSummary(state, counts, valueLabel) {
+    return Object.keys(counts || {}).filter(function positive(key) {
+      return Number(counts[key]) > 0;
+    }).sort(function byCount(left, right) {
+      return Number(counts[right]) - Number(counts[left]) || left.localeCompare(right);
+    }).map(function renderCount(key) {
+      return '<span><b>' + escapeHtml(valueLabel(key)) + "</b> " +
+        escapeHtml(text(state, "countTimes", { count: Number(counts[key]) || 0 })) + "</span>";
+    }).join("");
+  }
+
+  function relationConversationRows(state, relation) {
+    var conversations = Object.keys(relation.conversations || {}).map(function toConversation(id) {
+      return relation.conversations[id];
+    }).filter(Boolean).sort(function byRecent(left, right) {
+      return String(right.lastSubmittedAt || "").localeCompare(String(left.lastSubmittedAt || ""));
+    });
+    if (!conversations.length) {
+      return '<div class="usage-record-empty">' + escapeHtml(text(state, "noModelConversations")) + "</div>";
+    }
+    return conversations.map(function renderConversation(conversation) {
+      var id = conversation.conversationId || "";
+      var pending = /^pending:/.test(id);
+      var href = pending ? "" : (conversation.lastPageUrl || ("https://chatgpt.com/c/" + id));
+      var meta = [
+        text(state, "countTimes", { count: Number(conversation.count) || 0 }),
+        conversation.lastSubmittedAt ? formatDateTime(conversation.lastSubmittedAt) : ""
+      ].filter(Boolean).join(text(state, "separator"));
+      var title = conversation.title || (
+        pending
+          ? text(state, "responsePending")
+          : id
+      );
+      var conversationTitle = pending
+        ? '<span class="usage-index-link pending" title="' + escapeHtml(id) + '">' + escapeHtml(title) + "</span>"
+        : '<a class="usage-index-link" data-session-id="' + escapeHtml(id) +
+          '" href="' + escapeHtml(href) + '" target="_blank" rel="noreferrer" title="' + escapeHtml(id) + '">' +
+          escapeHtml(title) + "</a>";
+      return [
+        '<div class="usage-relation-conversation">',
+        '<span class="usage-source-mode ' + escapeHtml(normalizeDashboardSourceMode(conversation.sourceMode)) + '">' +
+          escapeHtml(sourceModeLabel(state, conversation.sourceMode)) + "</span>",
+        '<div class="usage-index-content">' + conversationTitle + "<small>" + escapeHtml(meta) + "</small></div>",
+        "</div>"
+      ].join("");
+    }).join("");
+  }
+
+  function renderModelRelations(stats, model, state) {
+    var relations = modelRelations(stats, model, state);
+    if (!relations.length) {
+      return '<div class="usage-record-empty">' + escapeHtml(text(state, "noModelConversations")) + "</div>";
+    }
+    return '<div class="usage-model-relations">' + relations.map(function renderRelation(relation) {
+      var conversations = Object.keys(relation.conversations || {}).filter(function hasConversation(id) {
+        return relation.conversations[id] && Number(relation.conversations[id].count) > 0;
+      });
+      if (relation.legacyUnlinked) {
+        return [
+          '<section class="usage-model-relation legacy-unlinked">',
+          '<div class="usage-relation-head"><strong>' + escapeHtml(text(state, "legacyUnlinked")) +
+            '</strong><span>' + escapeHtml(text(state, "countTimes", { count: relation.count })) + "</span></div>",
+          '<p class="usage-relation-warning">' + escapeHtml(text(state, "legacyUnlinkedHint")) + "</p>",
+          relation.showAggregateDetails ? renderModelRecordSummary(stats, model, state) : "",
+          '<details class="usage-relation-conversations"><summary>' +
+            escapeHtml(text(state, "relationConversations")) + " · " + conversations.length +
+            '</summary><div class="usage-relation-conversation-list">' +
+            relationConversationRows(state, relation) + "</div></details>",
+          "</section>"
+        ].join("");
+      }
+      var effortHtml = countMapSummary(state, relation.efforts, function effortLabel(effort) {
+        return effort === "unspecified" ? text(state, "reasoningUnspecified") : effort;
+      });
+      var featureHtml = countMapSummary(state, relation.features, function relationFeatureLabel(feature) {
+        return featureLabel(state, feature);
+      });
+      return [
+        '<section class="usage-model-relation">',
+        '<div class="usage-relation-head"><strong><code>' + escapeHtml(relation.requestModel) + "</code><i>&rarr;</i><code>" +
+          escapeHtml(relation.responseModel || text(state, "responsePending")) + '</code></strong><span>' +
+          escapeHtml(text(state, "countTimes", { count: relation.count })) + "</span></div>",
+        '<div class="usage-relation-dimension"><span class="usage-record-label">' +
+          escapeHtml(text(state, "reasoningEffort")) + '</span><div class="usage-relation-values">' +
+          (effortHtml || '<span><b>' + escapeHtml(text(state, "reasoningUnspecified")) + "</b> " +
+            escapeHtml(text(state, "countTimes", { count: relation.count })) + "</span>") + "</div></div>",
+        '<div class="usage-relation-dimension"><span class="usage-record-label">' +
+          escapeHtml(text(state, "featureStats")) + '</span><div class="usage-relation-values">' +
+          (featureHtml || '<span class="usage-record-empty">—</span>') + "</div></div>",
+        '<details class="usage-relation-conversations"><summary>' +
+          escapeHtml(text(state, "relationConversations")) + " · " + conversations.length + '</summary><div class="usage-relation-conversation-list">' +
+          relationConversationRows(state, relation) + "</div></details>",
+        "</section>"
+      ].join("");
+    }).join("") + "</div>";
+  }
+
   function renderModelVariants(stats, model, state) {
     var events = rangeEvents(stats, state, model);
     var variants = modelVariants(stats, model, 3, events).filter(function notSameAsRow(variant) {
@@ -1780,8 +2163,7 @@
         "</div>",
         '<div class="usage-text-count"><b>' + row.total + '</b><small>' + escapeHtml(text(state, "rangeTotal", { count: row.rangeTotal })) + text(state, "separator") + escapeHtml(text(state, "allTimeTotal", { count: row.allTimeTotal })) + text(state, "separator") + escapeHtml(text(state, "todayTotal", { today: row.today, total: row.total })) + "</small></div>",
         "</div>",
-        renderModelRecordSummary(stats, row.model, state),
-        '<div class="usage-session-summary usage-session-block"><span class="usage-record-label">' + escapeHtml(text(state, "conversationIndex")) + '</span><div class="usage-record-sessions">' + renderModelSessions(stats, row.model, state) + "</div></div>",
+        renderModelRelations(stats, row.model, state),
         "</div>"
       ].join("");
     }).join("");
@@ -1883,8 +2265,7 @@
     var sections = [
       '<section class="usage-openai-status">',
       '<div class="usage-openai-hero ' + escapeHtml(statusKind(overall.indicator)) + '">',
-      '<div><span>' + escapeHtml(text(state, "openaiStatusTitle")) + '</span><strong>' + escapeHtml(description) + '</strong><small>' + heroMeta + "</small></div>",
-      renderStatusBadge(state, overall.indicator),
+      '<div><strong>' + escapeHtml(description) + '</strong><small>' + heroMeta + "</small></div>",
       "</div>"
     ];
 
@@ -1925,7 +2306,8 @@
   }
 
   function renderDateControls(state) {
-    return '<div class="usage-controls usage-chart-controls"><div class="usage-date-controls" aria-label="' + escapeHtml(text(state, "customRange")) + '"><label>' + escapeHtml(text(state, "startDate")) + ' <input class="usage-start-date" type="date" value="' + escapeHtml(state.startDate) + '"></label><label>' + escapeHtml(text(state, "endDate")) + ' <input class="usage-end-date" type="date" value="' + escapeHtml(state.endDate) + '"></label></div></div>';
+    var today = defaultEndDate();
+    return '<div class="usage-controls usage-chart-controls"><div class="usage-date-controls" aria-label="' + escapeHtml(text(state, "customRange")) + '"><label>' + escapeHtml(text(state, "startDate")) + ' <input class="usage-start-date" type="date" max="' + escapeHtml(today) + '" value="' + escapeHtml(state.startDate) + '"></label><label>' + escapeHtml(text(state, "endDate")) + ' <input class="usage-end-date" type="date" max="' + escapeHtml(today) + '" value="' + escapeHtml(state.endDate) + '"></label></div></div>';
   }
 
   var EXPORT_FORMATS = [
@@ -2018,14 +2400,15 @@
         var ck = selected[c.id] ? " checked" : "";
         var title = c.title || c.id;
         var updated = formatDateTime(c.updateTime || c.createTime);
-        var archived = c.archived
-          ? '<small class="usage-export-conv-badge">' + escapeHtml(text(state, "exportArchived")) + "</small>"
-          : "";
+        var badges = [
+          c.current ? '<small class="usage-export-conv-badge current">' + escapeHtml(text(state, "exportCurrent")) + "</small>" : "",
+          c.archived ? '<small class="usage-export-conv-badge">' + escapeHtml(text(state, "exportArchived")) + "</small>" : ""
+        ].join("");
         return '<label class="usage-export-conv"><input type="checkbox" data-export-conv="' + escapeHtml(c.id) +
           '" aria-label="' + escapeHtml(title) + '"' + ck + '><span class="usage-export-conv-copy"><b>' +
           escapeHtml(title) + "</b>" +
           (updated ? "<small>" + escapeHtml(text(state, "exportUpdated", { time: updated })) + "</small>" : "") +
-          "</span>" + archived + "</label>";
+          "</span>" + badges + "</label>";
       }).join("") + "</div>";
     }
 
@@ -2350,8 +2733,8 @@
   function render(state) {
     state.stats = sanitizeDashboardStats(state.stats || {});
     ensureSelection(state);
-    state.startDate = normalizeDateInput(state.startDate) || defaultStartDate(state.stats || {});
-    state.endDate = normalizeDateInput(state.endDate) || defaultEndDate();
+    state.startDate = dateNoLaterThanToday(state.startDate) || defaultStartDate(state.stats || {});
+    state.endDate = dateNoLaterThanToday(state.endDate) || defaultEndDate();
     var models = selectedModels(state);
     var rangeTotals = modelTotalsInRange(state.stats, state);
     var activeView = normalizeView(state.activeView);
@@ -2362,7 +2745,7 @@
         ? text(state, "exportView")
         : text(state, "modelUsage");
     var subtitle = activeView === "status"
-      ? text(state, "openaiStatusSubtitle")
+      ? ""
       : activeView === "export"
         ? text(state, "exportSubtitle")
         : text(state, "total", { count: countTotal(rangeTotals) }) + text(state, "separator") + text(state, "selected", { count: models.length });
@@ -2377,7 +2760,9 @@
     var visibleStatusText = state.statusText || "";
     state.container.innerHTML = [
       '<div class="usage-dashboard usage-dashboard-' + surface + '">',
-      '<div class="usage-topline"><div><div class="usage-title-row"><h2>' + escapeHtml(heading) + "</h2></div><p>" + escapeHtml(subtitle) + '</p></div><div class="usage-top-actions"><button class="usage-language-toggle" type="button" data-language-toggle="' + escapeHtml(languageToggleTarget) + '" aria-label="' + escapeHtml(languageToggleLabel) + '" title="' + escapeHtml(languageToggleLabel) + '">' + escapeHtml(languageToggleText) + '</button><button class="usage-refresh" type="button">' + escapeHtml(text(state, "refresh")) + "</button>" + closeAction + "</div></div>",
+      '<div class="usage-topline"><div><div class="usage-title-row"><h2>' + escapeHtml(heading) + "</h2></div>" +
+        (subtitle ? "<p>" + escapeHtml(subtitle) + "</p>" : "") +
+        '</div><div class="usage-top-actions"><button class="usage-language-toggle" type="button" data-language-toggle="' + escapeHtml(languageToggleTarget) + '" aria-label="' + escapeHtml(languageToggleLabel) + '" title="' + escapeHtml(languageToggleLabel) + '">' + escapeHtml(languageToggleText) + '</button><button class="usage-refresh" type="button">' + escapeHtml(text(state, "refresh")) + "</button>" + closeAction + "</div></div>",
       renderViewTabs(state),
       renderActiveView(state, models),
       '<div class="usage-status' + (state.statusError && visibleStatusText ? " error" : "") + '" aria-live="polite">' + escapeHtml(visibleStatusText) + "</div>",
@@ -2435,7 +2820,7 @@
     var endDate = state.container.querySelector(".usage-end-date");
     if (startDate) {
       startDate.addEventListener("change", function changeStart(event) {
-        state.startDate = normalizeDateInput(event.target.value) || state.startDate;
+        state.startDate = dateNoLaterThanToday(event.target.value) || state.startDate;
         render(state);
         saveSettings(state).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
@@ -2444,7 +2829,7 @@
     }
     if (endDate) {
       endDate.addEventListener("change", function changeEnd(event) {
-        state.endDate = normalizeDateInput(event.target.value) || state.endDate;
+        state.endDate = dateNoLaterThanToday(event.target.value) || state.endDate;
         render(state);
         saveSettings(state).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
@@ -2567,7 +2952,22 @@
 
   function applyExportConversationList(state, result) {
     var list = Array.isArray(result) ? result : result && result.conversations;
-    state.exportConversationList = Array.isArray(list) ? list : [];
+    var currentConversationId = String(result && result.currentConversationId || "");
+    state.exportConversationList = (Array.isArray(list) ? list : []).map(function markCurrent(conversation) {
+      return Object.assign({}, conversation || {}, {
+        current: Boolean(
+          conversation && (
+            conversation.current ||
+            currentConversationId && conversation.id === currentConversationId
+          )
+        )
+      });
+    }).sort(function currentFirst(left, right) {
+      if (Boolean(left.current) !== Boolean(right.current)) {
+        return left.current ? -1 : 1;
+      }
+      return 0;
+    });
     state.exportConversationMeta = Array.isArray(result) ? { complete: false, source: "sidebar" } : (result || {});
     var previousSelection = state.exportSelected || {};
     var nextSelection = {};
@@ -2576,6 +2976,15 @@
         nextSelection[conversation.id] = true;
       }
     });
+    if (!state.exportSelectionInitialized) {
+      var current = state.exportConversationList.filter(function findCurrent(conversation) {
+        return conversation && conversation.current && conversation.id;
+      })[0];
+      if (current) {
+        nextSelection[current.id] = true;
+      }
+      state.exportSelectionInitialized = true;
+    }
     state.exportSelected = nextSelection;
     render(state);
     return state.exportConversationMeta;
@@ -3094,8 +3503,8 @@
       var settings = results[1] || {};
       state.stats = results[0];
       state.language = normalizeLanguage(settings.language);
-      state.startDate = normalizeDateInput(settings.startDate) || state.startDate || "";
-      state.endDate = normalizeDateInput(settings.endDate) || state.endDate || "";
+      state.startDate = dateNoLaterThanToday(settings.startDate) || state.startDate || "";
+      state.endDate = dateNoLaterThanToday(settings.endDate) || state.endDate || "";
       state.loading = false;
       setStatus(state, "");
       render(state);
@@ -3202,6 +3611,7 @@
       ".usage-export-conv-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--usage-text-muted)}",
       ".usage-export-conv input{flex:0 0 auto}",
       ".usage-export-conv-badge{margin-left:auto;flex:0 0 auto;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:10px}",
+      ".usage-export-conv-badge.current{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
       // —— 视觉优化:键盘焦点可见、交互态、溢出处理、减少动画 ——
       ".usage-dashboard button:focus-visible,.usage-dashboard select:focus-visible,.usage-dashboard input:focus-visible{outline:2px solid var(--usage-accent-link,#10a37f);outline-offset:1px}",
       ".usage-view-tab{cursor:pointer;border-radius:5px;transition:background .12s ease,color .12s ease}",
@@ -3262,6 +3672,25 @@
       ".usage-text-count{text-align:right}",
       ".usage-text-count b{display:block;color:var(--usage-accent-link)}",
       ".usage-record-summary{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;margin:0;padding:3px 0 0;border-top:0}",
+      ".usage-model-relations{display:grid;gap:7px}",
+      ".usage-model-relation{display:grid;gap:5px;padding:7px;border:1px solid var(--usage-border-panel);border-radius:7px;background:var(--usage-surface-row-hover)}",
+      ".usage-model-relation.legacy-unlinked{border-style:dashed}",
+      ".usage-relation-warning{margin:0;color:var(--usage-warning-text);font-size:10px;line-height:1.45}",
+      ".usage-relation-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}",
+      ".usage-relation-head strong{display:flex;align-items:center;min-width:0;gap:5px;font-size:11px}",
+      ".usage-relation-head code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}",
+      ".usage-relation-head i{font-style:normal;color:var(--usage-text-muted)}",
+      ".usage-relation-head>span{flex:0 0 auto;color:var(--usage-accent-link);font-weight:700}",
+      ".usage-relation-dimension{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;align-items:start}",
+      ".usage-relation-values{display:flex;flex-wrap:wrap;gap:4px 8px;min-width:0}",
+      ".usage-relation-values>span{font-size:11px;color:var(--usage-text-secondary)}",
+      ".usage-relation-values b{color:var(--usage-text-primary)}",
+      ".usage-relation-conversations{border-top:1px solid var(--usage-border-divider);padding-top:5px}",
+      ".usage-relation-conversations summary{cursor:pointer;color:var(--usage-text-secondary);font-size:11px;font-weight:600}",
+      ".usage-relation-conversation-list{display:grid;gap:4px;margin-top:5px}",
+      ".usage-relation-conversation{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px;align-items:start}",
+      ".usage-source-mode{display:inline-flex;align-items:center;justify-content:center;min-width:38px;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:9px}",
+      ".usage-source-mode.work{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
       ".usage-param-combos,.usage-session-summary,.usage-variant-list,.usage-feature-list{display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 8px;align-items:start}",
       ".usage-session-block{padding-top:0}",
       ".usage-record-label{color:var(--usage-text-muted);font-size:11px;line-height:20px;white-space:nowrap}",
@@ -3279,6 +3708,7 @@
       ".usage-index-number{color:var(--usage-text-disabled);font-size:10.5px;line-height:17px;text-align:right;font-variant-numeric:tabular-nums}",
       ".usage-index-content{display:flex;align-items:baseline;gap:6px;min-width:0;overflow:hidden}",
       ".usage-index-link{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary);text-decoration:none;font-size:11.5px;font-weight:600}",
+      ".usage-index-link.pending{color:var(--usage-text-secondary)}",
       ".usage-index-link:hover{color:var(--usage-accent-link-hover);text-decoration:underline}",
       ".usage-session-title b{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}",
       ".usage-session-action{display:inline-flex;align-items:center;min-height:22px;padding:0;color:var(--usage-accent-link);background:transparent;text-decoration:none;font-size:11px;font-weight:700;white-space:nowrap}",
@@ -3351,6 +3781,7 @@
       exportConversationList: null,
       exportConversationMeta: null,
       exportSelected: {},
+      exportSelectionInitialized: false,
       exportBusy: false,
       stats: { totals: {}, byDate: {}, models: {}, sessionsByModel: {}, variantsByModel: {}, parametersByModel: {}, events: [] }
     };
@@ -3371,6 +3802,7 @@
     flattenSessions: flattenSessions,
     init: init,
     modelRequestModels: modelRequestModels,
+    modelRelations: modelRelations,
     modelVariants: modelVariants,
     parameterCombinations: parameterCombinations,
     renderActiveView: renderActiveView,
@@ -3383,12 +3815,15 @@
       bindEvents: bindEvents,
       ensureSelection: ensureSelection,
       applyPopupThemeVariables: applyPopupThemeVariables,
+      applyExportConversationList: applyExportConversationList,
       buildExportArtifacts: buildExportArtifacts,
       downloadConversationArchiveByIds: downloadConversationArchiveByIds,
       exportTargetPlan: exportTargetPlan,
       finishConversationArchive: finishConversationArchive,
       localExportDateStamp: localExportDateStamp,
       normalizeConversationCollection: normalizeConversationCollection,
+      dateNoLaterThanToday: dateNoLaterThanToday,
+      modelRelations: modelRelations,
       syncExportSelectionUi: syncExportSelectionUi,
       uniqueConversationBases: uniqueConversationBases
     }
