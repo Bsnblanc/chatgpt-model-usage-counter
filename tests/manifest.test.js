@@ -15,6 +15,12 @@ test("manifest is MV3 and targets ChatGPT hosts", () => {
   assert.ok(manifest.host_permissions.includes("https://chat.openai.com/*"));
   assert.ok(manifest.host_permissions.includes("https://status.openai.com/*"));
   assert.equal(manifest.content_scripts.length, 1);
+  assert.deepEqual(manifest.content_scripts[0].exclude_matches, [
+    "https://chatgpt.com/api/*",
+    "https://chatgpt.com/backend-api/*",
+    "https://chat.openai.com/api/*",
+    "https://chat.openai.com/backend-api/*"
+  ]);
   assert.deepEqual(manifest.content_scripts[0].js, [
     "src/model-catalog.js",
     "src/detector.js",

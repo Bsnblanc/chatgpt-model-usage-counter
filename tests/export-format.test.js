@@ -31,7 +31,12 @@ const formatConversations = [
         id: "format-assistant-1",
         role: "assistant",
         text: "Export verification answer.",
-        model: MODEL_NAME,
+        selectedPublicModel: "GPT-5.6 Sol",
+        selectedPublicMode: "thinking",
+        selectedPublicModeLabel: "Thinking",
+        responseModel: MODEL_NAME,
+        requestModel: MODEL_NAME,
+        requestReasoningEffort: "high",
         modelParameters: MODEL_PARAMETERS,
         features: ["deep_search"],
         createTime: "2026-05-30T12:00:10.000Z",
@@ -102,7 +107,8 @@ const strictReadableConversations = [
         id: "model-only-assistant",
         role: "assistant",
         text: "Model-only answer stays exported.",
-        model: MODEL_ONLY_NAME,
+        responseModel: MODEL_ONLY_NAME,
+        requestModel: MODEL_ONLY_NAME,
         modelParameters: { model: MODEL_ONLY_NAME },
         createTime: "2026-05-30T14:00:10.000Z"
       },
@@ -110,7 +116,9 @@ const strictReadableConversations = [
         id: "parameterized-assistant",
         role: "assistant",
         text: "Parameterized answer stays exported.",
-        model: MODEL_NAME,
+        responseModel: MODEL_NAME,
+        requestModel: MODEL_NAME,
+        requestReasoningEffort: "high",
         modelParameters: {
           model: MODEL_NAME,
           reasoning: { effort: "high" },
@@ -133,7 +141,7 @@ const markdownStructureConversations = [
       {
         id: "markdown-structure-assistant",
         role: "assistant",
-        model: MODEL_NAME,
+        responseModel: MODEL_NAME,
         text: "需求不完整：你只给了三个跌幅 **-86.79%、-83.68%、-77.57%**，但没说明空格要填什么。 按常见几种算法： | 你想问的内容 | 结果 | 依据 |\n|---|---:|---|\n| **平均跌幅** | **-82.68%** | ((-86.79-83.68-77.57)/3=-82.68) |\n| **平均亏损后需要回本涨幅** | **约 +477.19%** | 若按平均剩余本金 17.32% 回本，则需 +477.19% | 最可能你要填的是： **平均跌幅：-82.68%** 置信度：中。原因是你没有说明空格代表什么。\n\n## 依据与推理 先看相邻两项差值：\n| 项 | 数值 | 与前一项差值 |\n|---|---:|---:|\n| 第1项 | -86.79% | — |",
         createTime: "2026-06-02T08:25:41.000Z"
       }
@@ -369,7 +377,7 @@ test("JSON export is structured and includes normalized messages", () => {
 
   assert.equal(artifact.mimeType, exporter.MIME.json);
   assert.equal(payload.title, "Format Verification Export");
-  assert.equal(payload.formatVersion, 3);
+  assert.equal(payload.formatVersion, 4);
   assert.equal(payload.conversationCount, 1);
   assert.equal(payload.messageCount, 2);
   assert.deepEqual(payload.featureUsage, { total: 1, byFeature: { deep_research: 1 } });
@@ -380,6 +388,11 @@ test("JSON export is structured and includes normalized messages", () => {
   assert.equal(payload.conversations[0].messages[1].role, "assistant");
   assert.equal(typeof payload.conversations[0].messages[1].text, "string");
   assert.equal(payload.conversations[0].messages[1].model, MODEL_NAME);
+  assert.equal(payload.conversations[0].messages[1].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(payload.conversations[0].messages[1].selectedPublicMode, "thinking");
+  assert.equal(payload.conversations[0].messages[1].selectedPublicModeLabel, "Thinking");
+  assert.equal(payload.conversations[0].messages[1].requestModel, MODEL_NAME);
+  assert.equal(payload.conversations[0].messages[1].responseModel, MODEL_NAME);
   assert.equal(payload.conversations[0].messages[1].parameters["reasoning.effort"], "high");
   assert.equal(payload.conversations[0].messages[1].parameters["text.verbosity"], "medium");
   assert.equal(payload.conversations[0].messages[1].parameters.temperature, 0.2);
@@ -399,6 +412,25 @@ test("Markdown frontmatter quotes YAML-special titles (colon/hash/brackets) so f
     { id: "p", title: "普通标题", url: "https://x", messages: [{ role: "user", text: "hi" }, { role: "assistant", text: "ok" }] }
   ];
   assert.match(exporter.exportMarkdown(plain, {}), /^title: 普通标题$/m);
+});
+
+test("Markdown frontmatter keeps created and updated timestamps in separate fields", () => {
+  const markdown = exporter.exportMarkdown([
+    {
+      id: "frontmatter-time",
+      title: "Time fields",
+      create_time: "2026-08-23T01:00:00.000Z",
+      update_time: "2026-08-23T01:05:00.000Z",
+      messages: [
+        { role: "user", text: "Question" },
+        { role: "assistant", text: "Answer" },
+      ],
+    },
+  ]);
+
+  assert.match(markdown, /^created: "2026-08-23T01:00:00\.000Z"$/m);
+  assert.match(markdown, /^updated: "2026-08-23T01:05:00\.000Z"$/m);
+  assert.doesNotMatch(markdown, /^created: .*Updated:/m);
 });
 
 test("multi-select export makes one separate single-conversation file per conversation (not concatenated)", () => {
@@ -435,7 +467,8 @@ test("Markdown export contains hierarchy, model parameters, and no internal fiel
   assert.match(markdown, /\*\*你\*\*\n\nPlease summarize the export record\./);
   assert.match(markdown, /Export verification answer\./);
   // 模型 + 功能作为简短附注(parameters 不展开,只保留在 JSON 数据里)
-  assert.match(markdown, /\*future-family-2026-thinking · deep_research\*/);
+  assert.match(markdown, /\*请求型号：future-family-2026-thinking · 实际回复型号：future-family-2026-thinking · 思考强度：high · 公开选择：GPT-5\.6 Sol · 公开模式：Thinking · 功能：deep_research\*/);
+  assert.equal((markdown.match(/future-family-2026-thinking/g) || []).length, 2);
   assert.doesNotMatch(markdown, /\| Model \|/);
   assert.doesNotMatch(markdown, /\| Parameters \|/);
   assert.doesNotMatch(markdown, /\| Features \|/);

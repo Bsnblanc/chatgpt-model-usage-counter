@@ -8,10 +8,36 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function dashboardFactory(root) {
   "use strict";
 
-  var COLORS = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4f46e5"];
+  var COLORS = [
+    "var(--usage-chart-series-1,#2563eb)",
+    "var(--usage-chart-series-2,#dc2626)",
+    "var(--usage-chart-series-3,#16a34a)",
+    "var(--usage-chart-series-4,#9333ea)",
+    "var(--usage-chart-series-5,#ea580c)",
+    "var(--usage-chart-series-6,#0891b2)",
+    "var(--usage-chart-series-7,#be123c)",
+    "var(--usage-chart-series-8,#4f46e5)"
+  ];
+  var LINE_STYLES = [
+    "none",
+    "8 4",
+    "2 3",
+    "10 3 2 3",
+    "14 4",
+    "4 3 1 3",
+    "1 4",
+    "7 2 1 2"
+  ];
   var CHART_SIZE = { width: 360, height: 192 };
   var STORAGE_KEY = "chatgptModelUsageStats.v1";
-  var DEFAULT_LANGUAGE = "zh";
+  var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
+  var DEFAULT_LANGUAGE = "en";
+  var DEFAULT_STATISTICS_MODE = "mapped";
+  var DEFAULT_CHART_TYPE = "line";
+  var DEFAULT_THEME_MODE = "system";
+  var MAX_STATISTICS_IMPORT_BYTES = 10 * 1024 * 1024;
+  var INTERNAL_UNKNOWN_REQUEST = "__unknown_request_model__";
+  var INTERNAL_UNKNOWN_RESPONSE = "__unknown_response_model__";
   var USAGE_THEME_VARIABLES = {
     light: {
       "--usage-text-primary": "#18201c",
@@ -41,10 +67,27 @@
       "--usage-border-chart-grid": "#d9e1d7",
       "--usage-border-section": "#eef2f7",
       "--usage-border-error": "#fecaca",
+      "--usage-chart-series-1": "#2563eb",
+      "--usage-chart-series-2": "#dc2626",
+      "--usage-chart-series-3": "#16a34a",
+      "--usage-chart-series-4": "#9333ea",
+      "--usage-chart-series-5": "#ea580c",
+      "--usage-chart-series-6": "#0891b2",
+      "--usage-chart-series-7": "#be123c",
+      "--usage-chart-series-8": "#4f46e5",
       "--usage-accent-primary": "#245f49",
       "--usage-accent-primary-hover": "#1f513f",
       "--usage-accent-link": "#2563eb",
       "--usage-accent-link-hover": "#1d4ed8",
+      "--usage-effort-max": "#991b1b",
+      "--usage-effort-extended": "#c2410c",
+      "--usage-effort-high": "#b45309",
+      "--usage-effort-standard": "#6d28d9",
+      "--usage-effort-medium": "#1d4ed8",
+      "--usage-effort-low": "#047857",
+      "--usage-effort-min": "#0e7490",
+      "--usage-effort-none": "#475569",
+      "--usage-effort-unknown": "#64748b",
       "--usage-shadow-accent": "rgba(36,95,73,.2)",
       "--usage-shadow-active-tab": "rgba(24,32,28,.08)",
       "--usage-shadow-tooltip": "rgba(15,23,42,.2)",
@@ -100,10 +143,27 @@
       "--usage-border-chart-grid": "#3e3f4b",
       "--usage-border-section": "#3e3f4b",
       "--usage-border-error": "#7f1d1d",
+      "--usage-chart-series-1": "#60a5fa",
+      "--usage-chart-series-2": "#f87171",
+      "--usage-chart-series-3": "#4ade80",
+      "--usage-chart-series-4": "#c084fc",
+      "--usage-chart-series-5": "#fb923c",
+      "--usage-chart-series-6": "#22d3ee",
+      "--usage-chart-series-7": "#fb7185",
+      "--usage-chart-series-8": "#818cf8",
       "--usage-accent-primary": "#10a37f",
       "--usage-accent-primary-hover": "#19c37d",
       "--usage-accent-link": "#10a37f",
       "--usage-accent-link-hover": "#19c37d",
+      "--usage-effort-max": "#fca5a5",
+      "--usage-effort-extended": "#fdba74",
+      "--usage-effort-high": "#fde047",
+      "--usage-effort-standard": "#c4b5fd",
+      "--usage-effort-medium": "#93c5fd",
+      "--usage-effort-low": "#86efac",
+      "--usage-effort-min": "#67e8f9",
+      "--usage-effort-none": "#e5e7eb",
+      "--usage-effort-unknown": "#9ca3af",
       "--usage-shadow-accent": "rgba(16,163,127,.3)",
       "--usage-shadow-active-tab": "rgba(0,0,0,.3)",
       "--usage-shadow-tooltip": "rgba(0,0,0,.3)",
@@ -154,6 +214,8 @@
       items: "{count} 项",
       language: "语言",
       languageToggleLabel: "切换语言",
+      settings: "设置",
+      settingsOpen: "打开设置",
       latest10: "最近 10 条",
       loadFailed: "加载失败。",
       loading: "加载中...",
@@ -171,7 +233,7 @@
       parameterCombinations: "参数",
       parameterLatest: "最新参数",
       requestModels: "请求型号",
-      responsePending: "待确认实际回复",
+      responsePending: "未知",
       range: "范围",
       recentRecords: "最近记录",
       realtimeService: "Realtime 服务",
@@ -180,6 +242,28 @@
       separator: " | ",
       serviceComponents: "关键组件",
       source: "来源",
+      statisticsSections: "显示内容",
+      statisticsDisplaySettings: "显示设置",
+      statisticsSectionTrend: "图表",
+      statisticsSectionText: "文字统计",
+      statisticsMode: "视图模式",
+      statisticsModeMapped: "基础",
+      statisticsModeInternal: "高级",
+      chartType: "图表",
+      chartTypeLine: "趋势（折线）",
+      chartTypeDonut: "构成（环形）",
+      chartCompositionTitle: "模型使用构成",
+      chartCompositionBack: "返回模型占比",
+      chartCompositionEmpty: "当前范围没有可显示的数据。",
+      chartCompositionIncomplete: "思考强度占比仅覆盖已保留的最近记录。",
+      chartCompositionTotalLabel: "总计",
+      theme: "主题",
+      themeSystem: "跟随系统",
+      themeLight: "浅色",
+      themeDark: "深色",
+      statisticsHistoryIncomplete: "当前口径仅覆盖已保留的最近事件，不能代表全部历史。",
+      requestModelGroup: "请求型号",
+      responseModelChild: "实际回复型号",
       statusDegraded: "性能下降",
       statusMaintenance: "维护中",
       statusMajor: "严重中断",
@@ -194,7 +278,7 @@
       rangeTotal: "范围内 {count} 次",
       unableStatus: "无法读取 OpenAI 状态。",
       updated: "更新",
-      unmarkedSource: "未标记来源",
+      unmarkedSource: "未知",
       variants: "型号",
       zh: "中文"
     },
@@ -219,6 +303,8 @@
       items: "{count} items",
       language: "Language",
       languageToggleLabel: "Switch language",
+      settings: "Settings",
+      settingsOpen: "Open settings",
       latest10: "Latest 10",
       loadFailed: "Load failed.",
       loading: "Loading...",
@@ -236,7 +322,7 @@
       parameterCombinations: "Parameters",
       parameterLatest: "Latest parameters",
       requestModels: "Request model",
-      responsePending: "Response pending",
+      responsePending: "Unknown",
       range: "Range",
       recentRecords: "Recent records",
       realtimeService: "Realtime service",
@@ -245,6 +331,28 @@
       separator: " | ",
       serviceComponents: "Key components",
       source: "Source",
+      statisticsSections: "Visible statistics",
+      statisticsDisplaySettings: "Display settings",
+      statisticsSectionTrend: "Chart",
+      statisticsSectionText: "Text statistics",
+      statisticsMode: "View mode",
+      statisticsModeMapped: "Basic",
+      statisticsModeInternal: "Advanced",
+      chartType: "Chart",
+      chartTypeLine: "Trend (line)",
+      chartTypeDonut: "Composition (donut)",
+      chartCompositionTitle: "Model usage composition",
+      chartCompositionBack: "Back to model share",
+      chartCompositionEmpty: "No data is available in the selected range.",
+      chartCompositionIncomplete: "Reasoning-effort share covers retained recent records only.",
+      chartCompositionTotalLabel: "Total",
+      theme: "Theme",
+      themeSystem: "System",
+      themeLight: "Light",
+      themeDark: "Dark",
+      statisticsHistoryIncomplete: "This view covers only the retained recent events and does not represent the full history.",
+      requestModelGroup: "Request model",
+      responseModelChild: "Actual response model",
       statusDegraded: "Degraded performance",
       statusMaintenance: "Under maintenance",
       statusMajor: "Major outage",
@@ -259,7 +367,7 @@
       rangeTotal: "Range {count}",
       unableStatus: "Unable to read OpenAI status.",
       updated: "Updated",
-      unmarkedSource: "unmarked source",
+      unmarkedSource: "Unknown",
       variants: "Variants",
       zh: "中文"
     }
@@ -269,12 +377,12 @@
     all: "全选",
     chartView: "统计",
     exportView: "导出",
-    exportSubtitle: "从对话列表中选择一个或多个，再导出为所选格式",
+    exportFormatGroup: "导出格式",
     exportFormatJson: "JSON",
     exportFormatMarkdown: "Markdown",
     exportFormatPdf: "PDF",
     exportFormatPng: "PNG",
-    exportFormatDocx: "Word (DOCX)",
+    exportFormatDocx: "DOCX",
     exportAllLoading: "正在读取账号对话索引…",
     exportListIncomplete: "账号历史读取不完整；只能导出当前列表中已读取到的对话。",
     exportListUnavailable: "无法读取账号对话索引；请确认当前标签页已登录 ChatGPT，然后重试。",
@@ -294,10 +402,32 @@
     exportSelectionHint: "单选直接下载一个文件；多选下载一个 ZIP，每段对话一个独立文件。",
     exportArchived: "已归档",
     exportCurrent: "当前对话",
+    exportSelectProject: "选择项目 {name}",
+    exportUngrouped: "未归入项目 / 普通对话",
+    exportUnknownProject: "未知项目",
     exportUpdated: "更新于 {time}",
     exportListEmpty: "未找到可导出的账号对话。",
     exportNoSelection: "请先勾选要导出的对话。",
     exportProgressSelected: "正在读取所选对话…",
+    exportSearchPlaceholder: "搜索标题或对话 ID",
+    exportSearchEmpty: "没有匹配的对话。",
+    exportCancel: "取消",
+    exportCancelling: "正在停止；不会再启动新的对话读取…",
+    exportCancelled: "导出已取消。",
+    statisticsData: "统计数据",
+    statisticsDataExportJson: "备份 JSON",
+    statisticsDataExportCsv: "记录 CSV",
+    statisticsDataImportJson: "导入备份",
+    statisticsDataExporting: "正在导出统计数据…",
+    statisticsDataExported: "已导出 {name}",
+    statisticsDataImportConfirm: "导入会替换当前全部统计记录。确定继续？",
+    statisticsDataImporting: "正在导入统计数据…",
+    statisticsDataImported: "已恢复 {count} 次统计记录",
+    statisticsDataImportInvalid: "这不是有效的统计备份文件。",
+    statisticsDataImportUnsupported: "该统计备份版本不受支持。",
+    statisticsDataImportTooLarge: "统计备份文件超过 10 MB，无法导入。",
+    statisticsDataOperationFailed: "统计数据操作失败：{error}",
+    overlappingModels: "{count} 个模型",
     conversationIndex: "对话",
     countTimes: "{count} 次",
     customRange: "自定义日期",
@@ -313,7 +443,6 @@
     featureGpts: "GPTs",
     featureImageGeneration: "图片生成",
     featureRealtime: "Realtime",
-    featureStats: "功能",
     featureTasks: "任务",
     featureWebSearch: "联网搜索",
     formatImage: "PNG",
@@ -335,15 +464,20 @@
     parameterLatest: "最新参数",
     requestModels: "请求型号",
     modelRelation: "请求 → 回复",
+    modelRelationSame: "请求与实际回复型号一致",
     legacyUnlinked: "历史记录未关联",
     legacyUnlinkedHint: "升级前的聚合记录缺少逐次事件关系，保留原始统计，但不猜测请求型号、回复型号与对话之间的配对。",
     reasoningEffort: "思考强度",
-    reasoningUnspecified: "未提供",
+    reasoningEffortInline: "强度",
+    reasoningUnspecified: "未知",
     relationConversations: "关联对话",
-    sourceModeChat: "对话",
+    sourceFilterAll: "全部",
+    sourceFilterChat: "Chat",
+    sourceFilterWork: "Work",
+    sourceModeChat: "Chat",
     sourceModeWork: "Work",
-    sourceModeUnknown: "未识别模式",
-    responsePending: "待确认实际回复",
+    sourceModeUnknown: "未知",
+    responsePending: "未知",
     refresh: "刷新",
     selected: "已选择 {count} 个模型",
     startDate: "开始",
@@ -363,12 +497,12 @@
   I18N.en = Object.assign({}, I18N.en, {
     chartView: "Usage",
     exportView: "Export",
-    exportSubtitle: "Choose one or more conversations from the list, then export them in the selected format",
+    exportFormatGroup: "Export format",
     exportFormatJson: "JSON",
     exportFormatMarkdown: "Markdown",
     exportFormatPdf: "PDF",
     exportFormatPng: "PNG",
-    exportFormatDocx: "Word (DOCX)",
+    exportFormatDocx: "DOCX",
     exportAllLoading: "Reading the account conversation index…",
     exportListIncomplete: "Account history was incomplete; only conversations already present in this list can be exported.",
     exportListUnavailable: "The account conversation index could not be read. Confirm that the active tab is signed in to ChatGPT, then retry.",
@@ -388,10 +522,32 @@
     exportSelectionHint: "One selection downloads one file. Multiple selections download one ZIP with one file per conversation.",
     exportArchived: "Archived",
     exportCurrent: "Current chat",
+    exportSelectProject: "Select project {name}",
+    exportUngrouped: "Not in a project / regular chats",
+    exportUnknownProject: "Unknown project",
     exportUpdated: "Updated {time}",
     exportListEmpty: "No account conversations are available to export.",
     exportNoSelection: "Select at least one conversation to export.",
     exportProgressSelected: "Reading selected conversations…",
+    exportSearchPlaceholder: "Search titles or conversation IDs",
+    exportSearchEmpty: "No conversations match this search.",
+    exportCancel: "Cancel",
+    exportCancelling: "Stopping; no new conversation reads will start…",
+    exportCancelled: "Export cancelled.",
+    statisticsData: "Statistics data",
+    statisticsDataExportJson: "Backup JSON",
+    statisticsDataExportCsv: "Records CSV",
+    statisticsDataImportJson: "Import backup",
+    statisticsDataExporting: "Exporting statistics data…",
+    statisticsDataExported: "Exported {name}",
+    statisticsDataImportConfirm: "Importing replaces all current statistics. Continue?",
+    statisticsDataImporting: "Importing statistics data…",
+    statisticsDataImported: "Restored {count} usage records",
+    statisticsDataImportInvalid: "This is not a valid statistics backup file.",
+    statisticsDataImportUnsupported: "This statistics backup version is not supported.",
+    statisticsDataImportTooLarge: "The statistics backup is larger than 10 MB and cannot be imported.",
+    statisticsDataOperationFailed: "Statistics data operation failed: {error}",
+    overlappingModels: "{count} models",
     customRange: "Custom dates",
     endDate: "End",
     all: "All",
@@ -406,7 +562,6 @@
     featureGpts: "GPTs",
     featureImageGeneration: "Image generation",
     featureRealtime: "Realtime",
-    featureStats: "Features",
     featureTasks: "Tasks",
     featureWebSearch: "Web search",
     languageToggleEn: "EN",
@@ -420,22 +575,27 @@
     parameterLatest: "Latest parameters",
     requestModels: "Request model",
     modelRelation: "Request → response",
+    modelRelationSame: "Request and response model match",
     legacyUnlinked: "Historical records not linked",
     legacyUnlinkedHint: "Older aggregate records do not contain event-level links. Their original counts are preserved without guessing request, response, or conversation pairings.",
     reasoningEffort: "Reasoning effort",
-    reasoningUnspecified: "Not provided",
+    reasoningEffortInline: "Effort",
+    reasoningUnspecified: "Unknown",
     relationConversations: "Related conversations",
+    sourceFilterAll: "All",
+    sourceFilterChat: "Chat",
+    sourceFilterWork: "Work",
     sourceModeChat: "Chat",
     sourceModeWork: "Work",
-    sourceModeUnknown: "Unknown mode",
-    responsePending: "Response pending",
+    sourceModeUnknown: "Unknown",
+    responsePending: "Unknown",
     startDate: "Start",
     todayOnly: "Today {today}",
     variants: "Response model"
   });
 
   function normalizeLanguage(value) {
-    return value === "en" ? "en" : DEFAULT_LANGUAGE;
+    return value === "zh" ? "zh" : DEFAULT_LANGUAGE;
   }
 
   function currentLanguage(state) {
@@ -462,20 +622,20 @@
 
   function todayKey(date) {
     var value = date || new Date();
-    var year = value.getFullYear();
-    var month = String(value.getMonth() + 1).padStart(2, "0");
-    var day = String(value.getDate()).padStart(2, "0");
+    var year = value.getUTCFullYear();
+    var month = String(value.getUTCMonth() + 1).padStart(2, "0");
+    var day = String(value.getUTCDate()).padStart(2, "0");
     return year + "-" + month + "-" + day;
   }
 
   function parseDateKey(key) {
     var parts = String(key || "").split("-").map(Number);
-    return new Date(parts[0] || 1970, (parts[1] || 1) - 1, parts[2] || 1);
+    return new Date(Date.UTC(parts[0] || 1970, (parts[1] || 1) - 1, parts[2] || 1));
   }
 
   function addDays(date, days) {
     var next = new Date(date);
-    next.setDate(next.getDate() + days);
+    next.setUTCDate(next.getUTCDate() + days);
     return next;
   }
 
@@ -577,7 +737,10 @@
       featuresByModel: {},
       parametersByModel: {},
       relationsByModel: {},
+      analyticsByDate: {},
+      analyticsHistoryComplete: true,
       events: [],
+      eventHistoryComplete: true,
       lastUpdated: null
     };
   }
@@ -633,6 +796,11 @@
       });
     });
 
+    clean.analyticsByDate = source.analyticsByDate && typeof source.analyticsByDate === "object"
+      ? source.analyticsByDate
+      : {};
+    clean.analyticsHistoryComplete = source.analyticsHistoryComplete === true;
+
     Object.keys(source.variantsByModel || {}).forEach(function copyVariants(model) {
       var metadata = sourceModels[model];
       if (!isDashboardModelValid(model, metadata, model)) {
@@ -662,8 +830,44 @@
     });
 
     clean.events = (Array.isArray(source.events) ? source.events : []).filter(function keepEvent(event) {
-      return event && isDashboardModelValid(event.model, event, event.model);
+      if (!event) {
+        return false;
+      }
+      var requestModel = event.requestModelEvidence === "unavailable"
+        ? ""
+        : String(event.requestModel || "").trim();
+      var responseModel = String(event.responseModel || "").trim();
+      return isDashboardModelValid(event.model, event, event.model) ||
+        (requestModel && isDashboardModelValid(requestModel, {}, requestModel)) ||
+        (responseModel && isDashboardModelValid(responseModel, {}, responseModel));
     });
+    clean.eventHistoryComplete = source.eventHistoryComplete !== false;
+    if (!Object.prototype.hasOwnProperty.call(source, "analyticsByDate")) {
+      clean.analyticsByDate = {};
+      clean.events.slice().reverse().forEach(function replayEvent(event) {
+        var dateKey = eventDateKey(event);
+        var sourceMode = normalizeDashboardSourceMode(event && event.sourceMode);
+        var requestModel = eventRequestModel(event);
+        var responseModel = eventResponseModel(event);
+        var model = String(event && event.model || "").trim() ||
+          responseModel ||
+          requestModel;
+        if (!dateKey || !model) {
+          return;
+        }
+        var day = clean.analyticsByDate[dateKey] || {};
+        var sourceModelsForDate = day[sourceMode] || {};
+        var relations = sourceModelsForDate[model] || {};
+        addEventToRelation(relations, event);
+        sourceModelsForDate[model] = relations;
+        day[sourceMode] = sourceModelsForDate;
+        clean.analyticsByDate[dateKey] = day;
+      });
+      clean.analyticsHistoryComplete = Boolean(
+        clean.eventHistoryComplete &&
+        clean.events.length === countTotal(clean.totals)
+      );
+    }
     clean.lastUpdated = source.lastUpdated || null;
     return clean;
   }
@@ -979,7 +1183,34 @@
     return clean === "chat" || clean === "work" ? clean : "unknown";
   }
 
+  function normalizeSourceModeFilter(value) {
+    var clean = String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    return clean === "chat" || clean === "work" ? clean : "all";
+  }
+
+  function normalizeStatisticsMode(value) {
+    return String(value || "").trim().toLowerCase() === "internal"
+      ? "internal"
+      : DEFAULT_STATISTICS_MODE;
+  }
+
+  function normalizeChartType(value) {
+    return String(value || "").trim().toLowerCase() === "donut"
+      ? "donut"
+      : DEFAULT_CHART_TYPE;
+  }
+
+  function normalizeThemeMode(value) {
+    var clean = String(value || "").trim().toLowerCase();
+    return clean === "light" || clean === "dark" ? clean : DEFAULT_THEME_MODE;
+  }
+
   function eventReasoningEffort(event) {
+    var direct = String(event && event.requestReasoningEffort || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+      .slice(0, 32);
     var parameters = event && event.modelParameters && typeof event.modelParameters === "object"
       ? event.modelParameters
       : {};
@@ -987,7 +1218,7 @@
     if (!value && parameters.reasoning && typeof parameters.reasoning === "object") {
       value = parameters.reasoning.effort;
     }
-    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 32) || "unspecified";
+    return direct || String(value || "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 32) || "unspecified";
   }
 
   function relationKey(requestModel, responseModel) {
@@ -998,14 +1229,9 @@
     if (!event) {
       return;
     }
-    var requestModel = String(
-      event.requestModel ||
-      (event.modelParameters && event.modelParameters.model) ||
-      event.apiModel ||
-      ""
-    ).replace(/\s+/g, " ").trim();
-    var responseModel = String(event.responseModel || "").replace(/\s+/g, " ").trim();
-    if (!requestModel) {
+    var requestModel = eventRequestModel(event);
+    var responseModel = eventResponseModel(event);
+    if (!requestModel && !responseModel) {
       return;
     }
     var key = relationKey(requestModel, responseModel);
@@ -1043,9 +1269,14 @@
         firstSubmittedAt: String(event.submittedAt || ""),
         lastSubmittedAt: "",
         lastPageUrl: actualConversationId ? (event.pageUrl || ("https://chatgpt.com/c/" + conversationId)) : "",
-        sourceMode: sourceMode
+        sourceMode: sourceMode,
+        sourceModes: {}
       };
       conversation.count += 1;
+      conversation.sourceModes = conversation.sourceModes && typeof conversation.sourceModes === "object"
+        ? conversation.sourceModes
+        : {};
+      conversation.sourceModes[sourceMode] = (Number(conversation.sourceModes[sourceMode]) || 0) + 1;
       if (String(event.submittedAt || "") >= String(conversation.lastSubmittedAt || "")) {
         conversation.lastSubmittedAt = String(event.submittedAt || "");
         conversation.lastPageUrl = actualConversationId ? (event.pageUrl || conversation.lastPageUrl) : "";
@@ -1086,15 +1317,20 @@
         lastSubmittedAt: String(relation.lastSubmittedAt || "")
       };
     }).filter(function valid(relation) {
-      return relation.requestModel && relation.count > 0;
+      return (relation.requestModel || relation.responseModel) && relation.count > 0;
     });
   }
 
   function isFullDashboardRange(stats, state) {
+    if (normalizeSourceModeFilter(state && state.sourceModeFilter) !== "all") {
+      return false;
+    }
     if (!hasExplicitDateRange(state || {})) {
       return true;
     }
-    return normalizeDateInput(state && state.startDate) === defaultStartDate(stats || {}) &&
+    var dates = Object.keys(stats && stats.byDate || {}).sort();
+    var firstDate = dates[0] || defaultEndDate();
+    return normalizeDateInput(state && state.startDate) === firstDate &&
       normalizeDateInput(state && state.endDate) === defaultEndDate();
   }
 
@@ -1168,8 +1404,15 @@
     stats = sanitizeDashboardStats(stats || {});
     var relations = isFullDashboardRange(stats, state)
       ? storedModelRelations(stats, model)
-      : eventModelRelations(stats, model, rangeEvents(stats, state, model));
+      : aggregateRelationsInRange(stats, state, model).map(function relationFromEntry(entry) {
+          return entry.relation;
+        });
     if (!relations.length) {
+      relations = aggregateRelationsInRange(stats, state, model).map(function relationFromEntry(entry) {
+        return entry.relation;
+      });
+    }
+    if (!relations.length && !Object.keys(stats.analyticsByDate || {}).length) {
       relations = eventModelRelations(stats, model, rangeEvents(stats, state, model));
     }
     var targetCount = hasExplicitDateRange(state || {})
@@ -1251,86 +1494,55 @@
 
   function modelFeatures(stats, model, state, limit) {
     stats = sanitizeDashboardStats(stats || {});
-    var events = rangeEvents(stats, state, model);
-    var hasFilteredEvents = events.length > 0;
-    var featureStats = stats && stats.featuresByModel && stats.featuresByModel[model];
-    var features = featureStats && featureStats.features ? featureStats.features : {};
-    var rows = [];
-    var lookup = null;
-
-    function storedFeatureInRange(feature) {
-      if (!hasExplicitDateRange(state || {})) {
-        return true;
-      }
-      if (!lookup) {
-        lookup = dateRangeLookup(stats, state || {});
-      }
-      var submittedAt = feature && feature.lastSubmittedAt;
-      return Boolean(submittedAt && lookup[eventDateKey({ submittedAt: submittedAt })]);
-    }
-
-    function addStoredFeatureRows(onlyMissing) {
-      Object.keys(features).forEach(function toFeature(rawId) {
+    var rowsById = {};
+    var entries = aggregateRelationsInRange(stats, state, model);
+    entries.forEach(function addRelationFeatures(entry) {
+      var relation = entry && entry.relation || {};
+      Object.keys(relation.features || {}).forEach(function addFeature(rawId) {
         var id = normalizeDashboardFeatureId(rawId);
-        var feature = features[rawId];
-        if (!id || onlyMissing && rows.some(function same(row) { return row.id === id; })) {
+        var count = Math.max(0, Number(relation.features[rawId]) || 0);
+        if (!id || count <= 0) {
           return;
         }
-        if (!storedFeatureInRange(feature)) {
-          return;
+        var row = rowsById[id] || {
+          id: id,
+          label: featureLabel(state, id),
+          count: 0,
+          lastSubmittedAt: ""
+        };
+        row.count += count;
+        if (String(relation.lastSubmittedAt || "") > row.lastSubmittedAt) {
+          row.lastSubmittedAt = String(relation.lastSubmittedAt || "");
         }
-        var count = feature && typeof feature === "object" ? Number(feature.count) || 0 : Number(feature) || 0;
-        if (count <= 0) {
-          return;
-        }
-        var existing = rows.find(function same(row) { return row.id === id; });
-        if (!existing) {
-          rows.push({
-            id: id,
-            label: featureLabel(state, id),
-            count: count,
-            lastSubmittedAt: String((feature && feature.lastSubmittedAt) || "")
-          });
-          return;
-        }
-        existing.count += count;
-        if (String((feature && feature.lastSubmittedAt) || "") > existing.lastSubmittedAt) {
-          existing.lastSubmittedAt = String((feature && feature.lastSubmittedAt) || "");
-        }
+        rowsById[id] = row;
       });
-    }
+    });
 
-    if (!hasFilteredEvents) {
-      addStoredFeatureRows(false);
-    }
-
-    if (hasFilteredEvents) {
-      events.forEach(function collect(event) {
-        if (!event || event.model !== model || !Array.isArray(event.usageFeatures)) {
-          return;
-        }
-        event.usageFeatures.forEach(function collectFeature(id) {
-          var clean = normalizeDashboardFeatureId(id);
-          if (!clean) {
+    if (!entries.length && !Object.keys(stats.analyticsByDate || {}).length) {
+      rangeEvents(stats, state, model).forEach(function addRetainedEvent(event) {
+        (Array.isArray(event && event.usageFeatures) ? event.usageFeatures : []).forEach(function addFeature(rawId) {
+          var id = normalizeDashboardFeatureId(rawId);
+          if (!id) {
             return;
           }
-          var existing = rows.find(function same(row) { return row.id === clean; });
-          if (!existing) {
-            existing = { id: clean, label: featureLabel(state, clean), count: 0, lastSubmittedAt: "" };
-            rows.push(existing);
-          }
-          existing.count += 1;
-          if (String(event.submittedAt || "") > existing.lastSubmittedAt) {
-            existing.lastSubmittedAt = String(event.submittedAt || "");
-          }
+          var row = rowsById[id] || {
+            id: id,
+            label: featureLabel(state, id),
+            count: 0,
+            lastSubmittedAt: ""
+          };
+          row.count += 1;
+          row.lastSubmittedAt = String(event.submittedAt || row.lastSubmittedAt);
+          rowsById[id] = row;
         });
       });
-      addStoredFeatureRows(true);
     }
 
-    return rows.sort(function byCount(a, b) {
+    return Object.keys(rowsById).map(function toRow(id) {
+      return rowsById[id];
+    }).sort(function byCount(a, b) {
       return b.count - a.count || String(b.lastSubmittedAt).localeCompare(String(a.lastSubmittedAt));
-    }).slice(0, limit || rows.length);
+    }).slice(0, limit || Object.keys(rowsById).length);
   }
 
   function sendMessage(message, state) {
@@ -1369,9 +1581,33 @@
 
   function loadSettings() {
     return sendMessage({ type: "settings.get" }).then(function normalize(response) {
-      return response && response.settings ? response.settings : { language: DEFAULT_LANGUAGE, startDate: "", endDate: "" };
+      return response && response.settings
+        ? response.settings
+        : {
+            language: DEFAULT_LANGUAGE,
+            activeView: "chart",
+            statisticsMode: DEFAULT_STATISTICS_MODE,
+            chartType: DEFAULT_CHART_TYPE,
+            themeMode: DEFAULT_THEME_MODE,
+            sourceModeFilter: "all",
+            showTrendChart: true,
+            showTextStatistics: true,
+            startDate: "",
+            endDate: ""
+          };
     }).catch(function defaultSettings() {
-      return { language: DEFAULT_LANGUAGE, startDate: "", endDate: "" };
+      return {
+        language: DEFAULT_LANGUAGE,
+        activeView: "chart",
+        statisticsMode: DEFAULT_STATISTICS_MODE,
+        chartType: DEFAULT_CHART_TYPE,
+        themeMode: DEFAULT_THEME_MODE,
+        sourceModeFilter: "all",
+        showTrendChart: true,
+        showTextStatistics: true,
+        startDate: "",
+        endDate: ""
+      };
     });
   }
 
@@ -1419,15 +1655,135 @@
     return state.openaiStatusRequest;
   }
 
-  function saveSettings(state) {
+  function saveSettings(state, fields) {
+    var mappedSelection = state.selectedModelsByStatisticsMode &&
+      state.selectedModelsByStatisticsMode.mapped || {};
+    var mappedKnown = state.knownModelsByStatisticsMode &&
+      state.knownModelsByStatisticsMode.mapped || {};
+    var internalSelection = state.selectedModelsByStatisticsMode &&
+      state.selectedModelsByStatisticsMode.internal || {};
+    var internalKnown = state.knownModelsByStatisticsMode &&
+      state.knownModelsByStatisticsMode.internal || {};
+    var completeSettings = {
+      language: normalizeLanguage(state.language),
+      activeView: normalizeView(state.activeView),
+      statisticsMode: normalizeStatisticsMode(state.statisticsMode),
+      chartType: normalizeChartType(state.chartType),
+      themeMode: normalizeThemeMode(state.themeMode),
+      sourceModeFilter: normalizeSourceModeFilter(state.sourceModeFilter),
+      showTrendChart: state.showTrendChart !== false,
+      showTextStatistics: state.showTextStatistics !== false,
+      startDate: dateNoLaterThanToday(state.startDate),
+      endDate: dateNoLaterThanToday(state.endDate) || defaultEndDate(),
+      mappedVisibleModels: Object.keys(mappedSelection).filter(function visible(model) {
+        return mappedSelection[model] === true;
+      }),
+      mappedKnownModels: Object.keys(mappedKnown).filter(function known(model) {
+        return mappedKnown[model] === true;
+      }),
+      mappedModelSelectionInitialized: Boolean(
+        state.modelSelectionInitializedByMode &&
+        state.modelSelectionInitializedByMode.mapped
+      ),
+      internalVisibleModels: Object.keys(internalSelection).filter(function visible(model) {
+        return internalSelection[model] === true;
+      }),
+      internalKnownModels: Object.keys(internalKnown).filter(function known(model) {
+        return internalKnown[model] === true;
+      }),
+      internalModelSelectionInitialized: Boolean(
+        state.modelSelectionInitializedByMode &&
+        state.modelSelectionInitializedByMode.internal
+      )
+    };
+    var selectedFields = Array.isArray(fields) && fields.length
+      ? fields
+      : Object.keys(completeSettings);
+    var settingsPatch = {};
+    selectedFields.forEach(function includeSetting(field) {
+      if (Object.prototype.hasOwnProperty.call(completeSettings, field)) {
+        settingsPatch[field] = completeSettings[field];
+      }
+    });
     return sendMessage({
       type: "settings.set",
-      settings: {
-        language: normalizeLanguage(state.language),
-        startDate: dateNoLaterThanToday(state.startDate),
-        endDate: dateNoLaterThanToday(state.endDate) || defaultEndDate()
-      }
+      settings: settingsPatch
     }, state);
+  }
+
+  function modelSelectionSettingFields(mode) {
+    return normalizeStatisticsMode(mode) === "internal"
+      ? [
+          "internalVisibleModels",
+          "internalKnownModels",
+          "internalModelSelectionInitialized"
+        ]
+      : [
+          "mappedVisibleModels",
+          "mappedKnownModels",
+          "mappedModelSelectionInitialized"
+        ];
+  }
+
+  function modelListToSelection(models) {
+    return (Array.isArray(models) ? models : []).reduce(function toMap(map, model) {
+      var key = String(model || "").trim();
+      if (key) {
+        map[key] = true;
+      }
+      return map;
+    }, {});
+  }
+
+  function applyPersistedModelSelections(state, settings) {
+    settings = settings && typeof settings === "object" ? settings : {};
+    state.selectedModelsByStatisticsMode = {
+      mapped: modelListToSelection(settings.mappedVisibleModels),
+      internal: modelListToSelection(settings.internalVisibleModels)
+    };
+    state.knownModelsByStatisticsMode = {
+      mapped: modelListToSelection(settings.mappedKnownModels),
+      internal: modelListToSelection(settings.internalKnownModels)
+    };
+    state.modelSelectionInitializedByMode = {
+      mapped: settings.mappedModelSelectionInitialized === true,
+      internal: settings.internalModelSelectionInitialized === true
+    };
+    var mode = normalizeStatisticsMode(state.statisticsMode);
+    state.selectedModels = state.selectedModelsByStatisticsMode[mode];
+    state.knownModels = state.knownModelsByStatisticsMode[mode];
+    state.modelSelectionInitialized = Boolean(state.modelSelectionInitializedByMode[mode]);
+  }
+
+  function persistedModelSelectionKey(settings) {
+    var source = settings && typeof settings === "object" ? settings : {};
+    return JSON.stringify([
+      (Array.isArray(source.mappedVisibleModels) ? source.mappedVisibleModels : []).slice().sort(),
+      (Array.isArray(source.mappedKnownModels) ? source.mappedKnownModels : []).slice().sort(),
+      source.mappedModelSelectionInitialized === true,
+      (Array.isArray(source.internalVisibleModels) ? source.internalVisibleModels : []).slice().sort(),
+      (Array.isArray(source.internalKnownModels) ? source.internalKnownModels : []).slice().sort(),
+      source.internalModelSelectionInitialized === true
+    ]);
+  }
+
+  function currentModelSelectionKey(state) {
+    var selected = state.selectedModelsByStatisticsMode || {};
+    var known = state.knownModelsByStatisticsMode || {};
+    var initialized = state.modelSelectionInitializedByMode || {};
+    function activeKeys(map) {
+      return Object.keys(map || {}).filter(function active(key) {
+        return map[key] === true;
+      }).sort();
+    }
+    return JSON.stringify([
+      activeKeys(selected.mapped),
+      activeKeys(known.mapped),
+      initialized.mapped === true,
+      activeKeys(selected.internal),
+      activeKeys(known.internal),
+      initialized.internal === true
+    ]);
   }
 
   function normalizeDateInput(value) {
@@ -1493,6 +1849,16 @@
 
   function modelTotalsInRange(stats, state) {
     stats = sanitizeDashboardStats(stats || {});
+    var sourceModeFilter = normalizeSourceModeFilter(state && state.sourceModeFilter);
+    if (sourceModeFilter !== "all") {
+      return aggregateRelationsInRange(stats, state).reduce(function addRelation(totals, entry) {
+        if (entry && entry.model && entry.relation) {
+          totals[entry.model] = (Number(totals[entry.model]) || 0) +
+            (Number(entry.relation.count) || 0);
+        }
+        return totals;
+      }, {});
+    }
     var totals = {};
     Object.keys(stats.totals || {}).forEach(function initialize(model) {
       totals[model] = 0;
@@ -1505,19 +1871,178 @@
     return totals;
   }
 
+  function eventRequestModel(event) {
+    if (event && event.requestModelEvidence === "unavailable") {
+      return "";
+    }
+    return String(event && event.requestModel || "").replace(/\s+/g, " ").trim();
+  }
+
+  function eventResponseModel(event) {
+    return String(event && event.responseModel || "").replace(/\s+/g, " ").trim();
+  }
+
+  function statisticsEventKey(event, mode) {
+    if (normalizeStatisticsMode(mode) === "internal") {
+      return eventRequestModel(event) || INTERNAL_UNKNOWN_REQUEST;
+    }
+    return String(event && event.model || "").trim();
+  }
+
+  function statisticsKeyLabel(state, key) {
+    return key === INTERNAL_UNKNOWN_REQUEST || key === INTERNAL_UNKNOWN_RESPONSE
+      ? text(state, "responsePending")
+      : String(key || "");
+  }
+
   function rangeEvents(stats, state, model) {
     stats = sanitizeDashboardStats(stats || {});
     var lookup = dateRangeLookup(stats, state || {});
+    var sourceModeFilter = normalizeSourceModeFilter(state && state.sourceModeFilter);
     return (stats.events || []).filter(function keepEvent(event) {
       return event &&
         (!model || event.model === model) &&
+        (sourceModeFilter === "all" || normalizeDashboardSourceMode(event.sourceMode) === sourceModeFilter) &&
         Boolean(lookup[eventDateKey(event)]);
     });
   }
 
+  function mergeRelationAggregate(target, incoming) {
+    var source = incoming && typeof incoming === "object" ? incoming : {};
+    var relation = target || {
+      requestModel: String(source.requestModel || ""),
+      responseModel: String(source.responseModel || ""),
+      count: 0,
+      efforts: {},
+      features: {},
+      sourceModes: {},
+      conversations: {},
+      firstSubmittedAt: String(source.firstSubmittedAt || ""),
+      lastSubmittedAt: ""
+    };
+    relation.count += Math.max(0, Number(source.count) || 0);
+    ["efforts", "features", "sourceModes"].forEach(function mergeCountMap(field) {
+      Object.keys(source[field] || {}).forEach(function addCount(key) {
+        relation[field][key] = (Number(relation[field][key]) || 0) +
+          Math.max(0, Number(source[field][key]) || 0);
+      });
+    });
+    Object.keys(source.conversations || {}).forEach(function mergeConversation(id) {
+      var next = source.conversations[id] || {};
+      var current = relation.conversations[id] || {
+        conversationId: String(next.conversationId || id),
+        title: String(next.title || next.pageTitle || id),
+        count: 0,
+        firstSubmittedAt: String(next.firstSubmittedAt || ""),
+        lastSubmittedAt: "",
+        lastPageUrl: String(next.lastPageUrl || next.pageUrl || ""),
+        sourceMode: normalizeDashboardSourceMode(next.sourceMode),
+        sourceModes: {}
+      };
+      current.count += Math.max(0, Number(next.count) || 0);
+      current.sourceModes = current.sourceModes && typeof current.sourceModes === "object"
+        ? current.sourceModes
+        : {};
+      var nextSourceModes = next.sourceModes && typeof next.sourceModes === "object"
+        ? next.sourceModes
+        : {};
+      var nextSourceModeKeys = Object.keys(nextSourceModes).filter(function positiveSourceMode(mode) {
+        return Number(nextSourceModes[mode]) > 0;
+      });
+      if (nextSourceModeKeys.length) {
+        nextSourceModeKeys.forEach(function mergeSourceMode(mode) {
+          var normalizedMode = normalizeDashboardSourceMode(mode);
+          current.sourceModes[normalizedMode] =
+            (Number(current.sourceModes[normalizedMode]) || 0) +
+            Math.max(0, Number(nextSourceModes[mode]) || 0);
+        });
+      } else {
+        var sourceMode = normalizeDashboardSourceMode(next.sourceMode);
+        current.sourceModes[sourceMode] = (Number(current.sourceModes[sourceMode]) || 0) +
+          Math.max(0, Number(next.count) || 0);
+      }
+      if (
+        !current.firstSubmittedAt ||
+        String(next.firstSubmittedAt || "") < current.firstSubmittedAt
+      ) {
+        current.firstSubmittedAt = String(next.firstSubmittedAt || current.firstSubmittedAt);
+      }
+      if (String(next.lastSubmittedAt || "") >= String(current.lastSubmittedAt || "")) {
+        current.lastSubmittedAt = String(next.lastSubmittedAt || "");
+        current.lastPageUrl = String(next.lastPageUrl || next.pageUrl || current.lastPageUrl);
+        current.title = String(next.title || next.pageTitle || current.title);
+        current.sourceMode = sourceMode;
+      }
+      relation.conversations[id] = current;
+    });
+    if (
+      !relation.firstSubmittedAt ||
+      String(source.firstSubmittedAt || "") < relation.firstSubmittedAt
+    ) {
+      relation.firstSubmittedAt = String(source.firstSubmittedAt || relation.firstSubmittedAt);
+    }
+    if (String(source.lastSubmittedAt || "") > String(relation.lastSubmittedAt || "")) {
+      relation.lastSubmittedAt = String(source.lastSubmittedAt || "");
+    }
+    return relation;
+  }
+
+  function aggregateRelationsInRange(stats, state, mappedModel) {
+    stats = sanitizeDashboardStats(stats || {});
+    var lookup = dateRangeLookup(stats, state || {});
+    var sourceModeFilter = normalizeSourceModeFilter(state && state.sourceModeFilter);
+    var groups = {};
+    Object.keys(stats.analyticsByDate || {}).forEach(function collectDate(dateKey) {
+      if (!lookup[dateKey]) {
+        return;
+      }
+      var day = stats.analyticsByDate[dateKey] || {};
+      var sourceModes = sourceModeFilter === "all"
+        ? ["chat", "work", "unknown"]
+        : [sourceModeFilter];
+      sourceModes.forEach(function collectSource(sourceMode) {
+        var models = day[sourceMode] || {};
+        Object.keys(models).forEach(function collectModel(model) {
+          if (mappedModel && model !== mappedModel) {
+            return;
+          }
+          Object.keys(models[model] || {}).forEach(function collectRelation(key) {
+            var incoming = models[model][key];
+            if (!incoming || Number(incoming.count) <= 0) {
+              return;
+            }
+            var aggregateKey = model + "\u0002" +
+              relationKey(incoming.requestModel, incoming.responseModel);
+            var entry = groups[aggregateKey] || {
+              model: model,
+              relation: null
+            };
+            entry.relation = mergeRelationAggregate(entry.relation, incoming);
+            groups[aggregateKey] = entry;
+          });
+        });
+      });
+    });
+    return Object.keys(groups).map(function toRelationEntry(key) {
+      return groups[key];
+    });
+  }
+
+  function statisticsTotalsInRange(stats, state) {
+    if (normalizeStatisticsMode(state && state.statisticsMode) === "mapped") {
+      return modelTotalsInRange(stats, state);
+    }
+    return aggregateRelationsInRange(stats, state).reduce(function addRequestModel(totals, entry) {
+      var relation = entry && entry.relation;
+      var key = String(relation && relation.requestModel || "") || INTERNAL_UNKNOWN_REQUEST;
+      totals[key] = (Number(totals[key]) || 0) + (Number(relation && relation.count) || 0);
+      return totals;
+    }, {});
+  }
+
   function eligibleModelsInRange(state) {
     state.stats = sanitizeDashboardStats(state.stats || {});
-    var totals = modelTotalsInRange(state.stats, state);
+    var totals = statisticsTotalsInRange(state.stats, state);
     return Object.keys(totals).filter(function hasPositiveTotal(model) {
       return Number(totals[model] || 0) > 0;
     }).sort(function byCount(a, b) {
@@ -1534,15 +2059,50 @@
 
   function ensureSelection(state) {
     state.stats = sanitizeDashboardStats(state.stats || {});
-    state.selectedModels = state.selectedModels && typeof state.selectedModels === "object" ? state.selectedModels : {};
-    state.knownModels = state.knownModels && typeof state.knownModels === "object" ? state.knownModels : {};
-    var models = Object.keys(state.stats.totals || {}).filter(function hasUsage(model) {
-      return Number(state.stats.totals[model] || 0) > 0;
-    });
+    var mode = normalizeStatisticsMode(state.statisticsMode);
+    state.selectedModelsByStatisticsMode =
+      state.selectedModelsByStatisticsMode && typeof state.selectedModelsByStatisticsMode === "object"
+        ? state.selectedModelsByStatisticsMode
+        : {};
+    state.knownModelsByStatisticsMode =
+      state.knownModelsByStatisticsMode && typeof state.knownModelsByStatisticsMode === "object"
+        ? state.knownModelsByStatisticsMode
+        : {};
+    if (!state.selectedModelsByStatisticsMode.mapped) {
+      state.selectedModelsByStatisticsMode.mapped =
+        state.selectedModels && typeof state.selectedModels === "object"
+          ? state.selectedModels
+          : {};
+    }
+    if (!state.knownModelsByStatisticsMode.mapped) {
+      state.knownModelsByStatisticsMode.mapped =
+        state.knownModels && typeof state.knownModels === "object"
+          ? state.knownModels
+          : {};
+    }
+    state.selectedModelsByStatisticsMode.internal =
+      state.selectedModelsByStatisticsMode.internal || {};
+    state.knownModelsByStatisticsMode.internal =
+      state.knownModelsByStatisticsMode.internal || {};
+    state.selectedModels = state.selectedModelsByStatisticsMode[mode];
+    state.knownModels = state.knownModelsByStatisticsMode[mode];
+    var models = mode === "mapped"
+      ? Object.keys(state.stats.totals || {}).filter(function hasUsage(model) {
+          return Number(state.stats.totals[model] || 0) > 0;
+        })
+      : Object.keys(aggregateRelationsInRange(state.stats, {
+          startDate: Object.keys(state.stats.analyticsByDate || {}).sort()[0] || defaultStartDate(state.stats),
+          endDate: defaultEndDate(),
+          sourceModeFilter: "all"
+        }).reduce(function collectRequestModels(keys, entry) {
+          var relation = entry && entry.relation;
+          keys[String(relation && relation.requestModel || "") || INTERNAL_UNKNOWN_REQUEST] = true;
+          return keys;
+        }, {}));
     var current = {};
     models.forEach(function selectNewModel(model) {
       current[model] = true;
-      if (!state.modelSelectionInitialized || !state.knownModels[model]) {
+      if (!state.modelSelectionInitializedByMode || !state.modelSelectionInitializedByMode[mode] || !state.knownModels[model]) {
         if (!(model in state.selectedModels)) {
           state.selectedModels[model] = true;
         }
@@ -1559,6 +2119,8 @@
         delete state.selectedModels[model];
       }
     });
+    state.modelSelectionInitializedByMode = state.modelSelectionInitializedByMode || {};
+    state.modelSelectionInitializedByMode[mode] = true;
     state.modelSelectionInitialized = true;
   }
 
@@ -1568,11 +2130,75 @@
     return {
       dates: dates,
       series: models.map(function toSeries(model, index) {
+        var observedDates = Object.keys(stats.byDate || {}).filter(function observed(date) {
+          return Number(stats.byDate[date] && stats.byDate[date][model]) > 0;
+        }).sort();
+        var observedFrom = observedDates[0] || "";
         return {
           model: model,
           color: COLORS[index % COLORS.length],
           values: dates.map(function valueForDate(date) {
+            if (observedFrom && date < observedFrom) {
+              return null;
+            }
             return Number((stats.byDate[date] && stats.byDate[date][model]) || 0);
+          })
+        };
+      })
+    };
+  }
+
+  function chartSeriesForState(stats, models, state) {
+    var statisticsMode = normalizeStatisticsMode(state && state.statisticsMode);
+    var sourceModeFilter = normalizeSourceModeFilter(state && state.sourceModeFilter);
+    if (statisticsMode === "mapped" && sourceModeFilter === "all") {
+      return chartSeries(stats, models, state && state.startDate, state && state.endDate);
+    }
+    var dates = dateRange(stats || {}, state && state.startDate, state && state.endDate);
+    var valuesByModel = {};
+    var observedFromByModel = {};
+    models.forEach(function initialize(model) {
+      valuesByModel[model] = {};
+    });
+    Object.keys(stats.analyticsByDate || {}).forEach(function addDate(date) {
+      var day = stats.analyticsByDate[date] || {};
+      var sourceModes = sourceModeFilter === "all"
+        ? ["chat", "work", "unknown"]
+        : [sourceModeFilter];
+      sourceModes.forEach(function addSource(sourceMode) {
+        var mappedModels = day[sourceMode] || {};
+        Object.keys(mappedModels).forEach(function addMappedModel(mappedModel) {
+          Object.keys(mappedModels[mappedModel] || {}).forEach(function addRelation(key) {
+            var relation = mappedModels[mappedModel][key] || {};
+            var model = statisticsMode === "internal"
+              ? (String(relation.requestModel || "") || INTERNAL_UNKNOWN_REQUEST)
+              : mappedModel;
+            if (!valuesByModel[model] || Number(relation.count) <= 0) {
+              return;
+            }
+            if (dates.indexOf(date) !== -1) {
+              valuesByModel[model][date] = (valuesByModel[model][date] || 0) +
+                (Number(relation.count) || 0);
+            }
+            if (!observedFromByModel[model] || date < observedFromByModel[model]) {
+              observedFromByModel[model] = date;
+            }
+          });
+        });
+      });
+    });
+    return {
+      dates: dates,
+      series: models.map(function toSeries(model, index) {
+        return {
+          model: model,
+          label: statisticsKeyLabel(state, model),
+          color: COLORS[index % COLORS.length],
+          values: dates.map(function valueForDate(date) {
+            if (observedFromByModel[model] && date < observedFromByModel[model]) {
+              return null;
+            }
+            return Number(valuesByModel[model] && valuesByModel[model][date]) || 0;
           })
         };
       })
@@ -1604,13 +2230,26 @@
     var height = CHART_SIZE.height;
     var left = 34;
     var right = 12;
-    var top = 34;
-    var bottom = 62;
-    var data = chartSeries(stats, models, state.startDate, state.endDate);
+    var top = 14;
+    var bottom = 44;
+    var data = chartSeriesForState(stats, models, state);
+    var colorByModel = {};
+    var lineStyleByModel = {};
+    eligibleModelsInRange(state).forEach(function assignStableColor(model, index) {
+      colorByModel[model] = COLORS[index % COLORS.length];
+      lineStyleByModel[model] = LINE_STYLES[index % LINE_STYLES.length];
+    });
+    data.series.forEach(function keepToggleAndChartColorAligned(series) {
+      series.color = colorByModel[series.model] || series.color;
+      series.lineStyle = lineStyleByModel[series.model] || "none";
+    });
     var max = Math.max(
       1,
       data.series.reduce(function maxSeries(total, series) {
-        return Math.max(total, Math.max.apply(Math, series.values));
+        var observedValues = series.values.filter(function observed(value) {
+          return value !== null && Number.isFinite(Number(value));
+        }).map(Number);
+        return Math.max(total, observedValues.length ? Math.max.apply(Math, observedValues) : 0);
       }, 0)
     );
     var plotWidth = width - left - right;
@@ -1620,19 +2259,63 @@
       var y = top + plotHeight - (value / max) * plotHeight;
       return '<line x1="' + left + '" x2="' + (width - right) + '" y1="' + y + '" y2="' + y + '" class="usage-grid"/><text x="' + (left - 6) + '" y="' + (y + 4) + '" class="usage-axis usage-axis-y" text-anchor="end">' + Math.round(value) + "</text>";
     }).join("");
+    var focusPaths = [];
+    var overlapPoints = {};
     var seriesSvg = data.series.map(function renderSeries(series) {
+      var seriesLabel = series.label || statisticsKeyLabel(state, series.model);
       var points = series.values.map(function point(value, index) {
+        if (value === null) {
+          return null;
+        }
         return {
           x: left + (index / denom) * plotWidth,
           y: top + plotHeight - (value / max) * plotHeight,
           value: value,
           date: data.dates[index]
         };
+      }).filter(Boolean);
+      points.forEach(function rememberOverlap(point) {
+        var overlapKey = point.date + "\u0001" + String(point.value);
+        if (!overlapPoints[overlapKey]) {
+          overlapPoints[overlapKey] = {
+            x: point.x,
+            y: point.y,
+            count: 0
+          };
+        }
+        overlapPoints[overlapKey].count += 1;
       });
-      var circles = points.map(function renderPoint(point) {
-        return '<circle class="usage-point" cx="' + point.x + '" cy="' + point.y + '" r="3.5" fill="' + series.color + '" data-model="' + escapeHtml(series.model) + '" data-date="' + point.date + '" data-value="' + point.value + '"/>';
+      var pointCount = points.length;
+      var pathData = svgPath(points);
+      var circles = points.map(function renderPoint(point, pointIndex) {
+        var progress = pointCount > 1 ? pointIndex / (pointCount - 1) : 0;
+        var pointDelay = (0.06 + progress * 0.58).toFixed(3);
+        return '<circle class="usage-point" cx="' + point.x + '" cy="' + point.y +
+          '" r="3.5" style="--usage-point-delay:' + pointDelay + 's" fill="' + series.color +
+          '" data-model="' + escapeHtml(series.model) + '" data-model-label="' + escapeHtml(seriesLabel) +
+          '" data-date="' + point.date + '" data-value="' + point.value +
+          '" data-point-index="' + pointIndex + '" data-chart-series="' +
+          escapeHtml(series.model) + '"/>';
       }).join("");
-      return '<path class="usage-line" d="' + svgPath(points) + '" fill="none" stroke="' + series.color + '"/>' + circles;
+      focusPaths.push(
+        '<path class="usage-line-focus usage-line-focus-halo" d="' + pathData +
+          '" fill="none" data-chart-focus="' + escapeHtml(series.model) + '"/>',
+        '<path class="usage-line-focus usage-line-focus-color" d="' + pathData +
+          '" fill="none" stroke="' + series.color + '" stroke-dasharray="' +
+          series.lineStyle + '" data-chart-focus="' +
+          escapeHtml(series.model) + '"/>'
+      );
+      return '<g class="usage-series" data-chart-series-group="' + escapeHtml(series.model) +
+        '" style="--usage-line-dash:' + series.lineStyle + '"><path class="usage-line" d="' + pathData +
+        '" fill="none" stroke="' + series.color + '" data-chart-series="' +
+        escapeHtml(series.model) + '"/>' + circles + "</g>";
+    }).join("");
+    var overlapSvg = Object.keys(overlapPoints).map(function renderOverlapRing(key) {
+      var overlap = overlapPoints[key];
+      return overlap.count > 1
+        ? '<circle class="usage-overlap-ring" cx="' + overlap.x + '" cy="' +
+          overlap.y + '" r="6.25" data-overlap-count="' + overlap.count + '"/>'
+        : "";
     }).join("");
     var labelIndexes = [];
     if (data.dates.length <= 5) {
@@ -1650,22 +2333,171 @@
     var labels = labelIndexes.map(function renderDateLabel(index) {
       var anchor = index === 0 ? "start" : (index === data.dates.length - 1 ? "end" : "middle");
       var x = left + (index / denom) * plotWidth;
-      return '<text x="' + x + '" y="' + (height - 44) + '" class="usage-axis usage-axis-date" text-anchor="' + anchor + '">' + data.dates[index].slice(5) + "</text>";
+      return '<text x="' + x + '" y="' + (height - 26) + '" class="usage-axis usage-axis-date" text-anchor="' + anchor + '">' + data.dates[index].slice(5) + "</text>";
     }).join("");
-    var legendX = left;
-    var legendY = height - 12;
-    var legend = data.series.map(function renderLegend(series, index) {
-      var x = legendX + index * Math.max(64, Math.floor((width - left - right) / Math.max(1, data.series.length)));
-      return '<g class="usage-chart-legend-item"><circle cx="' + x + '" cy="' + legendY + '" r="3" fill="' + series.color + '"/><text x="' + (x + 7) + '" y="' + (legendY + 3) + '" class="usage-axis usage-axis-legend">' + escapeHtml(series.model) + "</text></g>";
-    }).join("");
-    var title = [
-      '<text x="' + left + '" y="15" class="usage-chart-title">' + escapeHtml(text(state, "chartTitle")) + "</text>",
-      '<text x="' + left + '" y="29" class="usage-axis usage-axis-label">' + escapeHtml(text(state, "chartYAxis")) + "</text>",
-      '<text x="' + (width - right) + '" y="' + (height - 30) + '" class="usage-axis usage-axis-label" text-anchor="end">' + escapeHtml(text(state, "chartXAxis")) + "</text>",
-      '<text x="' + left + '" y="' + (height - 13) + '" class="usage-axis usage-axis-label">' + escapeHtml(text(state, "chartLegend")) + "</text>"
+    var axisLabels = [
+      '<text x="' + (width - right) + '" y="' + (height - 9) + '" class="usage-axis usage-axis-label" text-anchor="end">' + escapeHtml(text(state, "chartXAxis")) + "</text>"
     ].join("");
 
-    return '<div class="usage-chart-wrap"><svg viewBox="0 0 ' + width + " " + height + '" class="usage-chart" role="img" aria-label="' + escapeHtml(text(state, "chartTitle")) + '">' + title + grid + labels + seriesSvg + legend + '</svg><div class="usage-tooltip" hidden></div></div>';
+    var chartTitle = text(state, "chartTitle");
+    return [
+      '<div class="usage-chart-wrap">',
+      '<div class="usage-chart-head"><strong>' + escapeHtml(chartTitle) +
+        '</strong><small>' + escapeHtml(text(state, "chartYAxis")) + "</small></div>",
+      '<div class="usage-models" role="group" aria-label="' + escapeHtml(text(state, "chartLegend")) + '">' +
+        renderModels(state) + "</div>",
+      '<svg viewBox="0 0 ' + width + " " + height + '" class="usage-chart" role="img" aria-label="' +
+        escapeHtml(chartTitle) + '">' + axisLabels + grid + labels + seriesSvg + overlapSvg +
+        focusPaths.join("") + "</svg>",
+      '<div class="usage-tooltip" hidden></div>',
+      "</div>"
+    ].join("");
+  }
+
+  var REASONING_EFFORT_COLORS = {
+    none: "var(--usage-effort-none)",
+    min: "var(--usage-effort-min)",
+    low: "var(--usage-effort-low)",
+    medium: "var(--usage-effort-medium)",
+    standard: "var(--usage-effort-standard)",
+    high: "var(--usage-effort-high)",
+    extended: "var(--usage-effort-extended)",
+    max: "var(--usage-effort-max)",
+    unknown: "var(--usage-effort-unknown)"
+  };
+
+  function donutSlices(items, total, attribute) {
+    var offset = 0;
+    return items.map(function renderSlice(item) {
+      var percentage = total > 0 ? (Number(item.count) || 0) / total * 100 : 0;
+      var start = offset;
+      offset += percentage;
+      var label = item.label + ": " + item.count + " (" + percentage.toFixed(1) + "%)";
+      return '<circle class="usage-donut-slice" cx="100" cy="100" r="66" pathLength="100"' +
+        ' fill="none" stroke="' + item.color + '" stroke-width="28" stroke-dasharray="' +
+        percentage.toFixed(4) + " " + Math.max(0, 100 - percentage).toFixed(4) +
+        '" stroke-dashoffset="' + (-start).toFixed(4) + '" transform="rotate(-90 100 100)" ' +
+        attribute + '="' + escapeHtml(item.key) + '" tabindex="0" role="button" aria-label="' +
+        escapeHtml(label) + '"><title>' + escapeHtml(label) + "</title></circle>";
+    }).join("");
+  }
+
+  function renderDonutLegend(items, total, interactiveAttribute) {
+    return '<div class="usage-donut-legend">' + items.map(function renderLegend(item) {
+      var percentage = total > 0 ? (Number(item.count) || 0) / total * 100 : 0;
+      var interactive = interactiveAttribute
+        ? ' tabindex="0" role="button" ' + interactiveAttribute + '="' + escapeHtml(item.key) + '"'
+        : "";
+      return '<div class="usage-donut-legend-row"' + interactive + '><i style="--slice:' +
+        item.color + '"></i><span>' + escapeHtml(item.label) + '</span><b>' +
+        escapeHtml(String(Number(item.count) || 0)) + '</b><small>' +
+        percentage.toFixed(1) + "%</small></div>";
+    }).join("") + "</div>";
+  }
+
+  function modelDonutItems(state, models) {
+    var totals = statisticsTotalsInRange(state.stats, state);
+    var stableModels = eligibleModelsInRange(state);
+    var colorByModel = {};
+    stableModels.forEach(function stableColor(model, index) {
+      colorByModel[model] = COLORS[index % COLORS.length];
+    });
+    return models.map(function toItem(model) {
+      return {
+        key: model,
+        label: statisticsKeyLabel(state, model),
+        count: Number(totals[model]) || 0,
+        color: colorByModel[model] || COLORS[0]
+      };
+    }).filter(function positive(item) {
+      return item.count > 0;
+    });
+  }
+
+  function effortDonutItems(state, model) {
+    var counts = {};
+    var statisticsMode = normalizeStatisticsMode(state.statisticsMode);
+    aggregateRelationsInRange(state.stats, state).forEach(function countEffort(entry) {
+      var relation = entry && entry.relation || {};
+      var relationModel = statisticsMode === "internal"
+        ? (String(relation.requestModel || "") || INTERNAL_UNKNOWN_REQUEST)
+        : entry.model;
+      if (relationModel !== model) {
+        return;
+      }
+      Object.keys(relation.efforts || {}).forEach(function addEffort(rawEffort) {
+        var effort = reasoningEffortClass(rawEffort);
+        counts[effort] = (Number(counts[effort]) || 0) +
+          (Number(relation.efforts[rawEffort]) || 0);
+      });
+    });
+    return Object.keys(counts).sort(function effortOrder(left, right) {
+      return REASONING_EFFORT_ORDER[left] - REASONING_EFFORT_ORDER[right];
+    }).map(function toItem(effort) {
+      return {
+        key: effort,
+        label: effort === "unknown" ? text(state, "reasoningUnspecified") : effort,
+        count: Number(counts[effort]) || 0,
+        color: REASONING_EFFORT_COLORS[effort] || REASONING_EFFORT_COLORS.unknown
+      };
+    });
+  }
+
+  function renderDonutChart(stats, models, state) {
+    state.stats = sanitizeDashboardStats(stats || {});
+    if (state.donutModel && models.indexOf(state.donutModel) === -1) {
+      state.donutModel = "";
+    }
+    var drilledModel = String(state.donutModel || "");
+    var items = drilledModel
+      ? effortDonutItems(state, drilledModel)
+      : modelDonutItems(state, models);
+    var total = items.reduce(function add(sum, item) {
+      return sum + (Number(item.count) || 0);
+    }, 0);
+    var title = drilledModel
+      ? statisticsKeyLabel(state, drilledModel) + text(state, "separator") + text(state, "reasoningEffort")
+      : text(state, "chartCompositionTitle");
+    var action = drilledModel
+      ? '<button type="button" class="usage-donut-back" data-donut-back>' +
+        escapeHtml(text(state, "chartCompositionBack")) + "</button>"
+      : '<small>' + escapeHtml(text(state, "chartYAxis")) + "</small>";
+    var warning = drilledModel && state.stats.analyticsHistoryComplete === false
+      ? '<div class="usage-donut-warning">' +
+        escapeHtml(text(state, "chartCompositionIncomplete")) + "</div>"
+      : "";
+    var controls = drilledModel
+      ? ""
+      : '<div class="usage-models usage-donut-models" role="group" aria-label="' +
+        escapeHtml(text(state, "chartLegend")) + '">' + renderModels(state) + "</div>";
+    if (!total) {
+      return [
+        '<div class="usage-chart-wrap usage-donut-wrap">',
+        '<div class="usage-chart-head"><strong>' + escapeHtml(title) + "</strong>" + action + "</div>",
+        controls,
+        warning,
+        '<div class="usage-empty">' + escapeHtml(text(state, "chartCompositionEmpty")) + "</div>",
+        "</div>"
+      ].join("");
+    }
+    var sliceAttribute = drilledModel ? "data-donut-effort" : "data-donut-model";
+    var centerLabel = drilledModel
+      ? text(state, "reasoningEffort")
+      : text(state, "chartCompositionTotalLabel");
+    return [
+      '<div class="usage-chart-wrap usage-donut-wrap">',
+      '<div class="usage-chart-head"><strong>' + escapeHtml(title) + "</strong>" + action + "</div>",
+      controls,
+      warning,
+      '<div class="usage-donut-layout"><svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label="' +
+        escapeHtml(title) + '"><circle class="usage-donut-track" cx="100" cy="100" r="66" fill="none" stroke-width="28"/>' +
+        donutSlices(items, total, sliceAttribute) +
+        '<text class="usage-donut-total" x="100" y="96" text-anchor="middle">' +
+        escapeHtml(String(total)) + '</text><text class="usage-donut-center-label" x="100" y="116" text-anchor="middle">' +
+        escapeHtml(centerLabel) + "</text></svg>" +
+        renderDonutLegend(items, total, drilledModel ? "" : "data-donut-model") +
+        "</div></div>"
+    ].join("");
   }
 
   function flattenSessions(stats, models) {
@@ -1714,7 +2546,7 @@
 
   function renderModels(state) {
     state.stats = sanitizeDashboardStats(state.stats || {});
-    var totals = modelTotalsInRange(state.stats, state);
+    var totals = statisticsTotalsInRange(state.stats, state);
     var models = eligibleModelsInRange(state);
     if (models.length === 0) {
       if (state.loading) {
@@ -1724,25 +2556,31 @@
     }
     return models.map(function modelChip(model, index) {
       var checked = state.selectedModels[model] ? " checked" : "";
-      return '<label class="usage-model-chip" style="--chip:' + COLORS[index % COLORS.length] + '"><input type="checkbox" data-model-toggle="' + escapeHtml(model) + '"' + checked + '><span>' + escapeHtml(model) + '</span><b>' + Number(totals[model] || 0) + "</b></label>";
+      return '<label class="usage-model-chip" data-chart-model="' + escapeHtml(model) +
+        '" style="--chip:' + COLORS[index % COLORS.length] + '"><input type="checkbox" data-model-toggle="' +
+        escapeHtml(model) + '"' + checked + '><span>' +
+        escapeHtml(statisticsKeyLabel(state, model)) + '</span><b>' +
+        escapeHtml(text(state, "countTimes", { count: Number(totals[model] || 0) })) + "</b></label>";
     }).join("");
   }
 
-  function renderModelCountRows(state, models) {
+  function renderFeaturePills(features, state) {
+    return features && features.length
+      ? '<div class="usage-count-features">' + features.map(function featureHtml(feature) {
+          return '<span>' + escapeHtml(feature.label) + ' <b>' +
+            escapeHtml(String(Number(feature.count) || 0)) + "</b></span>";
+        }).join("") + "</div>"
+      : "";
+  }
+
+  function renderMappedModelCountRows(state, models) {
     state.stats = sanitizeDashboardStats(state.stats || {});
     var stats = state.stats || {};
-    var today = todayKey();
-    var todayStats = (stats.byDate && stats.byDate[today]) || {};
-    var todayInRange = Boolean(dateRangeLookup(stats, state)[today]);
     var totals = modelTotalsInRange(stats, state);
     var rows = models.map(function toRow(model) {
-      var rangeTotal = Number(totals[model]) || 0;
-      var allTimeTotal = Number(stats.totals && stats.totals[model]) || 0;
       return {
         model: model,
-        total: rangeTotal,
-        allTimeTotal: allTimeTotal,
-        today: todayInRange ? (Number(todayStats[model]) || 0) : 0,
+        total: Number(totals[model]) || 0,
         features: modelFeatures(stats, model, state, 3)
       };
     }).sort(function byTotal(a, b) {
@@ -1757,24 +2595,160 @@
     }
 
     return rows.map(function rowHtml(row) {
-      var features = row.features.length
-        ? '<div class="usage-count-features">' + row.features.map(function featureHtml(feature) {
-            return '<span>' + escapeHtml(feature.label) + ' <b>' + feature.count + "</b></span>";
-          }).join("") + "</div>"
-        : "";
-      var summary = [
-        renderModelRelations(stats, row.model, state)
-      ].join("");
+      var features = renderFeaturePills(row.features, state);
       return [
-        '<div class="usage-count-record">',
-        '<div class="usage-count-row">',
+        '<details class="usage-count-record usage-mapped-record" data-mapped-model="' + escapeHtml(row.model) + '">',
+        '<summary class="usage-count-row">',
         '<span><strong>' + escapeHtml(row.model) + '</strong>' + features + "</span>",
-        '<span class="usage-count-numbers"><b>' + row.total + "</b></span>",
-        "</div>",
-        '<div class="usage-count-details" data-model-record-details="' + escapeHtml(row.model) + '">' + summary + "</div>",
-        "</div>"
+        '<span class="usage-count-numbers"><b>' +
+          escapeHtml(text(state, "countTimes", { count: row.total })) + "</b></span>",
+        "</summary>",
+        '<div class="usage-count-details" data-model-record-details="' + escapeHtml(row.model) + '">' +
+          renderModelSessions(stats, row.model, state) + "</div>",
+        "</details>"
       ].join("");
     }).join("");
+  }
+
+  function internalRequestGroups(stats, state, requestModels) {
+    var selected = {};
+    (requestModels || []).forEach(function remember(requestModel) {
+      selected[requestModel] = true;
+    });
+    var relations = {};
+    aggregateRelationsInRange(stats, state).forEach(function collect(entry) {
+      var aggregate = entry && entry.relation;
+      var requestModel = String(aggregate && aggregate.requestModel || "") || INTERNAL_UNKNOWN_REQUEST;
+      if (!selected[requestModel]) {
+        return;
+      }
+      var responseModel = String(aggregate && aggregate.responseModel || "") || INTERNAL_UNKNOWN_RESPONSE;
+      var key = relationKey(requestModel, responseModel);
+      relations[key] = mergeRelationAggregate(
+        relations[key],
+        Object.assign({}, aggregate, {
+          requestModel: requestModel,
+          responseModel: responseModel
+        })
+      );
+    });
+    if (!Object.keys(relations).length && !Object.keys(stats.analyticsByDate || {}).length) {
+      rangeEvents(stats, state).forEach(function collectRetained(event) {
+        var requestModel = eventRequestModel(event) || INTERNAL_UNKNOWN_REQUEST;
+        if (!selected[requestModel]) {
+          return;
+        }
+        var responseModel = eventResponseModel(event) || INTERNAL_UNKNOWN_RESPONSE;
+        addEventToRelation(
+          relations,
+          Object.assign({}, event, {
+            requestModel: requestModel,
+            responseModel: responseModel
+          })
+        );
+      });
+    }
+    var groups = {};
+    Object.keys(relations).forEach(function collectRelation(key) {
+      var relation = relations[key];
+      var requestModel = relation.requestModel || INTERNAL_UNKNOWN_REQUEST;
+      var group = groups[requestModel] || {
+        requestModel: requestModel,
+        count: 0,
+        responses: []
+      };
+      group.count += Number(relation.count) || 0;
+      group.responses.push(relation);
+      groups[requestModel] = group;
+    });
+    return Object.keys(groups).map(function toGroup(requestModel) {
+      var group = groups[requestModel];
+      group.responses.sort(function byCountThenRecent(left, right) {
+        return Number(right.count) - Number(left.count) ||
+          String(right.lastSubmittedAt || "").localeCompare(String(left.lastSubmittedAt || "")) ||
+          String(left.responseModel || "").localeCompare(String(right.responseModel || ""));
+      });
+      return group;
+    }).sort(function byCountThenName(left, right) {
+      return Number(right.count) - Number(left.count) ||
+        String(left.requestModel || "").localeCompare(String(right.requestModel || ""));
+    });
+  }
+
+  function renderInternalResponseRow(state, relation) {
+    var responseModel = relation.responseModel || INTERNAL_UNKNOWN_RESPONSE;
+    var responseLabel = statisticsKeyLabel(state, responseModel);
+    var effortHtml = countMapSummary(state, relation.efforts, function effortLabel(effort) {
+      return effort === "unspecified" ? text(state, "reasoningUnspecified") : effort;
+    }, reasoningEffortClass);
+    var featureRows = Object.keys(relation.features || {}).filter(function positive(feature) {
+      return Number(relation.features[feature]) > 0;
+    }).map(function toFeature(feature) {
+      return {
+        id: feature,
+        label: featureLabel(state, feature),
+        count: Number(relation.features[feature]) || 0
+      };
+    }).sort(function byCountThenLabel(left, right) {
+      return right.count - left.count || left.label.localeCompare(right.label);
+    });
+    var featureHtml = renderFeaturePills(featureRows, state);
+    return [
+      '<details class="usage-internal-response" data-response-model-child="' + escapeHtml(responseModel) + '">',
+      '<summary class="usage-internal-response-summary">',
+      '<span class="usage-internal-response-model-row"><span class="usage-relation-values usage-internal-response-value"><code>' +
+        escapeHtml(responseLabel) + "</code>" +
+        '<span class="usage-internal-efforts-inline" aria-label="' +
+        escapeHtml(text(state, "reasoningEffort")) + '">' +
+        '<small class="usage-internal-effort-label">' +
+          escapeHtml(text(state, "reasoningEffortInline")) + "</small>" +
+        (effortHtml || '<span><b class="usage-effort-unknown">' +
+          escapeHtml(text(state, "reasoningUnspecified")) + "</b></span>") +
+        "</span>" +
+        '<b class="usage-internal-subcount">' +
+        escapeHtml(String(Number(relation.count) || 0)) + "</b></span></span>",
+      featureHtml,
+      "</summary>",
+      '<div class="usage-relation-conversation-list">' + relationConversationRows(state, relation) + "</div>",
+      "</details>"
+    ].join("");
+  }
+
+  function renderInternalModelCountRows(state, models) {
+    state.stats = sanitizeDashboardStats(state.stats || {});
+    var groups = internalRequestGroups(state.stats, state, models);
+    if (!groups.length) {
+      if (state.loading) {
+        return renderLoadingSkeleton(3);
+      }
+      return '<div class="usage-empty">' + escapeHtml(text(state, "noModelRecords")) + "</div>";
+    }
+    return groups.map(function renderGroup(group) {
+      return [
+        '<section class="usage-internal-request" data-request-model-group="' +
+          escapeHtml(group.requestModel) + '">',
+        '<div class="usage-internal-request-head">',
+        '<span class="usage-internal-model-copy"><small>' + escapeHtml(text(state, "requestModelGroup")) +
+          '</small><code>' + escapeHtml(statisticsKeyLabel(state, group.requestModel)) + "</code></span>",
+        '<b class="usage-internal-count">' +
+          escapeHtml(text(state, "countTimes", { count: Number(group.count) || 0 })) + "</b>",
+        "</div>",
+        '<div class="usage-internal-response-section">',
+        '<small class="usage-internal-response-heading">' +
+          escapeHtml(text(state, "responseModelChild")) + "</small>",
+        '<div class="usage-internal-responses">' + group.responses.map(function renderResponse(relation) {
+          return renderInternalResponseRow(state, relation);
+        }).join("") + "</div>",
+        "</div>",
+        "</section>"
+      ].join("");
+    }).join("");
+  }
+
+  function renderModelCountRows(state, models) {
+    return normalizeStatisticsMode(state && state.statisticsMode) === "internal"
+      ? renderInternalModelCountRows(state, models)
+      : renderMappedModelCountRows(state, models);
   }
 
   function modelDetails(stats, model, state) {
@@ -1820,13 +2794,43 @@
     var storedSessions = storedModelSessions(stats, model);
     if (state) {
       var grouped = {};
-      rangeEvents(stats, state, model).forEach(function collect(event) {
-        if (!event || !event.conversationId) {
-          return;
-        }
-        var id = event.conversationId;
-        if (!grouped[id]) {
-          grouped[id] = {
+      aggregateRelationsInRange(stats, state, model).forEach(function collect(entry) {
+        var relation = entry && entry.relation || {};
+        Object.keys(relation.conversations || {}).forEach(function collectConversation(id) {
+          var conversation = relation.conversations[id] || {};
+          var current = grouped[id] || {
+            conversationId: id,
+            title: conversation.title || id,
+            count: 0,
+            models: {},
+            firstSubmittedAt: conversation.firstSubmittedAt || "",
+            lastSubmittedAt: "",
+            lastPageUrl: conversation.lastPageUrl || ("https://chatgpt.com/c/" + id)
+          };
+          current.count += Number(conversation.count) || 0;
+          current.models[model] = (Number(current.models[model]) || 0) +
+            (Number(conversation.count) || 0);
+          if (
+            !current.firstSubmittedAt ||
+            String(conversation.firstSubmittedAt || "") < current.firstSubmittedAt
+          ) {
+            current.firstSubmittedAt = conversation.firstSubmittedAt || current.firstSubmittedAt;
+          }
+          if (String(conversation.lastSubmittedAt || "") >= String(current.lastSubmittedAt || "")) {
+            current.title = conversation.title || current.title;
+            current.lastSubmittedAt = conversation.lastSubmittedAt || current.lastSubmittedAt;
+            current.lastPageUrl = conversation.lastPageUrl || current.lastPageUrl;
+          }
+          grouped[id] = current;
+        });
+      });
+      if (!Object.keys(grouped).length && !Object.keys(stats.analyticsByDate || {}).length) {
+        rangeEvents(stats, state, model).forEach(function collectRetained(event) {
+          if (!event || !event.conversationId) {
+            return;
+          }
+          var id = event.conversationId;
+          var current = grouped[id] || {
             conversationId: id,
             title: event.pageTitle || id,
             count: 0,
@@ -1835,57 +2839,24 @@
             lastSubmittedAt: "",
             lastPageUrl: event.pageUrl || ("https://chatgpt.com/c/" + id)
           };
-        }
-        grouped[id].count += 1;
-        grouped[id].models[model] = (Number(grouped[id].models[model]) || 0) + 1;
-        grouped[id].title = event.pageTitle || grouped[id].title;
-        if (String(event.submittedAt || "") > String(grouped[id].lastSubmittedAt || "")) {
-          grouped[id].lastSubmittedAt = event.submittedAt || "";
-          grouped[id].lastPageUrl = event.pageUrl || grouped[id].lastPageUrl;
-        }
-      });
+          current.count += 1;
+          current.models[model] = (Number(current.models[model]) || 0) + 1;
+          current.title = event.pageTitle || current.title;
+          current.lastSubmittedAt = event.submittedAt || current.lastSubmittedAt;
+          current.lastPageUrl = event.pageUrl || current.lastPageUrl;
+          grouped[id] = current;
+        });
+      }
       var rangedSessions = Object.keys(grouped)
         .map(function toRangeSession(id) { return grouped[id]; })
         .sort(function byRangeRecent(a, b) {
           return String(b.lastSubmittedAt || "").localeCompare(String(a.lastSubmittedAt || ""));
         });
-      if (hasExplicitDateRange(state)) {
-        var lookup = dateRangeLookup(stats, state || {});
-        var storedInRange = storedSessions.filter(function keepStoredSession(session) {
-          return storedSessionInRange(session, lookup);
-        });
-        var addedStoredSession = false;
-        var byId = {};
-        rangedSessions.forEach(function remember(session) {
-          if (session && session.conversationId) {
-            byId[session.conversationId] = session;
-          }
-        });
-        storedInRange.forEach(function addMissingStoredSession(session) {
-          if (!session || !session.conversationId) {
-            return;
-          }
-          if (!byId[session.conversationId]) {
-            byId[session.conversationId] = session;
-            addedStoredSession = true;
-            rangedSessions.push(session);
-            return;
-          }
-          if (preferStoredSession(byId[session.conversationId], session)) {
-            byId[session.conversationId] = session;
-            addedStoredSession = true;
-            rangedSessions = rangedSessions.map(function replaceStoredSession(current) {
-              return current && current.conversationId === session.conversationId ? session : current;
-            });
-          }
-        });
-        if (addedStoredSession) {
-          rangedSessions.sort(function byMergedRecent(a, b) {
-            return String(b.lastSubmittedAt || "").localeCompare(String(a.lastSubmittedAt || ""));
-          });
-        }
-      }
-      if (rangedSessions.length || hasExplicitDateRange(state)) {
+      if (
+        rangedSessions.length ||
+        hasExplicitDateRange(state) ||
+        normalizeSourceModeFilter(state.sourceModeFilter) !== "all"
+      ) {
         return rangedSessions;
       }
     }
@@ -1902,7 +2873,7 @@
     return sessions.map(function sessionHtml(session, index) {
       var count = Number(session.count) || 0;
       var details = [
-        text(state, "countTimes", { count: count }),
+        String(count),
         session.lastSubmittedAt ? formatDateTime(session.lastSubmittedAt) : ""
       ].filter(Boolean).join(text(state, "separator"));
       var href = session.lastPageUrl || ("https://chatgpt.com/c/" + session.conversationId);
@@ -1925,14 +2896,54 @@
     return text(state, "sourceModeUnknown");
   }
 
-  function countMapSummary(state, counts, valueLabel) {
+  function reasoningEffortClass(value) {
+    var clean = String(value || "").trim().toLowerCase();
+    if (clean === "max") return "max";
+    if (/^(?:extended|xhigh|extra-high)$/.test(clean)) return "extended";
+    if (clean === "high") return "high";
+    if (clean === "standard") return "standard";
+    if (clean === "medium") return "medium";
+    if (clean === "low") return "low";
+    if (/^(?:min|minimal)$/.test(clean)) return "min";
+    if (clean === "none") return "none";
+    return "unknown";
+  }
+
+  var REASONING_EFFORT_ORDER = {
+    none: 0,
+    min: 1,
+    low: 2,
+    medium: 3,
+    standard: 4,
+    high: 5,
+    extended: 6,
+    max: 7,
+    unknown: 8
+  };
+
+  function countMapSummary(state, counts, valueLabel, valueClass) {
     return Object.keys(counts || {}).filter(function positive(key) {
       return Number(counts[key]) > 0;
-    }).sort(function byCount(left, right) {
+    }).sort(function byMeaningfulOrder(left, right) {
+      if (typeof valueClass === "function") {
+        var leftClass = String(valueClass(left) || "unknown");
+        var rightClass = String(valueClass(right) || "unknown");
+        var leftRank = Object.prototype.hasOwnProperty.call(REASONING_EFFORT_ORDER, leftClass)
+          ? REASONING_EFFORT_ORDER[leftClass]
+          : REASONING_EFFORT_ORDER.unknown;
+        var rightRank = Object.prototype.hasOwnProperty.call(REASONING_EFFORT_ORDER, rightClass)
+          ? REASONING_EFFORT_ORDER[rightClass]
+          : REASONING_EFFORT_ORDER.unknown;
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+      }
       return Number(counts[right]) - Number(counts[left]) || left.localeCompare(right);
     }).map(function renderCount(key) {
-      return '<span><b>' + escapeHtml(valueLabel(key)) + "</b> " +
-        escapeHtml(text(state, "countTimes", { count: Number(counts[key]) || 0 })) + "</span>";
+      var className = typeof valueClass === "function" ? String(valueClass(key) || "") : "";
+      return '<span><b' + (className ? ' class="usage-effort-' + escapeHtml(className) + '"' : "") + ">" +
+        escapeHtml(valueLabel(key)) + '</b><span class="usage-subcount">' +
+        escapeHtml(String(Number(counts[key]) || 0)) + "</span></span>";
     }).join("");
   }
 
@@ -1950,7 +2961,7 @@
       var pending = /^pending:/.test(id);
       var href = pending ? "" : (conversation.lastPageUrl || ("https://chatgpt.com/c/" + id));
       var meta = [
-        text(state, "countTimes", { count: Number(conversation.count) || 0 }),
+        String(Number(conversation.count) || 0),
         conversation.lastSubmittedAt ? formatDateTime(conversation.lastSubmittedAt) : ""
       ].filter(Boolean).join(text(state, "separator"));
       var title = conversation.title || (
@@ -1963,10 +2974,26 @@
         : '<a class="usage-index-link" data-session-id="' + escapeHtml(id) +
           '" href="' + escapeHtml(href) + '" target="_blank" rel="noreferrer" title="' + escapeHtml(id) + '">' +
           escapeHtml(title) + "</a>";
+      var sourceModes = conversation.sourceModes && typeof conversation.sourceModes === "object"
+        ? conversation.sourceModes
+        : {};
+      if (!Object.keys(sourceModes).length) {
+        sourceModes[normalizeDashboardSourceMode(conversation.sourceMode)] =
+          Number(conversation.count) || 1;
+      }
+      var sourceBadges = Object.keys(sourceModes).filter(function positive(mode) {
+        return Number(sourceModes[mode]) > 0;
+      }).sort().map(function renderSourceMode(mode) {
+        var count = Number(sourceModes[mode]) || 0;
+        var mixed = Object.keys(sourceModes).filter(function active(key) {
+          return Number(sourceModes[key]) > 0;
+        }).length > 1;
+        return '<span class="usage-source-mode ' + escapeHtml(normalizeDashboardSourceMode(mode)) + '">' +
+          escapeHtml(sourceModeLabel(state, mode) + (mixed ? " " + count : "")) + "</span>";
+      }).join("");
       return [
         '<div class="usage-relation-conversation">',
-        '<span class="usage-source-mode ' + escapeHtml(normalizeDashboardSourceMode(conversation.sourceMode)) + '">' +
-          escapeHtml(sourceModeLabel(state, conversation.sourceMode)) + "</span>",
+        '<span class="usage-source-mode-list">' + sourceBadges + "</span>",
         '<div class="usage-index-content">' + conversationTitle + "<small>" + escapeHtml(meta) + "</small></div>",
         "</div>"
       ].join("");
@@ -1984,40 +3011,50 @@
       });
       if (relation.legacyUnlinked) {
         return [
-          '<section class="usage-model-relation legacy-unlinked">',
-          '<div class="usage-relation-head"><strong>' + escapeHtml(text(state, "legacyUnlinked")) +
-            '</strong><span>' + escapeHtml(text(state, "countTimes", { count: relation.count })) + "</span></div>",
-          '<p class="usage-relation-warning">' + escapeHtml(text(state, "legacyUnlinkedHint")) + "</p>",
+          '<details class="usage-model-relation legacy-unlinked">',
+          '<summary class="usage-relation-summary" data-relation-toggle aria-label="' +
+            escapeHtml(text(state, "relationConversations") + " · " + conversations.length) + '">',
+          '<span class="usage-relation-head"><strong>' + escapeHtml(text(state, "legacyUnlinked")) +
+            '</strong><span>' + escapeHtml(String(Number(relation.count) || 0)) + "</span></span>",
+          '<span class="usage-relation-warning">' + escapeHtml(text(state, "legacyUnlinkedHint")) + "</span>",
+          "</summary>",
           relation.showAggregateDetails ? renderModelRecordSummary(stats, model, state) : "",
-          '<details class="usage-relation-conversations"><summary>' +
-            escapeHtml(text(state, "relationConversations")) + " · " + conversations.length +
-            '</summary><div class="usage-relation-conversation-list">' +
-            relationConversationRows(state, relation) + "</div></details>",
-          "</section>"
+          '<div class="usage-relation-conversation-list">' +
+            relationConversationRows(state, relation) + "</div>",
+          "</details>"
         ].join("");
       }
       var effortHtml = countMapSummary(state, relation.efforts, function effortLabel(effort) {
         return effort === "unspecified" ? text(state, "reasoningUnspecified") : effort;
-      });
-      var featureHtml = countMapSummary(state, relation.features, function relationFeatureLabel(feature) {
-        return featureLabel(state, feature);
-      });
+      }, reasoningEffortClass);
+      var requestModel = String(relation.requestModel || "").trim();
+      var responseModel = String(relation.responseModel || "").trim();
+      var sameModel = Boolean(requestModel && responseModel && requestModel === responseModel);
+      var modelHead = sameModel
+        ? '<strong class="same-model"><span class="usage-relation-model"><small>' +
+          escapeHtml(text(state, "modelRelationSame")) + '</small><code>' +
+          escapeHtml(requestModel) + "</code></span></strong>"
+        : '<strong><span class="usage-relation-model"><small>' +
+          escapeHtml(text(state, "requestModels")) + '</small><code>' +
+          escapeHtml(requestModel || text(state, "responsePending")) +
+          '</code></span><i>&rarr;</i><span class="usage-relation-model"><small>' +
+          escapeHtml(text(state, "variants")) + '</small><code>' +
+          escapeHtml(responseModel || text(state, "responsePending")) + "</code></span></strong>";
       return [
-        '<section class="usage-model-relation">',
-        '<div class="usage-relation-head"><strong><code>' + escapeHtml(relation.requestModel) + "</code><i>&rarr;</i><code>" +
-          escapeHtml(relation.responseModel || text(state, "responsePending")) + '</code></strong><span>' +
-          escapeHtml(text(state, "countTimes", { count: relation.count })) + "</span></div>",
-        '<div class="usage-relation-dimension"><span class="usage-record-label">' +
-          escapeHtml(text(state, "reasoningEffort")) + '</span><div class="usage-relation-values">' +
-          (effortHtml || '<span><b>' + escapeHtml(text(state, "reasoningUnspecified")) + "</b> " +
-            escapeHtml(text(state, "countTimes", { count: relation.count })) + "</span>") + "</div></div>",
-        '<div class="usage-relation-dimension"><span class="usage-record-label">' +
-          escapeHtml(text(state, "featureStats")) + '</span><div class="usage-relation-values">' +
-          (featureHtml || '<span class="usage-record-empty">—</span>') + "</div></div>",
-        '<details class="usage-relation-conversations"><summary>' +
-          escapeHtml(text(state, "relationConversations")) + " · " + conversations.length + '</summary><div class="usage-relation-conversation-list">' +
-          relationConversationRows(state, relation) + "</div></details>",
-        "</section>"
+        '<details class="usage-model-relation">',
+        '<summary class="usage-relation-summary" data-relation-toggle aria-label="' +
+          escapeHtml(text(state, "relationConversations") + " · " + conversations.length) + '">',
+        '<span class="usage-relation-head">' + modelHead + "<span>" +
+          escapeHtml(String(Number(relation.count) || 0)) + "</span></span>",
+        '<span class="usage-relation-dimension"><span class="usage-record-label">' +
+          escapeHtml(text(state, "reasoningEffort")) + '</span><span class="usage-relation-values">' +
+          (effortHtml || '<span><b class="usage-effort-unknown">' + escapeHtml(text(state, "reasoningUnspecified")) +
+            '</b><span class="usage-subcount">' + escapeHtml(String(Number(relation.count) || 0)) +
+            "</span></span>") + "</span></span>",
+        "</summary>",
+        '<div class="usage-relation-conversation-list">' +
+          relationConversationRows(state, relation) + "</div>",
+        "</details>"
       ].join("");
     }).join("") + "</div>";
   }
@@ -2042,10 +3079,10 @@
           variant.mode ? text(state, "detailMode") + " " + variant.mode : "",
           variant.apiModel ? text(state, "api") + " " + variant.apiModel : ""
         ].filter(Boolean).join(text(state, "separator"));
-        return '<div class="usage-variant-row"><b>' + escapeHtml(text(state, "countTimes", { count: variant.count })) + '</b><span title="' + escapeHtml(details) + '">' + escapeHtml(variant.name) + "</span></div>";
+        return '<div class="usage-variant-row"><b>' + escapeHtml(String(Number(variant.count) || 0)) + '</b><span title="' + escapeHtml(details) + '">' + escapeHtml(variant.name) + "</span></div>";
       }).join(""),
       pending
-        ? '<div class="usage-variant-row pending"><b>' + escapeHtml(text(state, "countTimes", { count: pending })) + '</b><span>' + escapeHtml(text(state, "responsePending")) + "</span></div>"
+        ? '<div class="usage-variant-row pending"><b>' + escapeHtml(String(Number(pending) || 0)) + '</b><span>' + escapeHtml(text(state, "responsePending")) + "</span></div>"
         : "",
       "</div>"
     ].join("");
@@ -2060,7 +3097,7 @@
       '<div class="usage-variant-list usage-request-model-list">',
       '<span class="usage-record-label">' + escapeHtml(text(state, "requestModels")) + "</span>",
       requests.map(function requestHtml(request) {
-        return '<div class="usage-variant-row"><b>' + escapeHtml(text(state, "countTimes", { count: request.count })) + '</b><span>' + escapeHtml(request.name) + "</span></div>";
+        return '<div class="usage-variant-row"><b>' + escapeHtml(String(Number(request.count) || 0)) + '</b><span>' + escapeHtml(request.name) + "</span></div>";
       }).join(""),
       "</div>"
     ].join("");
@@ -2091,22 +3128,7 @@
       combinations.map(function combinationHtml(combination) {
         var full = formatParameterSummary(combination.parameters, 20);
         var compact = formatParameterSummary(combination.parameters, 4);
-        return '<div class="usage-param-row"><b>' + escapeHtml(text(state, "countTimes", { count: combination.count })) + '</b><span title="' + escapeHtml(full) + '">' + escapeHtml(compact) + "</span></div>";
-      }).join(""),
-      "</div>"
-    ].join("");
-  }
-
-  function renderFeatureSummary(stats, model, state) {
-    var features = modelFeatures(stats, model, state, 4);
-    if (!features.length) {
-      return "";
-    }
-    return [
-      '<div class="usage-feature-list">',
-      '<span class="usage-record-label">' + escapeHtml(text(state, "featureStats")) + "</span>",
-      features.map(function featureHtml(feature) {
-        return '<div class="usage-feature-row"><b>' + escapeHtml(text(state, "countTimes", { count: feature.count })) + '</b><span>' + escapeHtml(feature.label) + "</span></div>";
+        return '<div class="usage-param-row"><b>' + escapeHtml(String(Number(combination.count) || 0)) + '</b><span title="' + escapeHtml(full) + '">' + escapeHtml(compact) + "</span></div>";
       }).join(""),
       "</div>"
     ].join("");
@@ -2116,11 +3138,10 @@
     var variants = renderModelVariants(stats, model, state);
     var requests = renderRequestModels(stats, model, state);
     var parameters = renderParameterCombinations(stats, model, state);
-    var features = renderFeatureSummary(stats, model, state);
-    if (!variants && !requests && !parameters && !features) {
+    if (!variants && !requests && !parameters) {
       return "";
     }
-    return '<div class="usage-record-summary">' + variants + requests + parameters + features + "</div>";
+    return '<div class="usage-record-summary">' + variants + requests + parameters + "</div>";
   }
 
   function renderModelTextList(stats, state) {
@@ -2140,7 +3161,8 @@
           rangeTotal: rangeTotal,
           allTimeTotal: allTimeTotal,
           today: todayInRange ? (Number(todayStats[model]) || 0) : 0,
-          details: modelDetails(stats, model, state)
+          details: modelDetails(stats, model, state),
+          features: modelFeatures(stats, model, state, 3)
         };
       })
       .filter(function hasUsage(row) {
@@ -2160,8 +3182,10 @@
         '<div class="usage-text-row">',
         '<div><strong>' + escapeHtml(row.model) + '</strong>',
         row.details ? '<small>' + escapeHtml(row.details) + '</small>' : "",
+        renderFeaturePills(row.features, state),
         "</div>",
-        '<div class="usage-text-count"><b>' + row.total + '</b><small>' + escapeHtml(text(state, "rangeTotal", { count: row.rangeTotal })) + text(state, "separator") + escapeHtml(text(state, "allTimeTotal", { count: row.allTimeTotal })) + text(state, "separator") + escapeHtml(text(state, "todayTotal", { today: row.today, total: row.total })) + "</small></div>",
+        '<div class="usage-text-count"><b>' +
+          escapeHtml(text(state, "countTimes", { count: row.total })) + "</b></div>",
         "</div>",
         renderModelRelations(stats, row.model, state),
         "</div>"
@@ -2305,9 +3329,229 @@
     }).join("") + "</div>";
   }
 
+  function renderSettingsOption(state, attribute, id, label, active) {
+    return '<button type="button" class="usage-settings-option' + (active ? " active" : "") +
+      '" ' + attribute + '="' + escapeHtml(id) + '" aria-pressed="' + (active ? "true" : "false") + '">' +
+      '<span>' + escapeHtml(label) + '</span><span class="usage-settings-check" aria-hidden="true">✓</span></button>';
+  }
+
+  function renderSettingsAction(attribute, id, label, disabled) {
+    return '<button type="button" class="usage-settings-action" ' + attribute + '="' +
+      escapeHtml(id) + '"' + (disabled ? " disabled" : "") + ">" +
+      escapeHtml(label) + "</button>";
+  }
+
+  function renderSettingsCategory(state, id, label, currentValue, content, className) {
+    var open = state.settingsSubmenu === id;
+    return [
+      '<details class="usage-settings-item usage-settings-item-' + escapeHtml(id) + '"' +
+        (open ? " open" : "") + ' data-settings-category="' + escapeHtml(id) + '">',
+      '<summary><span class="usage-settings-category-label">' + escapeHtml(label) + '</span>',
+      currentValue
+        ? '<span class="usage-settings-current">' + escapeHtml(currentValue) + '</span>'
+        : "",
+      '<span class="usage-settings-arrow" aria-hidden="true">‹</span></summary>',
+      '<div class="usage-settings-submenu' + (className ? " " + escapeHtml(className) : "") +
+        '" role="group" aria-label="' + escapeHtml(label) + '">' + content + "</div>",
+      "</details>"
+    ].join("");
+  }
+
+  function renderSettingsMenu(state) {
+    var mode = normalizeSourceModeFilter(state.sourceModeFilter);
+    var statisticsMode = normalizeStatisticsMode(state.statisticsMode);
+    var chartType = normalizeChartType(state.chartType);
+    var themeMode = normalizeThemeMode(state.themeMode);
+    var language = currentLanguage(state);
+    var activeView = normalizeView(state.activeView);
+    var languageOptions = [
+      { id: "zh", label: text(state, "languageToggleZh") },
+      { id: "en", label: "English" }
+    ].map(function languageOption(item) {
+      return renderSettingsOption(state, "data-language-select", item.id, item.label, language === item.id);
+    }).join("");
+    var categories = [
+      renderSettingsCategory(
+        state,
+        "language",
+        text(state, "language"),
+        language === "zh" ? text(state, "languageToggleZh") : "English",
+        languageOptions
+      )
+    ];
+    var themeOptions = [
+      { id: "system", key: "themeSystem" },
+      { id: "light", key: "themeLight" },
+      { id: "dark", key: "themeDark" }
+    ].map(function themeOption(item) {
+      return renderSettingsOption(
+        state,
+        "data-theme-select",
+        item.id,
+        text(state, item.key),
+        themeMode === item.id
+      );
+    }).join("");
+    categories.push(
+      renderSettingsCategory(
+        state,
+        "theme",
+        text(state, "theme"),
+        text(state, themeMode === "dark" ? "themeDark" : themeMode === "light" ? "themeLight" : "themeSystem"),
+        themeOptions
+      )
+    );
+    var statisticsDataActions = [
+      renderSettingsAction(
+        "data-statistics-data-export",
+        "json",
+        text(state, "statisticsDataExportJson"),
+        state.statisticsDataBusy
+      ),
+      renderSettingsAction(
+        "data-statistics-data-export",
+        "csv",
+        text(state, "statisticsDataExportCsv"),
+        state.statisticsDataBusy
+      ),
+      renderSettingsAction(
+        "data-statistics-data-import",
+        "replace",
+        text(state, "statisticsDataImportJson"),
+        state.statisticsDataBusy
+      ),
+      '<input class="usage-statistics-data-file" data-statistics-data-file type="file" accept=".json,application/json" hidden>'
+    ].join("");
+    categories.push(
+      renderSettingsCategory(
+        state,
+        "data",
+        text(state, "statisticsData"),
+        "",
+        statisticsDataActions,
+        "usage-settings-data-submenu"
+      )
+    );
+
+    if (activeView !== "chart") {
+      return [
+        '<details class="usage-settings-menu"' + (state.settingsMenuOpen ? " open" : "") + ">",
+        '<summary class="usage-header-action usage-settings-trigger" aria-label="' +
+          escapeHtml(text(state, "settingsOpen")) + '" title="' + escapeHtml(text(state, "settingsOpen")) + '">' +
+          escapeHtml(text(state, "settings")) + "</summary>",
+        '<div class="usage-settings-popover">' + categories.join("") + "</div>",
+        "</details>"
+      ].join("");
+    }
+
+    var sourceOptions = [
+      { id: "all", key: "sourceFilterAll" },
+      { id: "chat", key: "sourceFilterChat" },
+      { id: "work", key: "sourceFilterWork" }
+    ].map(function sourceOption(item) {
+      return renderSettingsOption(
+        state,
+        "data-source-filter",
+        item.id,
+        text(state, item.key),
+        mode === item.id
+      );
+    }).join("");
+    var statisticsModeOptions = [
+      { id: "mapped", key: "statisticsModeMapped" },
+      { id: "internal", key: "statisticsModeInternal" }
+    ].map(function statisticsModeOption(item) {
+      return renderSettingsOption(
+        state,
+        "data-statistics-mode",
+        item.id,
+        text(state, item.key),
+        statisticsMode === item.id
+      );
+    }).join("");
+    var chartTypeOptions = [
+      { id: "line", key: "chartTypeLine" },
+      { id: "donut", key: "chartTypeDonut" }
+    ].map(function chartTypeOption(item) {
+      return renderSettingsOption(
+        state,
+        "data-chart-type",
+        item.id,
+        text(state, item.key),
+        chartType === item.id
+      );
+    }).join("");
+    var sectionVisibilityOptions = [
+      {
+        id: "trend",
+        key: "statisticsSectionTrend",
+        active: state.showTrendChart !== false
+      },
+      {
+        id: "text",
+        key: "statisticsSectionText",
+        active: state.showTextStatistics !== false
+      }
+    ].map(function sectionVisibilityOption(item) {
+      return '<label class="usage-statistics-visibility-option"><input type="checkbox" data-statistics-section="' +
+        item.id + '"' + (item.active ? " checked" : "") + "><span>" +
+        escapeHtml(text(state, item.key)) +
+        '</span><i class="usage-statistics-visibility-indicator" aria-hidden="true"></i></label>';
+    }).join("");
+    categories.push(
+      renderSettingsCategory(
+        state,
+        "source",
+        text(state, "source"),
+        text(state, mode === "chat" ? "sourceFilterChat" : mode === "work" ? "sourceFilterWork" : "sourceFilterAll"),
+        sourceOptions
+      ),
+      renderSettingsCategory(
+        state,
+        "chart",
+        text(state, "chartType"),
+        text(state, chartType === "donut" ? "chartTypeDonut" : "chartTypeLine"),
+        chartTypeOptions
+      ),
+      renderSettingsCategory(
+        state,
+        "statistics",
+        text(state, "statisticsMode"),
+        text(state, statisticsMode === "internal" ? "statisticsModeInternal" : "statisticsModeMapped"),
+        statisticsModeOptions
+      ),
+      renderSettingsCategory(
+        state,
+        "sections",
+        text(state, "statisticsSections"),
+        "",
+        sectionVisibilityOptions
+      )
+    );
+    return [
+      '<details class="usage-settings-menu"' + (state.settingsMenuOpen ? " open" : "") + ">",
+      '<summary class="usage-header-action usage-settings-trigger" aria-label="' +
+        escapeHtml(text(state, "settingsOpen")) + '" title="' + escapeHtml(text(state, "settingsOpen")) + '">' +
+        escapeHtml(text(state, "settings")) + "</summary>",
+      '<div class="usage-settings-popover">' + categories.join("") + "</div>",
+      "</details>"
+    ].join("");
+  }
+
   function renderDateControls(state) {
     var today = defaultEndDate();
-    return '<div class="usage-controls usage-chart-controls"><div class="usage-date-controls" aria-label="' + escapeHtml(text(state, "customRange")) + '"><label>' + escapeHtml(text(state, "startDate")) + ' <input class="usage-start-date" type="date" max="' + escapeHtml(today) + '" value="' + escapeHtml(state.startDate) + '"></label><label>' + escapeHtml(text(state, "endDate")) + ' <input class="usage-end-date" type="date" max="' + escapeHtml(today) + '" value="' + escapeHtml(state.endDate) + '"></label></div></div>';
+    return [
+      '<div class="usage-controls usage-chart-controls">',
+      '<div class="usage-date-controls" aria-label="' + escapeHtml(text(state, "customRange")) + '">',
+      '<label>' + escapeHtml(text(state, "startDate")) +
+        ' <input class="usage-start-date" type="date" max="' + escapeHtml(today) +
+        '" value="' + escapeHtml(state.startDate) + '"></label>',
+      '<label>' + escapeHtml(text(state, "endDate")) +
+        ' <input class="usage-end-date" type="date" max="' + escapeHtml(today) +
+        '" value="' + escapeHtml(state.endDate) + '"></label>',
+      "</div>",
+      "</div>"
+    ].join("");
   }
 
   var EXPORT_FORMATS = [
@@ -2317,6 +3561,160 @@
     { id: "png", labelKey: "exportFormatPng" },
     { id: "docx", labelKey: "exportFormatDocx" }
   ];
+
+  function normalizeExportSearch(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
+  function exportConversationMatchesSearch(conversation, search) {
+    var needle = normalizeExportSearch(search);
+    if (!needle) {
+      return true;
+    }
+    var haystack = normalizeExportSearch([
+      conversation && conversation.title,
+      conversation && conversation.id,
+      conversation && conversation.projectName,
+      conversation && conversation.projectId
+    ].filter(Boolean).join(" "));
+    return haystack.indexOf(needle) >= 0;
+  }
+
+  function validExportProjectName(value, projectId) {
+    var name = String(value || "").replace(/\s+/g, " ").trim();
+    var id = String(projectId || "").trim();
+    if (
+      !name ||
+      (id && name === id) ||
+      /\bg-p-[0-9a-f]{32}\b/i.test(name) ||
+      /^(?:unnamed project|未命名项目|project|项目)$/i.test(name) ||
+      /^(?:project|项目)\s+g-p-/i.test(name)
+    ) {
+      return "";
+    }
+    return name;
+  }
+
+  function exportConversationGroups(state, list) {
+    var groups = [];
+    var byKey = {};
+    var projectNames = {};
+    var projectNamePriorities = {};
+    var projectOrders = {};
+    (Array.isArray(list) ? list : []).forEach(function rememberProjectName(conversation) {
+      var projectId = String(conversation && conversation.projectId || "").trim();
+      var projectName = validExportProjectName(
+        conversation && conversation.projectName,
+        projectId
+      );
+      var projectOrder = Number(conversation && conversation.projectOrder);
+      if (conversation && conversation.groupType === "project" && projectId && projectName) {
+        var source = String(conversation.projectNameSource || "").trim().toLowerCase();
+        var priority = source === "main-world-react"
+          ? 4
+          : source === "account-index"
+            ? 3
+            : /sidebar/.test(source)
+              ? 2
+              : 1;
+        if (
+          !Object.prototype.hasOwnProperty.call(projectNames, projectId) ||
+          priority > Number(projectNamePriorities[projectId] || 0)
+        ) {
+          projectNames[projectId] = projectName;
+          projectNamePriorities[projectId] = priority;
+        }
+      }
+      if (
+        conversation &&
+        conversation.groupType === "project" &&
+        projectId &&
+        Number.isFinite(projectOrder) &&
+        (!Object.prototype.hasOwnProperty.call(projectOrders, projectId) || projectOrder < projectOrders[projectId])
+      ) {
+        projectOrders[projectId] = projectOrder;
+      }
+    });
+    (Array.isArray(list) ? list : []).forEach(function addConversation(conversation, listIndex) {
+      if (!conversation || !conversation.id || conversation.current) {
+        return;
+      }
+      var projectId = String(conversation.projectId || "").trim();
+      var isProject = Boolean(conversation.groupType === "project" && projectId);
+      var key = isProject ? "project:" + projectId : "ungrouped";
+      if (!byKey[key]) {
+        byKey[key] = {
+          key: key,
+          title: isProject
+            ? (
+                projectNames[projectId] ||
+                text(state, "exportUnknownProject")
+              )
+            : text(state, "exportUngrouped"),
+          projectId: isProject ? projectId : "",
+          projectOrder: isProject && Object.prototype.hasOwnProperty.call(projectOrders, projectId)
+            ? projectOrders[projectId]
+            : Number.MAX_SAFE_INTEGER,
+          listIndex: listIndex,
+          conversations: []
+        };
+        groups.push(byKey[key]);
+      }
+      byKey[key].conversations.push(conversation);
+    });
+    return groups.sort(function orderGroups(left, right) {
+      var leftProject = Boolean(left.projectId);
+      var rightProject = Boolean(right.projectId);
+      if (leftProject !== rightProject) {
+        return leftProject ? -1 : 1;
+      }
+      if (leftProject && left.projectOrder !== right.projectOrder) {
+        return left.projectOrder - right.projectOrder;
+      }
+      return left.listIndex - right.listIndex;
+    });
+  }
+
+  function exportProjectConversationIds(state, projectId) {
+    var cleanProjectId = String(projectId || "").trim();
+    if (!cleanProjectId) {
+      return [];
+    }
+    return (Array.isArray(state.exportConversationList) ? state.exportConversationList : [])
+      .filter(function inProject(conversation) {
+        return conversation &&
+          conversation.id &&
+          conversation.groupType === "project" &&
+          String(conversation.projectId || "").trim() === cleanProjectId;
+      })
+      .map(function id(conversation) { return conversation.id; });
+  }
+
+  function renderExportConversationRow(state, conversation, selected) {
+    var checked = selected[conversation.id] ? " checked" : "";
+    var title = conversation.title || conversation.id;
+    var updated = formatDateTime(conversation.updateTime || conversation.createTime);
+    var badges = [
+      conversation.current ? '<small class="usage-export-conv-badge current">' + escapeHtml(text(state, "exportCurrent")) + "</small>" : "",
+      conversation.archived ? '<small class="usage-export-conv-badge">' + escapeHtml(text(state, "exportArchived")) + "</small>" : ""
+    ].join("");
+    return '<label class="usage-export-conv" data-export-conv-row="' + escapeHtml(conversation.id) + '"' +
+      (exportConversationMatchesSearch(conversation, state.exportSearch) ? "" : " hidden") +
+      '><input type="checkbox" data-export-conv="' + escapeHtml(conversation.id) +
+      '" aria-label="' + escapeHtml(title) + '"' + checked + '><span class="usage-export-conv-copy"><b>' +
+      escapeHtml(title) + "</b>" +
+      (updated ? "<small>" + escapeHtml(text(state, "exportUpdated", { time: updated })) + "</small>" : "") +
+      "</span>" + badges + "</label>";
+  }
+
+  function visibleExportConversationIds(state) {
+    return (Array.isArray(state.exportConversationList) ? state.exportConversationList : [])
+      .filter(function visible(conversation) {
+        return conversation && conversation.id &&
+          exportConversationMatchesSearch(conversation, state.exportSearch);
+      })
+      .map(function id(conversation) { return conversation.id; });
+  }
 
   function selectedExportConversationIds(state) {
     var selected = state.exportSelected || {};
@@ -2343,6 +3741,19 @@
       input.checked = Boolean(selected[input.getAttribute("data-export-conv")]);
       input.disabled = Boolean(state.exportBusy);
     });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-project-toggle]"), function syncProject(input) {
+      var ids = exportProjectConversationIds(state, input.getAttribute("data-export-project-toggle"));
+      var projectSelectedCount = ids.filter(function selectedId(id) {
+        return Boolean(selected[id]);
+      }).length;
+      input.checked = ids.length > 0 && projectSelectedCount === ids.length;
+      input.indeterminate = projectSelectedCount > 0 && projectSelectedCount < ids.length;
+      input.disabled = Boolean(state.exportBusy || ids.length === 0);
+      input.setAttribute(
+        "aria-checked",
+        input.indeterminate ? "mixed" : (input.checked ? "true" : "false")
+      );
+    });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-format]"), function syncFormat(button) {
       button.disabled = Boolean(state.exportBusy || selectedCount === 0);
     });
@@ -2352,6 +3763,40 @@
         button.disabled = Boolean(state.exportBusy);
       }
     );
+  }
+
+  function syncExportSearchUi(state) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    var visibleCount = 0;
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-conv-row]"), function syncRow(row) {
+      var id = row.getAttribute("data-export-conv-row");
+      var conversation = (state.exportConversationList || []).filter(function find(item) {
+        return item && item.id === id;
+      })[0];
+      var visible = exportConversationMatchesSearch(conversation, state.exportSearch);
+      row.hidden = !visible;
+      if (visible) {
+        visibleCount += 1;
+      }
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-group]"), function syncGroup(group) {
+      if (!group || typeof group.querySelectorAll !== "function") {
+        return;
+      }
+      var hasVisibleRows = Array.prototype.some.call(
+        group.querySelectorAll("[data-export-conv-row]"),
+        function isVisible(row) { return !row.hidden; }
+      );
+      group.hidden = !hasVisibleRows;
+    });
+    var empty = typeof state.container.querySelector === "function"
+      ? state.container.querySelector("[data-export-search-empty]")
+      : null;
+    if (empty) {
+      empty.hidden = visibleCount > 0;
+    }
   }
 
   function renderExportPanel(state) {
@@ -2389,6 +3834,9 @@
     } else {
       selectbar =
         '<div class="usage-export-selectbar">' +
+          '<input class="usage-export-search" type="search" value="' + escapeHtml(state.exportSearch || "") +
+            '" placeholder="' + escapeHtml(text(state, "exportSearchPlaceholder")) + '" aria-label="' +
+            escapeHtml(text(state, "exportSearchPlaceholder")) + '">' +
           '<button type="button" class="usage-export-mini" data-export-selectall>' + escapeHtml(text(state, "exportSelectAll")) + "</button>" +
           '<button type="button" class="usage-export-mini" data-export-selectnone>' + escapeHtml(text(state, "exportSelectNone")) + "</button>" +
           '<span class="usage-export-selcount">' + escapeHtml(text(state, "exportSelectedCount", { count: selectedCount })) + "</span>" +
@@ -2396,20 +3844,33 @@
       var listWarning = state.exportConversationMeta && state.exportConversationMeta.complete === false
         ? '<p class="usage-export-hint usage-export-warning">' + escapeHtml(text(state, "exportListIncomplete")) + "</p>"
         : "";
-      listHtml = listWarning + '<div class="usage-export-conv-list">' + list.map(function (c) {
-        var ck = selected[c.id] ? " checked" : "";
-        var title = c.title || c.id;
-        var updated = formatDateTime(c.updateTime || c.createTime);
-        var badges = [
-          c.current ? '<small class="usage-export-conv-badge current">' + escapeHtml(text(state, "exportCurrent")) + "</small>" : "",
-          c.archived ? '<small class="usage-export-conv-badge">' + escapeHtml(text(state, "exportArchived")) + "</small>" : ""
-        ].join("");
-        return '<label class="usage-export-conv"><input type="checkbox" data-export-conv="' + escapeHtml(c.id) +
-          '" aria-label="' + escapeHtml(title) + '"' + ck + '><span class="usage-export-conv-copy"><b>' +
-          escapeHtml(title) + "</b>" +
-          (updated ? "<small>" + escapeHtml(text(state, "exportUpdated", { time: updated })) + "</small>" : "") +
-          "</span>" + badges + "</label>";
-      }).join("") + "</div>";
+      var currentRows = list.filter(function currentConversation(conversation) {
+        return conversation && conversation.current;
+      }).map(function renderCurrent(conversation) {
+        return renderExportConversationRow(state, conversation, selected);
+      }).join("");
+      var groupRows = exportConversationGroups(state, list).map(function renderGroup(group) {
+        var rows = group.conversations.map(function renderConversation(conversation) {
+          return renderExportConversationRow(state, conversation, selected);
+        }).join("");
+        var visible = group.conversations.some(function visibleConversation(conversation) {
+          return exportConversationMatchesSearch(conversation, state.exportSearch);
+        });
+        var projectToggle = group.projectId
+          ? '<input class="usage-export-group-check" type="checkbox" data-export-project-toggle="' +
+            escapeHtml(group.projectId) + '" aria-label="' +
+            escapeHtml(text(state, "exportSelectProject", { name: group.title })) + '">'
+          : "";
+        return '<details class="usage-export-group" data-export-group="' + escapeHtml(group.key) + '" open' +
+          (visible ? "" : " hidden") + '><summary>' + projectToggle + '<span>' + escapeHtml(group.title) + '</span><small>' +
+          group.conversations.length + '</small></summary><div class="usage-export-group-list">' + rows +
+          "</div></details>";
+      }).join("");
+      listHtml = listWarning + '<div class="usage-export-conv-list">' +
+        (currentRows ? '<div class="usage-export-current" data-export-group="current">' + currentRows + "</div>" : "") +
+        groupRows + '</div><p class="usage-export-hint" data-export-search-empty' +
+        (visibleExportConversationIds(state).length ? " hidden" : "") + ">" +
+        escapeHtml(text(state, "exportSearchEmpty")) + "</p>";
     }
 
     return [
@@ -2417,10 +3878,43 @@
       selectbar,
       listHtml,
       '<p class="usage-export-hint">' + escapeHtml(text(state, "exportSelectionHint")) + "</p>",
-      '<div class="usage-export-actions">' + buttons + "</div>",
+      '<div class="usage-export-actions" role="group" aria-label="' +
+        escapeHtml(text(state, "exportFormatGroup")) + '">' + buttons + "</div>",
+      '<button type="button" class="usage-export-cancel" data-export-cancel hidden>' +
+        escapeHtml(text(state, "exportCancel")) + "</button>",
       '<p class="usage-export-status" data-export-status aria-live="polite"></p>',
       "</section>"
     ].join("");
+  }
+
+  function statisticsUsesEventHistory(state) {
+    return normalizeStatisticsMode(state && state.statisticsMode) === "internal" ||
+      normalizeSourceModeFilter(state && state.sourceModeFilter) !== "all" ||
+      (
+        normalizeChartType(state && state.chartType) === "donut" &&
+        Boolean(state && state.donutModel)
+      );
+  }
+
+  function renderStatisticsCompletenessWarning(state) {
+    var analyticsComplete = state && state.stats
+      ? state.stats.analyticsHistoryComplete
+      : true;
+    if (
+      analyticsComplete === undefined &&
+      state &&
+      state.stats &&
+      state.stats.eventHistoryComplete === false
+    ) {
+      analyticsComplete = false;
+    }
+    return statisticsUsesEventHistory(state) &&
+      state &&
+      state.stats &&
+      analyticsComplete === false
+      ? '<div class="usage-statistics-warning" role="status">' +
+        escapeHtml(text(state, "statisticsHistoryIncomplete")) + "</div>"
+      : "";
   }
 
   function renderActiveView(state, models) {
@@ -2432,13 +3926,23 @@
       return '<div class="usage-view-panel">' + renderExportPanel(state) + "</div>";
     }
 
+    var showTrendChart = state.showTrendChart !== false;
+    var showTextStatistics = state.showTextStatistics !== false;
     return [
       '<div class="usage-view-panel usage-count-panel">',
       '<section class="usage-text-panel usage-chart-panel">',
       renderDateControls(state),
-      '<div class="usage-models">' + renderModels(state) + "</div>",
-      renderChart(state.stats, models, state),
-      '<div class="usage-count-list">' + renderModelCountRows(state, models) + "</div>",
+      renderStatisticsCompletenessWarning(state),
+      showTrendChart
+        ? (
+            normalizeChartType(state.chartType) === "donut"
+              ? renderDonutChart(state.stats, models, state)
+              : renderChart(state.stats, models, state)
+          )
+        : "",
+      showTextStatistics
+        ? '<div class="usage-count-list">' + renderModelCountRows(state, models) + "</div>"
+        : "",
       "</section>",
       "</div>"
     ].join("");
@@ -2596,37 +4100,28 @@
     return mediaQuery && mediaQuery.matches ? "dark" : "light";
   }
 
-  // 工具栏弹窗(popup)和页面内面板用同一套主题变量。页面内面板能直接读 ChatGPT 主题,
-  // 弹窗是独立上下文读不到,于是页面内面板把检测到的主题存进 storage,弹窗读出来套用,
-  // 两个面板颜色就一致了(否则弹窗只跟随系统配色,ChatGPT 主题≠系统时会不一致)。
-  var THEME_STORAGE_KEY = "chatgptUsagePanelTheme";
-
-  function chromeRuntime() {
-    try {
-      if (root && root.chrome) { return root.chrome; }
-    } catch (_) {}
-    return typeof chrome !== "undefined" ? chrome : null;
-  }
-
-  function storageLocalArea() {
-    var api = chromeRuntime();
-    return api && api.storage && api.storage.local ? api.storage.local : null;
-  }
-
-  function persistDetectedTheme(theme) {
-    if (theme !== "dark" && theme !== "light") { return; }
-    var area = storageLocalArea();
-    if (!area || typeof area.set !== "function") { return; }
-    var record = {};
-    record[THEME_STORAGE_KEY] = theme;
-    try { area.set(record); } catch (_) {}
-  }
-
-  function resolvePopupTheme(state) {
-    var theme = state && state.resolvedPopupTheme;
-    if (theme === "dark" || theme === "light") { return theme; }
+  function resolveDashboardTheme(state) {
+    var themeMode = normalizeThemeMode(state && state.themeMode);
+    if (themeMode === "dark" || themeMode === "light") {
+      return themeMode;
+    }
     var query = preferredColorSchemeQuery();
     return query && query.matches ? "dark" : "light";
+  }
+
+  function applyThemeVariablesToElement(element, theme, themeMode) {
+    if (!element || !element.style) {
+      return;
+    }
+    var variables = USAGE_THEME_VARIABLES[theme] || USAGE_THEME_VARIABLES.light;
+    Object.keys(variables).forEach(function applyVariable(name) {
+      element.style.setProperty(name, variables[name]);
+    });
+    element.style.setProperty("color-scheme", theme === "dark" ? "dark" : "light");
+    if (typeof element.setAttribute === "function") {
+      element.setAttribute("data-usage-theme", theme);
+      element.setAttribute("data-theme-mode", normalizeThemeMode(themeMode));
+    }
   }
 
   function applyPopupThemeVariables(state) {
@@ -2637,19 +4132,13 @@
     if (!dashboard || !dashboard.style) {
       return;
     }
-    var popupTheme = resolvePopupTheme(state);
-    var variables = USAGE_THEME_VARIABLES[popupTheme] || USAGE_THEME_VARIABLES.light;
-    Object.keys(variables).forEach(function applyVariable(name) {
-      dashboard.style.setProperty(name, variables[name]);
-    });
+    var popupTheme = resolveDashboardTheme(state);
+    applyThemeVariablesToElement(dashboard, popupTheme, state.themeMode);
     // 把主题变量与 color-scheme 一并提升到 <html>,让 body/.shell 的页面背景和原生滚动条跟随强制主题。
     // 否则强制浅色而系统配色为深色时,popup 内容四周会露出一圈深色边(浅色主题黑边问题)。
     var docEl = dashboard.ownerDocument && dashboard.ownerDocument.documentElement;
     if (docEl && docEl.style && typeof docEl.style.setProperty === "function") {
-      Object.keys(variables).forEach(function applyDocVariable(name) {
-        docEl.style.setProperty(name, variables[name]);
-      });
-      docEl.style.setProperty("color-scheme", popupTheme === "dark" ? "dark" : "light");
+      applyThemeVariablesToElement(docEl, popupTheme, state.themeMode);
     }
   }
 
@@ -2657,33 +4146,13 @@
     if (!state || !state.options || state.options.surface !== "popup" || state.popupThemeSubscribed) {
       return;
     }
-    var area = storageLocalArea();
-    if (!area || typeof area.get !== "function") {
-      // 读不到 storage.local 就无法获知 ChatGPT 主题,本同步整体跳过(render 里会退回系统配色)。
-      return;
-    }
     state.popupThemeSubscribed = true;
-    var refresh = function (theme) {
-      state.resolvedPopupTheme = (theme === "dark" || theme === "light") ? theme : null;
-      applyPopupThemeVariables(state);
-    };
-    try {
-      area.get(THEME_STORAGE_KEY, function (res) { refresh(res && res[THEME_STORAGE_KEY]); });
-    } catch (_) {}
-    var api = chromeRuntime();
-    if (api && api.storage && api.storage.onChanged && typeof api.storage.onChanged.addListener === "function") {
-      try {
-        api.storage.onChanged.addListener(function (changes, areaName) {
-          if (areaName === "local" && changes && changes[THEME_STORAGE_KEY]) {
-            refresh(changes[THEME_STORAGE_KEY].newValue);
-          }
-        });
-      } catch (_) {}
-    }
     var query = preferredColorSchemeQuery();
     if (query && typeof query.addEventListener === "function") {
       query.addEventListener("change", function () {
-        if (!state.resolvedPopupTheme) { applyPopupThemeVariables(state); }
+        if (normalizeThemeMode(state.themeMode) === "system") {
+          applyPopupThemeVariables(state);
+        }
       });
     }
   }
@@ -2696,12 +4165,8 @@
     if (!dashboard || !dashboard.style) {
       return;
     }
-    var theme = detectPageTheme();
-    persistDetectedTheme(theme);
-    var variables = USAGE_THEME_VARIABLES[theme] || USAGE_THEME_VARIABLES.light;
-    Object.keys(variables).forEach(function applyVariable(name) {
-      dashboard.style.setProperty(name, variables[name]);
-    });
+    var theme = resolveDashboardTheme(state);
+    applyThemeVariablesToElement(dashboard, theme, state.themeMode);
   }
 
   function subscribePageThemeChanges(state) {
@@ -2710,7 +4175,9 @@
     }
     state.pageThemeSubscribed = true;
     var updateTheme = function updateTheme() {
-      applyPageThemeVariables(state);
+      if (normalizeThemeMode(state.themeMode) === "system") {
+        applyPageThemeVariables(state);
+      }
     };
 
     var mediaQuery = preferredColorSchemeQuery();
@@ -2718,16 +4185,6 @@
       mediaQuery.addEventListener("change", updateTheme);
     }
 
-    var doc = root && root.document ? root.document : typeof document !== "undefined" ? document : null;
-    var documentElement = doc && doc.documentElement;
-    var Observer = root && root.MutationObserver ? root.MutationObserver : typeof MutationObserver !== "undefined" ? MutationObserver : null;
-    if (documentElement && Observer) {
-      var observer = new Observer(updateTheme);
-      observer.observe(documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
-      if (doc.body) {
-        observer.observe(doc.body, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
-      }
-    }
   }
 
   function render(state) {
@@ -2736,7 +4193,6 @@
     state.startDate = dateNoLaterThanToday(state.startDate) || defaultStartDate(state.stats || {});
     state.endDate = dateNoLaterThanToday(state.endDate) || defaultEndDate();
     var models = selectedModels(state);
-    var rangeTotals = modelTotalsInRange(state.stats, state);
     var activeView = normalizeView(state.activeView);
     // 标题/副标题跟随当前标签页:导出页原来还显示"模型使用 + 统计副标题",是错的(用户:导出界面标题不对)。
     var heading = activeView === "status"
@@ -2744,26 +4200,20 @@
       : activeView === "export"
         ? text(state, "exportView")
         : text(state, "modelUsage");
-    var subtitle = activeView === "status"
-      ? ""
-      : activeView === "export"
-        ? text(state, "exportSubtitle")
-        : text(state, "total", { count: countTotal(rangeTotals) }) + text(state, "separator") + text(state, "selected", { count: models.length });
-    var language = currentLanguage(state);
-    var languageToggleTarget = language === "zh" ? "en" : "zh";
-    var languageToggleText = text(state, language === "zh" ? "languageToggleEn" : "languageToggleZh");
-    var languageToggleLabel = text(state, "languageToggleLabel");
+    var subtitle = "";
     var surface = state.options && state.options.surface === "page" ? "page" : "popup";
     var closeAction = surface === "page" && state.options && typeof state.options.onClose === "function"
-      ? '<button class="usage-panel-close" type="button" data-panel-close aria-label="' + escapeHtml(text(state, "close")) + '" title="' + escapeHtml(text(state, "close")) + '">&times;</button>'
+      ? '<button class="usage-header-action usage-panel-close" type="button" data-panel-close aria-label="' + escapeHtml(text(state, "close")) + '" title="' + escapeHtml(text(state, "close")) + '">&times;</button>'
       : "";
     var visibleStatusText = state.statusText || "";
     state.container.innerHTML = [
       '<div class="usage-dashboard usage-dashboard-' + surface + '">',
-      '<div class="usage-topline"><div><div class="usage-title-row"><h2>' + escapeHtml(heading) + "</h2></div>" +
+      '<div class="usage-sticky-header"><div class="usage-topline"><div class="usage-top-copy"><div class="usage-title-row"><h2>' + escapeHtml(heading) + "</h2></div>" +
         (subtitle ? "<p>" + escapeHtml(subtitle) + "</p>" : "") +
-        '</div><div class="usage-top-actions"><button class="usage-language-toggle" type="button" data-language-toggle="' + escapeHtml(languageToggleTarget) + '" aria-label="' + escapeHtml(languageToggleLabel) + '" title="' + escapeHtml(languageToggleLabel) + '">' + escapeHtml(languageToggleText) + '</button><button class="usage-refresh" type="button">' + escapeHtml(text(state, "refresh")) + "</button>" + closeAction + "</div></div>",
+        '</div><div class="usage-top-actions"><button class="usage-header-action usage-refresh" type="button">' +
+        escapeHtml(text(state, "refresh")) + "</button>" + renderSettingsMenu(state) + closeAction + "</div></div>",
       renderViewTabs(state),
+      "</div>",
       renderActiveView(state, models),
       '<div class="usage-status' + (state.statusError && visibleStatusText ? " error" : "") + '" aria-live="polite">' + escapeHtml(visibleStatusText) + "</div>",
       "</div>"
@@ -2775,17 +4225,26 @@
     pushBadgeFilter(state);
   }
 
-  // 把面板当前选择的日期范围推给后台,让工具栏角标只显示该范围内的次数,而不是全部总数
-  // (用户:角标显示面板所选日期范围对应的数字)。仅范围变化时发送,避免每次 render 都发消息。
+  // Keep the toolbar badge on the exact same date/source/mode/model filter as
+  // the dashboard. The model list is explicit, so an empty selection means 0.
   function pushBadgeFilter(state) {
     var runtime = (root && root.chrome && root.chrome.runtime) || (typeof chrome !== "undefined" && chrome ? chrome.runtime : null);
     if (!runtime || typeof runtime.sendMessage !== "function") { return; }
-    var key = (state.startDate || "") + "|" + (state.endDate || "");
+    var models = selectedModels(state);
+    var filter = {
+      startDate: state.startDate || "",
+      endDate: state.endDate || "",
+      statisticsMode: normalizeStatisticsMode(state.statisticsMode),
+      sourceModeFilter: normalizeSourceModeFilter(state.sourceModeFilter),
+      models: models,
+      modelsSpecified: true
+    };
+    var key = JSON.stringify(filter);
     if (state._lastBadgeFilterKey === key) { return; }
     state._lastBadgeFilterKey = key;
     try {
       runtime.sendMessage(
-        { type: "badge.setFilter", filter: { startDate: state.startDate || "", endDate: state.endDate || "" } },
+        { type: "badge.setFilter", filter: filter },
         function ack() { void (runtime.lastError); }
       );
     } catch (_) {}
@@ -2803,11 +4262,259 @@
     }
   }
 
+  function statisticsDataDateStamp(date) {
+    var value = date || new Date();
+    var year = value.getUTCFullYear();
+    var month = String(value.getUTCMonth() + 1).padStart(2, "0");
+    var day = String(value.getUTCDate()).padStart(2, "0");
+    var hours = String(value.getUTCHours()).padStart(2, "0");
+    var minutes = String(value.getUTCMinutes()).padStart(2, "0");
+    var seconds = String(value.getUTCSeconds()).padStart(2, "0");
+    return year + "-" + month + "-" + day + "-" + hours + minutes + seconds;
+  }
+
+  function csvCell(value) {
+    var cell = String(value == null ? "" : value);
+    if (/^[=+\-@\t\r]/.test(cell)) {
+      cell = "'" + cell;
+    }
+    return '"' + cell.replace(/"/g, '""') + '"';
+  }
+
+  function buildStatisticsCsv(stats) {
+    var source = sanitizeDashboardStats(stats || {});
+    var historyComplete = source.eventHistoryComplete === true;
+    var rows = [[
+      "record_type",
+      "history_complete",
+      "submitted_at",
+      "date",
+      "public_model",
+      "request_model",
+      "response_model",
+      "reasoning_effort",
+      "source_mode",
+      "features",
+      "conversation_id",
+      "conversation_title",
+      "count"
+    ]];
+    (source.events || []).slice().sort(function oldestFirst(left, right) {
+      return String(left && left.submittedAt || "").localeCompare(String(right && right.submittedAt || ""));
+    }).forEach(function addEvent(event) {
+      rows.push([
+        "event",
+        historyComplete,
+        String(event && event.submittedAt || ""),
+        eventDateKey(event),
+        String(event && (event.publicModel || event.model) || ""),
+        eventRequestModel(event),
+        eventResponseModel(event),
+        eventReasoningEffort(event),
+        normalizeDashboardSourceMode(event && event.sourceMode),
+        (Array.isArray(event && event.usageFeatures) ? event.usageFeatures : []).join("; "),
+        String(event && event.conversationId || ""),
+        String(event && event.pageTitle || ""),
+        1
+      ]);
+    });
+    if (!historyComplete) {
+      Object.keys(source.analyticsByDate || {}).sort().forEach(function addAggregateDate(dateKey) {
+        var day = source.analyticsByDate[dateKey] || {};
+        ["chat", "work", "unknown"].forEach(function addAggregateSource(sourceMode) {
+          var models = day[sourceMode] || {};
+          Object.keys(models).sort().forEach(function addAggregateModel(model) {
+            Object.keys(models[model] || {}).sort().forEach(function addAggregateRelation(key) {
+              var relation = models[model][key] || {};
+              var count = Math.max(0, Math.floor(Number(relation.count) || 0));
+              if (!count) {
+                return;
+              }
+              var efforts = Object.keys(relation.efforts || {}).sort(function effortOrder(left, right) {
+                return (REASONING_EFFORT_ORDER[reasoningEffortClass(left)] || 999) -
+                  (REASONING_EFFORT_ORDER[reasoningEffortClass(right)] || 999);
+              }).map(function effortCount(effort) {
+                return effort + ":" + (Number(relation.efforts[effort]) || 0);
+              }).join("; ");
+              var features = Object.keys(relation.features || {}).sort().map(function featureCount(feature) {
+                return feature + ":" + (Number(relation.features[feature]) || 0);
+              }).join("; ");
+              rows.push([
+                "aggregate",
+                false,
+                "",
+                dateKey,
+                model,
+                String(relation.requestModel || ""),
+                String(relation.responseModel || ""),
+                efforts,
+                sourceMode,
+                features,
+                "",
+                "",
+                count
+              ]);
+            });
+          });
+        });
+      });
+    }
+    return "\ufeff" + rows.map(function renderCsvRow(row) {
+      return row.map(csvCell).join(",");
+    }).join("\r\n") + "\r\n";
+  }
+
+  function statisticsDataErrorText(state, error) {
+    var code = String((error && error.message) || error || "");
+    if (/unsupported-statistics-backup-(?:format|version)/.test(code)) {
+      return text(state, "statisticsDataImportUnsupported");
+    }
+    if (/invalid-statistics-backup/.test(code)) {
+      return text(state, "statisticsDataImportInvalid");
+    }
+    return text(state, "statisticsDataOperationFailed", {
+      error: code || text(state, "loadFailed")
+    });
+  }
+
+  function setStatisticsDataControlsDisabled(state, disabled) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-statistics-data-export],[data-statistics-data-import]"),
+      function update(button) {
+        button.disabled = Boolean(disabled);
+      }
+    );
+  }
+
+  function exportStatisticsData(state, format) {
+    if (state.statisticsDataBusy) {
+      return Promise.resolve(null);
+    }
+    var exporter = exporterModule();
+    if (!exporter || typeof exporter.downloadBlob !== "function") {
+      setStatus(state, statisticsDataErrorText(state, "exporter"), true);
+      return Promise.resolve(null);
+    }
+
+    state.statisticsDataBusy = true;
+    setStatisticsDataControlsDisabled(state, true);
+    setStatus(state, text(state, "statisticsDataExporting"));
+    return sendMessage({ type: "usage.data.export" }, state).then(function createFile(response) {
+      if (!response || !response.ok || !response.backup) {
+        throw new Error((response && response.error) || "statistics-backup-failed");
+      }
+      var stamp = statisticsDataDateStamp();
+      var filename;
+      var blob;
+      if (format === "csv") {
+        filename = "chatgpt-usage-statistics-" + stamp + ".csv";
+        blob = new Blob([buildStatisticsCsv(response.backup.statistics)], {
+          type: "text/csv;charset=utf-8"
+        });
+      } else {
+        filename = "chatgpt-usage-statistics-backup-" + stamp + ".json";
+        blob = new Blob([JSON.stringify(response.backup, null, 2) + "\n"], {
+          type: "application/json;charset=utf-8"
+        });
+      }
+      return downloadOneFile(state, exporter, blob, filename).then(function downloaded() {
+        setStatus(state, text(state, "statisticsDataExported", { name: filename }));
+        return { filename: filename, backup: response.backup };
+      });
+    }).catch(function failed(error) {
+      setStatus(state, statisticsDataErrorText(state, error), true);
+      return null;
+    }).then(function finish(result) {
+      state.statisticsDataBusy = false;
+      setStatisticsDataControlsDisabled(state, false);
+      return result;
+    });
+  }
+
+  function importStatisticsBackup(state, backup) {
+    state.statisticsDataBusy = true;
+    setStatisticsDataControlsDisabled(state, true);
+    setStatus(state, text(state, "statisticsDataImporting"));
+    return sendMessage({
+      type: "usage.data.import",
+      mode: "replace",
+      backup: backup
+    }, state).then(function imported(response) {
+      if (!response || !response.ok || !response.stats) {
+        throw new Error((response && response.error) || "statistics-import-failed");
+      }
+      state.stats = sanitizeDashboardStats(response.stats);
+      ensureSelection(state);
+      state.statusText = text(state, "statisticsDataImported", {
+        count: response.summary && Number(response.summary.totalCount) || 0
+      });
+      state.statusError = false;
+      render(state);
+      return response;
+    }).catch(function failed(error) {
+      setStatus(state, statisticsDataErrorText(state, error), true);
+      return null;
+    }).then(function finish(result) {
+      state.statisticsDataBusy = false;
+      setStatisticsDataControlsDisabled(state, false);
+      return result;
+    });
+  }
+
+  function readStatisticsBackupFile(state, file) {
+    if (!file) {
+      return Promise.resolve(null);
+    }
+    if (Number(file.size) > MAX_STATISTICS_IMPORT_BYTES) {
+      setStatus(state, text(state, "statisticsDataImportTooLarge"), true);
+      return Promise.resolve(null);
+    }
+    var read;
+    if (typeof file.text === "function") {
+      read = file.text();
+    } else {
+      var FileReaderCtor = (root && root.FileReader) || (typeof FileReader !== "undefined" ? FileReader : null);
+      read = new Promise(function readWithFileReader(resolve, reject) {
+        if (!FileReaderCtor) {
+          reject(new Error("no-filereader"));
+          return;
+        }
+        var reader = new FileReaderCtor();
+        reader.onload = function loaded() { resolve(String(reader.result || "")); };
+        reader.onerror = function failed() { reject(reader.error || new Error("file-read-failed")); };
+        reader.readAsText(file, "utf-8");
+      });
+    }
+    return Promise.resolve(read).then(function parse(contents) {
+      var backup;
+      try {
+        backup = JSON.parse(String(contents || ""));
+      } catch (_) {
+        throw new Error("invalid-statistics-backup");
+      }
+      var confirmFn = root && typeof root.confirm === "function"
+        ? root.confirm.bind(root)
+        : typeof confirm === "function" ? confirm : null;
+      if (confirmFn && !confirmFn(text(state, "statisticsDataImportConfirm"))) {
+        return null;
+      }
+      return importStatisticsBackup(state, backup);
+    }).catch(function failed(error) {
+      setStatus(state, statisticsDataErrorText(state, error), true);
+      return null;
+    });
+  }
+
   function bindEvents(state) {
     var refreshButton = state.container.querySelector(".usage-refresh");
     if (refreshButton) {
       refreshButton.addEventListener("click", function refresh() {
-        reload(state);
+        reload(state, {
+          forceExportList: state.activeView === "export"
+        });
       });
     }
     var panelClose = state.container.querySelector("[data-panel-close]");
@@ -2816,13 +4523,55 @@
         state.options.onClose();
       });
     }
+    var settingsMenu = state.container.querySelector(".usage-settings-menu");
+    if (settingsMenu) {
+      settingsMenu.addEventListener("toggle", function rememberSettingsMenu() {
+        state.settingsMenuOpen = Boolean(settingsMenu.open);
+        if (!state.settingsMenuOpen) {
+          state.settingsSubmenu = "";
+        }
+      });
+    }
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function bindSettingsCategory(category) {
+      var categoryId = category.getAttribute("data-settings-category") || "";
+      category.addEventListener("toggle", function rememberSettingsCategory() {
+        if (category.open) {
+          state.settingsSubmenu = categoryId;
+          Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function closeSibling(sibling) {
+            if (sibling !== category) {
+              sibling.open = false;
+            }
+          });
+        } else if (state.settingsSubmenu === categoryId) {
+          state.settingsSubmenu = "";
+        }
+      });
+      category.addEventListener("mouseenter", function expandSettingsCategory() {
+        if (!settingsMenu || !settingsMenu.open) {
+          return;
+        }
+        state.settingsSubmenu = categoryId;
+        Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function updateCategory(sibling) {
+          sibling.open = sibling === category;
+        });
+      });
+      category.addEventListener("focusin", function expandFocusedSettingsCategory() {
+        if (!settingsMenu || !settingsMenu.open) {
+          return;
+        }
+        state.settingsSubmenu = categoryId;
+        Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function updateCategory(sibling) {
+          sibling.open = sibling === category;
+        });
+      });
+    });
     var startDate = state.container.querySelector(".usage-start-date");
     var endDate = state.container.querySelector(".usage-end-date");
     if (startDate) {
       startDate.addEventListener("change", function changeStart(event) {
         state.startDate = dateNoLaterThanToday(event.target.value) || state.startDate;
         render(state);
-        saveSettings(state).catch(function failed(error) {
+        saveSettings(state, ["startDate"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
@@ -2831,19 +4580,99 @@
       endDate.addEventListener("change", function changeEnd(event) {
         state.endDate = dateNoLaterThanToday(event.target.value) || state.endDate;
         render(state);
-        saveSettings(state).catch(function failed(error) {
+        saveSettings(state, ["endDate"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
     }
-    var languageToggle = state.container.querySelector("[data-language-toggle]");
-    if (languageToggle) {
-      languageToggle.addEventListener("click", function changeLanguage() {
-        state.language = normalizeLanguage(languageToggle.getAttribute("data-language-toggle"));
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-source-filter]"), function bindSourceFilter(button) {
+      button.addEventListener("click", function changeSourceFilter() {
+        state.sourceModeFilter = normalizeSourceModeFilter(button.getAttribute("data-source-filter"));
         render(state);
-        saveSettings(state).catch(function failed(error) {
+        saveSettings(state, ["sourceModeFilter"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-statistics-mode]"), function bindStatisticsMode(button) {
+      button.addEventListener("click", function changeStatisticsMode() {
+        state.statisticsMode = normalizeStatisticsMode(button.getAttribute("data-statistics-mode"));
+        state.donutModel = "";
+        ensureSelection(state);
+        render(state);
+        saveSettings(state, ["statisticsMode"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-type]"), function bindChartType(button) {
+      button.addEventListener("click", function changeChartType() {
+        state.chartType = normalizeChartType(button.getAttribute("data-chart-type"));
+        state.donutModel = "";
+        render(state);
+        saveSettings(state, ["chartType"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-theme-select]"), function bindThemeMode(button) {
+      button.addEventListener("click", function changeThemeMode() {
+        state.themeMode = normalizeThemeMode(button.getAttribute("data-theme-select"));
+        render(state);
+        saveSettings(state, ["themeMode"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-statistics-section]"), function bindStatisticsSection(button) {
+      button.addEventListener("change", function changeStatisticsSection() {
+        var section = button.getAttribute("data-statistics-section");
+        var settingField;
+        if (section === "trend") {
+          state.showTrendChart = Boolean(button.checked);
+          settingField = "showTrendChart";
+        } else if (section === "text") {
+          state.showTextStatistics = Boolean(button.checked);
+          settingField = "showTextStatistics";
+        } else {
+          return;
+        }
+        render(state);
+        saveSettings(state, [settingField]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-language-select]"), function bindLanguageOption(languageOption) {
+      languageOption.addEventListener("click", function changeLanguage() {
+        state.language = normalizeLanguage(languageOption.getAttribute("data-language-select"));
+        render(state);
+        saveSettings(state, ["language"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-statistics-data-export]"), function bindStatisticsDataExport(button) {
+      button.addEventListener("click", function runStatisticsDataExport() {
+        exportStatisticsData(state, button.getAttribute("data-statistics-data-export"));
+      });
+    });
+    var statisticsDataFile = state.container.querySelector("[data-statistics-data-file]");
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-statistics-data-import]"), function bindStatisticsDataImport(button) {
+      button.addEventListener("click", function chooseStatisticsBackup() {
+        if (state.statisticsDataBusy || !statisticsDataFile) {
+          return;
+        }
+        statisticsDataFile.value = "";
+        if (typeof statisticsDataFile.click === "function") {
+          statisticsDataFile.click();
+        }
+      });
+    });
+    if (statisticsDataFile) {
+      statisticsDataFile.addEventListener("change", function importSelectedStatisticsBackup() {
+        var file = statisticsDataFile.files && statisticsDataFile.files[0];
+        readStatisticsBackupFile(state, file);
       });
     }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-view-tab]"), function bindViewTab(button) {
@@ -2856,14 +4685,42 @@
           loadExportConversationList(state);
         }
         render(state);
+        saveSettings(state, ["activeView"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
       });
     });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-model-toggle]"), function bindToggle(input) {
       input.addEventListener("change", function updateModel() {
         state.selectedModels[input.getAttribute("data-model-toggle")] = input.checked;
         render(state);
+        saveSettings(state, modelSelectionSettingFields(state.statisticsMode)).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
       });
     });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-donut-model]"), function bindDonutModel(target) {
+      var openModel = function openModel() {
+        state.donutModel = target.getAttribute("data-donut-model") || "";
+        render(state);
+      };
+      target.addEventListener("click", openModel);
+      target.addEventListener("keydown", function openModelByKeyboard(event) {
+        if (event.key === "Enter" || event.key === " ") {
+          if (typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          openModel();
+        }
+      });
+    });
+    var donutBack = state.container.querySelector("[data-donut-back]");
+    if (donutBack) {
+      donutBack.addEventListener("click", function closeDonutModel() {
+        state.donutModel = "";
+        render(state);
+      });
+    }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-format]"), function bindExport(button) {
       button.addEventListener("click", function runExport() {
         exportConversations(state, button.getAttribute("data-export-format"));
@@ -2872,6 +4729,7 @@
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-conv]"), function bindConv(input) {
       input.addEventListener("change", function toggleConv() {
         if (!state.exportSelected) { state.exportSelected = {}; }
+        state.exportSelectAllMode = false;
         var id = input.getAttribute("data-export-conv");
         if (input.checked) {
           state.exportSelected[id] = true;
@@ -2881,13 +4739,42 @@
         syncExportSelectionUi(state);
       });
     });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-project-toggle]"), function bindProject(input) {
+      input.addEventListener("change", function toggleProject() {
+        if (!state.exportSelected) { state.exportSelected = {}; }
+        state.exportSelectAllMode = false;
+        exportProjectConversationIds(state, input.getAttribute("data-export-project-toggle")).forEach(function update(id) {
+          if (input.checked) {
+            state.exportSelected[id] = true;
+          } else {
+            delete state.exportSelected[id];
+          }
+        });
+        syncExportSelectionUi(state);
+      });
+    });
+    var exportSearch = state.container.querySelector(".usage-export-search");
+    if (exportSearch) {
+      exportSearch.addEventListener("input", function searchConversations() {
+        state.exportSearch = exportSearch.value || "";
+        syncExportSearchUi(state);
+      });
+    }
     var selectAllBtn = state.container.querySelector("[data-export-selectall]");
     if (selectAllBtn) {
       selectAllBtn.addEventListener("click", function selectAll() {
-        state.exportSelected = {};
-        (state.exportConversationList || []).forEach(function (c) {
-          if (c && c.id) { state.exportSelected[c.id] = true; }
+        state.exportSelected = state.exportSelected || {};
+        var allIds = (Array.isArray(state.exportConversationList) ? state.exportConversationList : [])
+          .filter(function valid(conversation) {
+            return conversation && conversation.id;
+          })
+          .map(function id(conversation) {
+            return conversation.id;
+          });
+        allIds.forEach(function (id) {
+          state.exportSelected[id] = true;
         });
+        state.exportSelectAllMode = allIds.length === (state.exportConversationList || []).length;
         syncExportSelectionUi(state);
       });
     }
@@ -2895,8 +4782,23 @@
     if (selectNoneBtn) {
       selectNoneBtn.addEventListener("click", function selectNone() {
         state.exportSelected = {};
+        state.exportSelectAllMode = false;
         syncExportSelectionUi(state);
       });
+    }
+    var cancelExportBtn = state.container.querySelector("[data-export-cancel]");
+    if (cancelExportBtn) {
+      cancelExportBtn.addEventListener("click", function cancelExport() {
+        if (!state.exportBusy || state.exportCancelRequested) {
+          return;
+        }
+        state.exportCancelRequested = true;
+        setExportStatus(state, text(state, "exportCancelling"), true);
+        cancelConversationOperation(state);
+      });
+    }
+    if (state.activeView === "export") {
+      syncExportSelectionUi(state);
     }
     bindTooltip(state);
   }
@@ -2936,6 +4838,47 @@
     });
   }
 
+  function conversationOperationMessage(state, helperName, messageType) {
+    if (isPageSurface(state) && typeof root[helperName] === "function") {
+      try {
+        return Promise.resolve(root[helperName]());
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    return tabsSendMessage({ type: messageType }).then(function normalize(resp) {
+      return resp && resp.ok !== false ? resp : null;
+    });
+  }
+
+  function accountResponseError(response, fallbackMessage) {
+    var error = new Error(String(
+      response && response.error ||
+      fallbackMessage ||
+      "ChatGPT account request failed."
+    ));
+    error.status = Number(response && response.status) || 0;
+    error.stopOperation = Boolean(response && response.stopOperation);
+    error.incomplete = Boolean(response && (response.incomplete || response.stopOperation));
+    error.retryAfterMs = Math.max(0, Number(response && response.retryAfterMs) || 0);
+    error.code = String(response && response.code || "");
+    return error;
+  }
+
+  function beginConversationOperation(state) {
+    return conversationOperationMessage(state, "__chatgptUsageBeginAccountOperation", "conversation.operation.begin");
+  }
+
+  function cancelConversationOperation(state) {
+    return conversationOperationMessage(state, "__chatgptUsageCancelAccountOperation", "conversation.operation.cancel")
+      .catch(function ignoreCancellationSignalFailure() { return null; });
+  }
+
+  function releaseConversationCredentials(state) {
+    return conversationOperationMessage(state, "__chatgptUsageReleaseAccountAuth", "conversation.operation.release")
+      .catch(function ignoreReleaseFailure() { return null; });
+  }
+
   function requestExportConversationList(state) {
     if (isPageSurface(state) && root.__chatgptUsageListConversations) {
       return Promise.resolve(root.__chatgptUsageListConversations()).then(function normalizeDirect(result) {
@@ -2944,7 +4887,7 @@
     }
     return tabsSendMessage({ type: "conversation.list" }).then(function normalizeMessage(resp) {
       if (!resp || !resp.ok) {
-        throw new Error((resp && resp.error) || text(state, "exportOpenPage"));
+        throw accountResponseError(resp, text(state, "exportOpenPage"));
       }
       return resp;
     });
@@ -2972,7 +4915,11 @@
     var previousSelection = state.exportSelected || {};
     var nextSelection = {};
     state.exportConversationList.forEach(function keepExistingSelection(conversation) {
-      if (conversation && conversation.id && previousSelection[conversation.id]) {
+      if (
+        conversation &&
+        conversation.id &&
+        (state.exportSelectAllMode || previousSelection[conversation.id])
+      ) {
         nextSelection[conversation.id] = true;
       }
     });
@@ -2991,17 +4938,48 @@
   }
 
   function loadExportConversationList(state) {
-    state.exportConversationListRequest = requestExportConversationList(state)
-      .then(function apply(result) { return applyExportConversationList(state, result); })
+    if (state.exportConversationListRequest) {
+      return state.exportConversationListRequest;
+    }
+    state.exportConversationListGeneration =
+      (Number(state.exportConversationListGeneration) || 0) + 1;
+    var generation = state.exportConversationListGeneration;
+    var request = requestExportConversationList(state)
+      .then(function apply(result) {
+        if (generation !== state.exportConversationListGeneration) {
+          return state.exportConversationMeta;
+        }
+        return applyExportConversationList(state, result);
+      })
       .catch(function failed(error) {
+        if (
+          generation !== state.exportConversationListGeneration ||
+          error && error.cancelled
+        ) {
+          return state.exportConversationMeta;
+        }
         return applyExportConversationList(state, {
           conversations: [],
           complete: false,
-          source: "unavailable",
-          warnings: [{ scope: "account", error: String((error && error.message) || error || "conversation-index-unavailable") }]
+          source: error && error.stopOperation ? "stopped" : "unavailable",
+          warnings: [{
+            scope: error && error.stopOperation ? "account-stopped" : "account",
+            error: String((error && error.message) || error || "conversation-index-unavailable")
+          }]
         });
+      }).then(function clearRequest(result) {
+        if (state.exportConversationListRequest === request) {
+          state.exportConversationListRequest = null;
+        }
+        return result;
+      }, function clearRejectedRequest(error) {
+        if (state.exportConversationListRequest === request) {
+          state.exportConversationListRequest = null;
+        }
+        throw error;
       });
-    return state.exportConversationListRequest;
+    state.exportConversationListRequest = request;
+    return request;
   }
 
   function normalizeConversationCollection(result) {
@@ -3017,8 +4995,276 @@
       failures: failures,
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       requestedCount: Number(result.requestedCount) || (Array.isArray(result.conversations) ? result.conversations.length : result.conversation ? 1 : 0),
+      indexComplete: result.indexComplete !== false,
+      bodyComplete: result.bodyComplete !== false && failures.length === 0,
       complete: result.complete !== false && failures.length === 0
     };
+  }
+
+  function normalizedPromptForHash(value) {
+    return String(value || "")
+      .replace(/[\u200b-\u200f\u2060]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function promptHash(value) {
+    var hash = 2166136261;
+    var textValue = normalizedPromptForHash(value);
+    for (var index = 0; index < textValue.length; index += 1) {
+      hash ^= textValue.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  }
+
+  function legacyDuplicatedPromptFingerprint(value) {
+    var textValue = normalizedPromptForHash(value);
+    if (!textValue) {
+      return { hash: "", length: 0 };
+    }
+    var duplicated = textValue + " " + textValue;
+    return {
+      hash: promptHash(duplicated),
+      length: duplicated.length
+    };
+  }
+
+  function eventConversationId(event) {
+    var explicit = String(event && event.conversationId || "").trim();
+    if (explicit) {
+      return explicit;
+    }
+    var match = String(event && event.pageUrl || "").match(/\/c\/([^/?#]+)/i);
+    return match ? match[1] : "";
+  }
+
+  function requestEffortFromUsageEvent(event) {
+    var direct = String(event && event.requestReasoningEffort || "").trim().toLowerCase();
+    if (direct) {
+      return direct.slice(0, 32);
+    }
+    var parameters = event && event.modelParameters && typeof event.modelParameters === "object"
+      ? event.modelParameters
+      : {};
+    var value = parameters["reasoning.effort"] || parameters.reasoning_effort;
+    if (!value && parameters.reasoning && typeof parameters.reasoning === "object") {
+      value = parameters.reasoning.effort;
+    }
+    return String(value || "").trim().toLowerCase().slice(0, 32);
+  }
+
+  function trustedUsageEventRequestModel(event) {
+    var source = event && typeof event === "object" ? event : {};
+    if (source.requestModelEvidence === "unavailable") {
+      return "";
+    }
+    var requestModel = String(source.requestModel || "").trim();
+    if (!requestModel) {
+      return "";
+    }
+    if (source.requestModelEvidence === "trusted") {
+      return requestModel;
+    }
+    var observedSource = String(source.modelObservedSource || source.observedSource || "");
+    return /^(?:webRequest|fetch-request|xhr-request|fetch-response|xhr-response|fetch-url|xhr-url)(?::|$)/i.test(observedSource)
+      ? requestModel
+      : "";
+  }
+
+  function exactConversationResponseModel(message) {
+    var source = message && typeof message === "object" ? message : {};
+    var metadata = source.metadata && typeof source.metadata === "object"
+      ? source.metadata
+      : {};
+    var candidates = [
+      source.responseModel,
+      source.response_model,
+      source.model_slug,
+      source.modelSlug,
+      metadata.responseModel,
+      metadata.response_model,
+      metadata.model_slug,
+      metadata.modelSlug,
+      metadata.modelslug
+    ];
+    for (var index = 0; index < candidates.length; index += 1) {
+      var candidate = String(candidates[index] || "").trim();
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return "";
+  }
+
+  function mergeUniqueStrings(left, right) {
+    var seen = {};
+    return [].concat(Array.isArray(left) ? left : [], Array.isArray(right) ? right : [])
+      .map(function clean(value) { return String(value || "").trim(); })
+      .filter(function unique(value) {
+        if (!value || seen[value]) {
+          return false;
+        }
+        seen[value] = true;
+        return true;
+      });
+  }
+
+  function attachUsageEventToAssistant(message, event) {
+    var enriched = Object.assign({}, message || {});
+    var responseModel = exactConversationResponseModel(enriched);
+    var exactEventResponse = String(event && event.responseModel || "").trim();
+    if (!responseModel && exactEventResponse && event.responseObservedAt &&
+        /^message-dom:model-slug(?:$|:)/i.test(String(event.responseObservedSource || ""))) {
+      responseModel = exactEventResponse;
+    }
+    var requestModel = trustedUsageEventRequestModel(event);
+    var selectedPublicModel = String(event && event.selectedPublicModel || "").trim();
+    var selectedSource = String(event && event.selectedPublicModelSource || "");
+    if (!requestModel && /^request\+account-catalog/i.test(selectedSource)) {
+      selectedPublicModel = "";
+    }
+    enriched.selectedPublicModel = enriched.selectedPublicModel || selectedPublicModel;
+    enriched.requestModel = enriched.requestModel || requestModel;
+    enriched.responseModel = responseModel;
+    enriched.model = responseModel;
+    enriched.requestReasoningEffort = enriched.requestReasoningEffort ||
+      (requestModel ? requestEffortFromUsageEvent(event) : "");
+    enriched.reasoningEffort = enriched.requestReasoningEffort || "";
+    enriched.parameters = Object.assign(
+      {},
+      enriched.parameters && typeof enriched.parameters === "object"
+        ? enriched.parameters
+        : {},
+      requestModel && event && event.modelParameters && typeof event.modelParameters === "object"
+        ? event.modelParameters
+        : {}
+    );
+    enriched.features = mergeUniqueStrings(
+      enriched.features,
+      requestModel && event && event.usageFeatures
+    );
+    return enriched;
+  }
+
+  function enrichConversationWithUsageEvents(conversation, stats) {
+    var source = conversation && typeof conversation === "object" ? conversation : {};
+    var conversationId = String(
+      source.id || source.conversation_id || source.conversationId || ""
+    ).trim();
+    var messages = Array.isArray(source.messages)
+      ? source.messages.map(function cloneMessage(message) { return Object.assign({}, message || {}); })
+      : [];
+    if (!conversationId || !messages.length) {
+      return Object.assign({}, source, { messages: messages });
+    }
+    var events = (stats && Array.isArray(stats.events) ? stats.events : [])
+      .filter(function sameConversation(event) {
+        return event && eventConversationId(event) === conversationId;
+      })
+      .slice()
+      .sort(function chronological(left, right) {
+        return String(left.submittedAt || "").localeCompare(String(right.submittedAt || ""));
+      });
+    if (!events.length) {
+      return Object.assign({}, source, { messages: messages });
+    }
+
+    var usedEvents = {};
+    var usedAssistants = {};
+    var assistantIndexById = {};
+    messages.forEach(function indexAssistant(message, index) {
+      if (String(message && message.role || "").toLowerCase() !== "assistant") {
+        return;
+      }
+      var id = String(message.id || "").trim();
+      if (id && !Object.prototype.hasOwnProperty.call(assistantIndexById, id)) {
+        assistantIndexById[id] = index;
+      }
+    });
+
+    events.forEach(function matchResponseMessage(event, eventIndex) {
+      var responseMessageId = String(event && event.responseMessageId || "").trim();
+      if (!responseMessageId ||
+          !Object.prototype.hasOwnProperty.call(assistantIndexById, responseMessageId)) {
+        return;
+      }
+      var assistantIndex = assistantIndexById[responseMessageId];
+      if (usedAssistants[assistantIndex]) {
+        return;
+      }
+      messages[assistantIndex] = attachUsageEventToAssistant(messages[assistantIndex], event);
+      usedEvents[eventIndex] = true;
+      usedAssistants[assistantIndex] = true;
+    });
+
+    messages.forEach(function matchPromptTurn(message, messageIndex) {
+      if (String(message && message.role || "").toLowerCase() !== "user") {
+        return;
+      }
+      var promptText = message.text || message.content || "";
+      var hash = promptHash(promptText);
+      var legacyFingerprint = legacyDuplicatedPromptFingerprint(promptText);
+      var candidates = [];
+      events.forEach(function candidate(event, eventIndex) {
+        var eventHash = String(event && event.promptHash || "");
+        var matchesCurrent = eventHash === hash;
+        var matchesLegacyDuplicate = Boolean(
+          legacyFingerprint.hash &&
+          eventHash === legacyFingerprint.hash &&
+          Number(event && event.promptLength) === legacyFingerprint.length
+        );
+        if (!usedEvents[eventIndex] && (matchesCurrent || matchesLegacyDuplicate)) {
+          candidates.push({ event: event, eventIndex: eventIndex });
+        }
+      });
+      if (!candidates.length) {
+        return;
+      }
+      var userTime = new Date(String(message.createTime || message.createdAt || "")).getTime();
+      candidates.sort(function nearest(left, right) {
+        var leftTime = new Date(String(left.event.submittedAt || "")).getTime();
+        var rightTime = new Date(String(right.event.submittedAt || "")).getTime();
+        var leftDistance = Number.isNaN(userTime) || Number.isNaN(leftTime)
+          ? Number.MAX_SAFE_INTEGER
+          : Math.abs(userTime - leftTime);
+        var rightDistance = Number.isNaN(userTime) || Number.isNaN(rightTime)
+          ? Number.MAX_SAFE_INTEGER
+          : Math.abs(userTime - rightTime);
+        return leftDistance - rightDistance || left.eventIndex - right.eventIndex;
+      });
+      var selected = candidates[0];
+      var selectedTime = new Date(String(selected.event.submittedAt || "")).getTime();
+      if (!Number.isNaN(userTime) && !Number.isNaN(selectedTime) &&
+          Math.abs(userTime - selectedTime) > 5 * 60 * 1000) {
+        return;
+      }
+      if (candidates.length > 1) {
+        if (Number.isNaN(userTime) || Number.isNaN(selectedTime) ||
+            Math.abs(userTime - selectedTime) > 5 * 60 * 1000) {
+          return;
+        }
+      }
+      var assistantIndex = -1;
+      for (var next = messageIndex + 1; next < messages.length; next += 1) {
+        var role = String(messages[next] && messages[next].role || "").toLowerCase();
+        if (role === "user") {
+          break;
+        }
+        if (role === "assistant" && !usedAssistants[next]) {
+          assistantIndex = next;
+          break;
+        }
+      }
+      if (assistantIndex < 0) {
+        return;
+      }
+      messages[assistantIndex] = attachUsageEventToAssistant(messages[assistantIndex], selected.event);
+      usedEvents[selected.eventIndex] = true;
+      usedAssistants[assistantIndex] = true;
+    });
+
+    return Object.assign({}, source, { messages: messages });
   }
 
   function directPageCollection(state, helperName, args) {
@@ -3033,12 +5279,14 @@
     if (!selectedIds.length) {
       return Promise.reject(new Error(text(state, "exportNoSelection")));
     }
+    var meta = state.exportConversationMeta || {};
     return Promise.resolve({
       scope: "selected",
       current: false,
       ids: selectedIds,
-      complete: true,
-      warnings: []
+      complete: meta.complete !== false,
+      indexComplete: meta.complete !== false,
+      warnings: Array.isArray(meta.warnings) ? meta.warnings.slice() : []
     });
   }
 
@@ -3049,7 +5297,7 @@
     }
     return tabsSendMessage({ type: "conversation.collectMany", ids: ids }).then(function (resp) {
       if (!resp || !resp.ok) {
-        throw new Error((resp && resp.error) || text(state, "exportOpenPage"));
+        throw accountResponseError(resp, text(state, "exportOpenPage"));
       }
       return normalizeConversationCollection(resp);
     });
@@ -3109,16 +5357,23 @@
     if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
       return;
     }
-    if (!disabled) {
+    if (disabled) {
+      Array.prototype.forEach.call(
+        state.container.querySelectorAll("[data-export-format],[data-export-selectall],[data-export-selectnone],[data-export-project-toggle],[data-export-conv]"),
+        function toggle(control) {
+          control.disabled = true;
+        }
+      );
+    } else {
       syncExportSelectionUi(state);
-      return;
     }
-    Array.prototype.forEach.call(
-      state.container.querySelectorAll("[data-export-format],[data-export-selectall],[data-export-selectnone],[data-export-conv]"),
-      function toggle(control) {
-        control.disabled = Boolean(disabled);
-      }
-    );
+    var cancel = typeof state.container.querySelector === "function"
+      ? state.container.querySelector("[data-export-cancel]")
+      : null;
+    if (cancel) {
+      cancel.hidden = !state.exportBusy;
+      cancel.disabled = !state.exportBusy || Boolean(state.exportCancelRequested);
+    }
   }
 
   function exportConversations(state, format) {
@@ -3131,15 +5386,25 @@
       return;
     }
     state.exportBusy = true;
+    state.exportCancelRequested = false;
     setExportControlsDisabled(state, true);
     setExportStatus(state, text(state, "exportRunning"));
-    return exportTargetPlan(state).then(function executePlan(plan) {
+    return beginConversationOperation(state).catch(function ignoreBeginFailure() {
+      return null;
+    }).then(function createPlan() {
+      return exportTargetPlan(state);
+    }).then(function executePlan(plan) {
       if (!plan.ids.length) {
         throw new Error(plan.warnings.length ? text(state, "exportListUnavailable") : text(state, "exportEmpty"));
       }
       setExportStatus(state, text(state, "exportProgressSelected"));
       if (plan.ids.length === 1) {
         return collectConversationChunk(state, plan.ids).then(function singleSelected(collection) {
+          if (state.exportCancelRequested) {
+            throw new Error("export-cancelled");
+          }
+          collection.indexComplete = plan.indexComplete;
+          collection.warnings = (plan.warnings || []).concat(collection.warnings || []);
           var targetId = plan.ids[0];
           var conversation = (collection.conversations || []).find(function exactTarget(item) {
             return item && item.id === targetId;
@@ -3152,9 +5417,16 @@
       }
       return downloadConversationArchiveByIds(state, exporter, plan, format);
     }).catch(function (error) {
+      if (state.exportCancelRequested || String((error && error.message) || error) === "export-cancelled") {
+        setExportStatus(state, text(state, "exportCancelled"), true);
+        return;
+      }
       setExportStatus(state, text(state, "exportFailed", { error: String((error && error.message) || error) }), true);
+    }).then(function releaseAfterExport() {
+      return releaseConversationCredentials(state);
     }).then(function finishExportAttempt() {
       state.exportBusy = false;
+      state.exportCancelRequested = false;
       setExportControlsDisabled(state, false);
     });
   }
@@ -3257,7 +5529,11 @@
     var usedKey = "";
     do {
       count += 1;
-      var suffix = count > 1 ? "-" + count : "";
+      var cleanId = String(conversation && conversation.id || "").replace(/[^0-9a-z]/gi, "");
+      var shortId = cleanId ? cleanId.slice(-8) : "";
+      var suffix = count > 1
+        ? "-" + (shortId || count) + (count > 2 ? "-" + count : "")
+        : "";
       candidate = count > 1
         ? raw.slice(0, Math.max(1, 80 - suffix.length)).replace(/[. ]+$/g, "") + suffix
         : raw;
@@ -3276,13 +5552,21 @@
   }
 
   function downloadSingleConversation(state, exporter, conversation, format, collection) {
-    var base = uniqueConversationBases(exporter, [conversation])[0];
-    return buildExportArtifacts(exporter, [conversation], format, base).then(function (artifacts) {
+    var enrichedConversation = enrichConversationWithUsageEvents(conversation, state.stats || {});
+    var base = uniqueConversationBases(exporter, [enrichedConversation])[0];
+    return buildExportArtifacts(exporter, [enrichedConversation], format, base).then(function (artifacts) {
+      if (state.exportCancelRequested) {
+        throw new Error("export-cancelled");
+      }
       if (artifacts.length !== 1) {
         throw new Error("One selected conversation must produce exactly one file.");
       }
       return downloadOneFile(state, exporter, artifacts[0].blob, artifacts[0].filename).then(function () {
-        if (collection && (collection.complete === false || (collection.warnings || []).length)) {
+        if (collection && (
+          collection.complete === false ||
+          collection.indexComplete === false ||
+          (collection.warnings || []).length
+        )) {
           setExportStatus(state, text(state, "exportSingleIncomplete", { name: artifacts[0].filename }), true);
         } else {
           setExportStatus(state, text(state, "exportDone", { name: artifacts[0].filename }));
@@ -3307,9 +5591,9 @@
 
   function localExportDateStamp(date) {
     var value = date || new Date();
-    return value.getFullYear() + "-" +
-      String(value.getMonth() + 1).padStart(2, "0") + "-" +
-      String(value.getDate()).padStart(2, "0");
+    return value.getUTCFullYear() + "-" +
+      String(value.getUTCMonth() + 1).padStart(2, "0") + "-" +
+      String(value.getUTCDate()).padStart(2, "0");
   }
 
   function downloadConversationArchiveByIds(state, exporter, plan, format) {
@@ -3317,15 +5601,20 @@
     var collectionFailures = [];
     var collectionWarnings = (plan.warnings || []).slice();
     var conversionFailures = [];
-    var collectionComplete = plan.complete !== false;
+    var collectionComplete = true;
+    var indexComplete = plan.indexComplete !== false;
     var seenBases = {};
     var exportedConversationCount = 0;
     var ids = plan.ids;
     var chunkSize = 6;
 
     function convertConversation(conversation, position) {
-      var base = nextUniqueConversationBase(exporter, conversation, position, seenBases);
-      return buildExportArtifacts(exporter, [conversation], format, base).then(function (artifacts) {
+      if (state.exportCancelRequested) {
+        return Promise.reject(new Error("export-cancelled"));
+      }
+      var enrichedConversation = enrichConversationWithUsageEvents(conversation, state.stats || {});
+      var base = nextUniqueConversationBase(exporter, enrichedConversation, position, seenBases);
+      return buildExportArtifacts(exporter, [enrichedConversation], format, base).then(function (artifacts) {
         if (artifacts.length !== 1) {
           throw new Error("Each selected conversation must produce exactly one file.");
         }
@@ -3353,6 +5642,9 @@
     function convertChunk(conversations, positionById) {
       var cursor = 0;
       function next() {
+        if (state.exportCancelRequested) {
+          return Promise.reject(new Error("export-cancelled"));
+        }
         if (cursor >= conversations.length) {
           return Promise.resolve();
         }
@@ -3367,12 +5659,18 @@
     }
 
     function step(offset) {
+      if (state.exportCancelRequested) {
+        return Promise.reject(new Error("export-cancelled"));
+      }
       if (offset >= ids.length) {
         return Promise.resolve();
       }
       var chunkIds = ids.slice(offset, offset + chunkSize);
       setExportStatus(state, text(state, "exportRunning") + " " + Math.min(ids.length, offset + chunkIds.length) + "/" + ids.length);
       return collectConversationChunk(state, chunkIds).then(function collected(result) {
+        if (state.exportCancelRequested) {
+          throw new Error("export-cancelled");
+        }
         collectionFailures = collectionFailures.concat(result.failures || []);
         collectionWarnings = collectionWarnings.concat(result.warnings || []);
         if (result.complete === false) {
@@ -3400,6 +5698,12 @@
         });
         return convertChunk(chunkIds.map(function inRequestedOrder(id) { return byId[id]; }).filter(Boolean), positions);
       }).catch(function chunkFailed(error) {
+        if (state.exportCancelRequested || String((error && error.message) || error) === "export-cancelled") {
+          throw error;
+        }
+        if (error && error.stopOperation) {
+          throw error;
+        }
         chunkIds.forEach(function failedId(id) {
           collectionFailures.push({ id: id, error: String((error && error.message) || error || "collection-failed") });
         });
@@ -3417,6 +5721,8 @@
         {
           requestedCount: ids.length,
           complete: collectionComplete && collectionFailures.length === 0,
+          indexComplete: indexComplete,
+          bodyComplete: collectionComplete && collectionFailures.length === 0,
           failures: collectionFailures,
           warnings: collectionWarnings
         },
@@ -3440,7 +5746,13 @@
       exportedConversationCount: exportedConversationCount,
       exportedFileCount: files.length,
       failedConversationCount: failures.length,
-      complete: failures.length === 0 && collection.complete !== false && warnings.length === 0,
+      indexComplete: collection.indexComplete !== false,
+      bodyComplete: collection.bodyComplete !== false && failures.length === 0,
+      complete: failures.length === 0 &&
+        collection.complete !== false &&
+        collection.indexComplete !== false &&
+        collection.bodyComplete !== false &&
+        warnings.length === 0,
       failures: failures,
       warnings: warnings,
       files: files.map(function filename(file) { return file.name; })
@@ -3453,11 +5765,39 @@
     return downloadOneFile(state, exporter, zipBlob, archiveName).then(function downloadedArchive() {
       if (failures.length) {
         setExportStatus(state, text(state, "exportPartial", { success: exportedConversationCount, failed: failures.length }), true);
-      } else if (collection.complete === false || warnings.length) {
+      } else if (
+        collection.complete === false ||
+        collection.indexComplete === false ||
+        collection.bodyComplete === false ||
+        warnings.length
+      ) {
         setExportStatus(state, text(state, "exportIncomplete", { success: exportedConversationCount }), true);
       } else {
         setExportStatus(state, text(state, "exportArchiveDone", { count: exportedConversationCount, name: archiveName }));
       }
+    });
+  }
+
+  function setChartModelFocus(state, model) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    var selected = String(model || "");
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-series]"), function updateSeries(node) {
+      var same = selected && node.getAttribute("data-chart-series") === selected;
+      node.setAttribute("data-focus-dimmed", selected && !same ? "true" : "false");
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-focus]"), function updateFocus(node) {
+      node.setAttribute(
+        "data-focus-active",
+        selected && node.getAttribute("data-chart-focus") === selected ? "true" : "false"
+      );
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-model]"), function updateLegend(node) {
+      node.setAttribute(
+        "data-focus-active",
+        selected && node.getAttribute("data-chart-model") === selected ? "true" : "false"
+      );
     });
   }
 
@@ -3467,6 +5807,21 @@
     if (!wrap || !tooltip) {
       return;
     }
+    Array.prototype.forEach.call(wrap.querySelectorAll("[data-chart-model]"), function bindLegend(modelChip) {
+      var model = modelChip.getAttribute("data-chart-model");
+      modelChip.addEventListener("mouseenter", function focusSeries() {
+        setChartModelFocus(state, model);
+      });
+      modelChip.addEventListener("mouseleave", function clearSeries() {
+        setChartModelFocus(state, "");
+      });
+      modelChip.addEventListener("focusin", function focusSeriesByKeyboard() {
+        setChartModelFocus(state, model);
+      });
+      modelChip.addEventListener("focusout", function clearSeriesByKeyboard() {
+        setChartModelFocus(state, "");
+      });
+    });
     Array.prototype.forEach.call(wrap.querySelectorAll(".usage-point"), function bindPoint(point) {
       point.addEventListener("mouseenter", function show() {
         var svg = point.ownerSVGElement;
@@ -3479,19 +5834,45 @@
         var scaleY = viewBox && viewBox.height ? svgRect.height / viewBox.height : 1;
         var pointX = svgRect.left - wrapRect.left + cx * scaleX;
         var pointY = svgRect.top - wrapRect.top + cy * scaleY;
+        var date = point.getAttribute("data-date");
+        var value = point.getAttribute("data-value");
+        var labels = [];
+        Array.prototype.forEach.call(wrap.querySelectorAll(".usage-point"), function collectOverlapping(candidate) {
+          if (
+            candidate.getAttribute("data-date") !== date ||
+            candidate.getAttribute("data-value") !== value
+          ) {
+            return;
+          }
+          var label = candidate.getAttribute("data-model-label") || candidate.getAttribute("data-model");
+          if (label && labels.indexOf(label) === -1) {
+            labels.push(label);
+          }
+        });
 
-        tooltip.textContent = point.getAttribute("data-model") + text(state, "separator") + point.getAttribute("data-date") + ": " + point.getAttribute("data-value");
+        setChartModelFocus(state, point.getAttribute("data-model"));
+        tooltip.textContent = labels.length > 1
+          ? date + text(state, "separator") +
+            text(state, "overlappingModels", { count: labels.length }) + "\n" +
+            labels.map(function labelCount(label) {
+              return label + ": " + text(state, "countTimes", { count: value });
+            }).join("\n")
+          : (labels[0] || point.getAttribute("data-model")) +
+            text(state, "separator") + date + ": " +
+            text(state, "countTimes", { count: value });
         tooltip.hidden = false;
         tooltip.style.left = Math.min(Math.max(6, wrapRect.width - tooltip.offsetWidth - 6), Math.max(6, pointX + 8)) + "px";
         tooltip.style.top = Math.max(8, pointY - tooltip.offsetHeight - 8) + "px";
       });
       point.addEventListener("mouseleave", function hide() {
         tooltip.hidden = true;
+        setChartModelFocus(state, "");
       });
     });
   }
 
-  function reload(state) {
+  function reload(state, options) {
+    options = options || {};
     state.loading = true;
     if (!isActiveStatusView(state)) {
       state.openaiStatusLoaded = false;
@@ -3503,8 +5884,26 @@
       var settings = results[1] || {};
       state.stats = results[0];
       state.language = normalizeLanguage(settings.language);
+      if (!state.activeViewSettingsLoaded || options.restoreActiveView) {
+        state.activeView = normalizeView(settings.activeView);
+      }
+      state.activeViewSettingsLoaded = true;
+      state.statisticsMode = normalizeStatisticsMode(settings.statisticsMode);
+      applyPersistedModelSelections(state, settings);
+      state.chartType = normalizeChartType(settings.chartType);
+      state.themeMode = normalizeThemeMode(settings.themeMode);
+      state.sourceModeFilter = normalizeSourceModeFilter(settings.sourceModeFilter);
+      state.showTrendChart = settings.showTrendChart !== false;
+      state.showTextStatistics = settings.showTextStatistics !== false;
       state.startDate = dateNoLaterThanToday(settings.startDate) || state.startDate || "";
-      state.endDate = dateNoLaterThanToday(settings.endDate) || state.endDate || "";
+      // Every newly opened dashboard starts with the range ending today.
+      // A stored date from yesterday must not silently hide today's calls.
+      // Once the dashboard is open, a user's explicit date change remains in
+      // place across Refresh within that same panel session.
+      state.endDate = state.dateSettingsLoaded
+        ? (dateNoLaterThanToday(state.endDate) || defaultEndDate())
+        : defaultEndDate();
+      state.dateSettingsLoaded = true;
       state.loading = false;
       setStatus(state, "");
       render(state);
@@ -3515,25 +5914,37 @@
       render(state);
     });
 
-    var openaiStatus = isActiveStatusView(state) ? ensureOpenAIStatus(state, true) : Promise.resolve(null);
-    // Refresh means refresh the data visible in the active view. The export
-    // conversation index is account data rather than part of usage stats, so
-    // retaining the previous array here leaves the UI permanently stale after
-    // account history, archived state, or the page-side source changes.
-    var exportConversations = state.activeView === "export"
-      ? loadExportConversationList(state)
-      : Promise.resolve(null);
-
-    return Promise.all([core, openaiStatus, exportConversations]).then(function done() {
+    return core.then(function loadActiveViewData() {
+      var openaiStatus = isActiveStatusView(state)
+        ? ensureOpenAIStatus(state, true)
+        : Promise.resolve(null);
+      // The stored active view is known only after core settings load. Start
+      // its dependent data afterward so both entry points reopen Status or
+      // Export as a complete view rather than displaying an empty shell.
+      var exportConversations = state.activeView === "export" &&
+        !options.skipExportList &&
+        (
+          options.forceExportList ||
+          !Array.isArray(state.exportConversationList)
+        )
+        ? loadExportConversationList(state)
+        : Promise.resolve(null);
+      return Promise.all([openaiStatus, exportConversations]);
+    }).then(function done() {
       return state;
     });
   }
 
   function refreshStatsFromStorage(state) {
+    var preserveOperationStatus = Boolean(
+      state && (state.statisticsDataBusy || state.exportBusy)
+    );
     return loadStats().then(function loaded(stats) {
       state.stats = stats;
       state.loading = false;
-      setStatus(state, "");
+      if (!preserveOperationStatus) {
+        setStatus(state, "");
+      }
       render(state);
       return state;
     }).catch(function failed(error) {
@@ -3560,6 +5971,68 @@
     });
   }
 
+  function subscribeSettingsStorageChanges(state) {
+    var storage = root && root.chrome && root.chrome.storage;
+    var onChanged = storage && storage.onChanged;
+    if (!onChanged || typeof onChanged.addListener !== "function" || state.settingsStorageSubscribed) {
+      return;
+    }
+    state.settingsStorageSubscribed = true;
+    onChanged.addListener(function settingsChanged(changes, areaName) {
+      if (areaName !== "local" || !changes || !changes[SETTINGS_KEY]) {
+        return;
+      }
+      var settings = changes[SETTINGS_KEY].newValue || {};
+      var nextView = normalizeView(settings.activeView);
+      var nextLanguage = normalizeLanguage(settings.language);
+      var nextStatisticsMode = normalizeStatisticsMode(settings.statisticsMode);
+      var nextChartType = normalizeChartType(settings.chartType);
+      var nextThemeMode = normalizeThemeMode(settings.themeMode);
+      var nextSourceModeFilter = normalizeSourceModeFilter(settings.sourceModeFilter);
+      var nextStartDate = dateNoLaterThanToday(settings.startDate);
+      var nextEndDate = dateNoLaterThanToday(settings.endDate) || defaultEndDate();
+      var nextShowTrendChart = settings.showTrendChart !== false;
+      var nextShowTextStatistics = settings.showTextStatistics !== false;
+      var modelSelectionSettingsChanged =
+        persistedModelSelectionKey(settings) !== currentModelSelectionKey(state);
+      var viewChanged = nextView !== normalizeView(state.activeView);
+      var otherSettingsChanged =
+        nextLanguage !== normalizeLanguage(state.language) ||
+        nextStatisticsMode !== normalizeStatisticsMode(state.statisticsMode) ||
+        nextChartType !== normalizeChartType(state.chartType) ||
+        nextThemeMode !== normalizeThemeMode(state.themeMode) ||
+        nextSourceModeFilter !== normalizeSourceModeFilter(state.sourceModeFilter) ||
+        nextStartDate !== dateNoLaterThanToday(state.startDate) ||
+        nextEndDate !== (dateNoLaterThanToday(state.endDate) || defaultEndDate()) ||
+         nextShowTrendChart !== (state.showTrendChart !== false) ||
+         nextShowTextStatistics !== (state.showTextStatistics !== false) ||
+         modelSelectionSettingsChanged;
+      if (!viewChanged && !otherSettingsChanged) {
+        return;
+      }
+      state.activeView = nextView;
+      state.activeViewSettingsLoaded = true;
+      state.language = nextLanguage;
+      state.statisticsMode = nextStatisticsMode;
+      state.chartType = nextChartType;
+      state.themeMode = nextThemeMode;
+      state.sourceModeFilter = nextSourceModeFilter;
+      state.startDate = nextStartDate || state.startDate || "";
+      state.endDate = nextEndDate;
+      state.showTrendChart = nextShowTrendChart;
+      state.showTextStatistics = nextShowTextStatistics;
+      applyPersistedModelSelections(state, settings);
+      ensureSelection(state);
+      if (viewChanged && isActiveStatusView(state)) {
+        ensureOpenAIStatus(state, false);
+      }
+      if (viewChanged && state.activeView === "export" && !Array.isArray(state.exportConversationList)) {
+        loadExportConversationList(state);
+      }
+      render(state);
+    });
+  }
+
   function injectStyles() {
     if (root.document.getElementById("chatgpt-usage-dashboard-style")) {
       return;
@@ -3569,41 +6042,89 @@
     style.textContent = [
       ".usage-dashboard{box-sizing:border-box;font:12px/1.36 system-ui,sans-serif;color:var(--usage-text-primary);min-width:0}",
       ".usage-dashboard *{box-sizing:border-box}",
-      ".usage-dashboard-popup{height:100%;max-height:100%;overflow:auto;overscroll-behavior:contain;padding-right:0;background:var(--usage-surface-page)}",
-      ".usage-dashboard-page{height:100%;max-height:100%;max-width:100%;background:var(--usage-surface-panel);overflow:auto;overscroll-behavior:contain}",
-      ".usage-dashboard-page .usage-topline{position:sticky;top:0;z-index:2;margin:0;padding:10px 12px 8px;border-bottom:1px solid var(--usage-border-divider);background:var(--usage-surface-panel)}",
-      ".usage-topline{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:10px}",
+      ".usage-dashboard button,.usage-dashboard select,.usage-dashboard input{font:inherit}",
+      ".usage-dashboard-popup{height:100%;max-height:100%;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain;padding-right:0;background:var(--usage-surface-page)}",
+      ".usage-dashboard-page{height:100%;max-height:100%;max-width:100%;padding:8px;background:var(--usage-surface-panel);overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}",
+      ".usage-sticky-header{position:sticky;top:0;z-index:20;margin:0 0 8px;padding:0 0 7px;border-bottom:1px solid var(--usage-border-divider);background:var(--usage-surface-panel)}",
+      ".usage-dashboard-page .usage-sticky-header{top:-8px;margin:-8px -8px 8px;padding:8px 8px 7px}",
+      ".usage-sticky-header .usage-view-tabs{margin:7px 0 0}",
+      ".usage-topline{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;min-height:30px}",
+      ".usage-top-copy{min-width:0}",
       ".usage-title-row{display:flex;align-items:center;flex-wrap:nowrap;gap:5px;min-width:0}",
-      ".usage-topline h2{margin:0;font-size:13px;line-height:1.25;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".usage-topline p{margin:1px 0 0;color:var(--usage-text-muted);font-size:10.5px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".usage-panel-close{width:28px;padding:4px 0;font-size:16px;line-height:1}",
+      ".usage-topline h2{margin:0;font-size:15px;line-height:1.25;font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".usage-top-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}",
+      ".usage-header-action{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-width:48px;height:30px;margin:0;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--usage-text-control);font:600 11px/1 system-ui,sans-serif;white-space:nowrap;cursor:pointer;transition:color .12s ease,background .12s ease}",
+      ".usage-header-action:hover,.usage-settings-menu[open]>.usage-settings-trigger{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
+      ".usage-panel-close{width:30px;min-width:30px;padding:0;font-size:18px;line-height:1}",
       ".usage-controls{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0 4px}",
-      ".usage-date-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:4px;width:100%}",
-      ".usage-controls label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:5px;min-width:0}",
-      ".usage-controls select,.usage-controls input{border:1px solid var(--usage-border-control);border-radius:5px;padding:4px 7px;background:var(--usage-surface-panel)}",
-      ".usage-controls input{width:100%;min-width:0}",
-      ".usage-language-toggle{min-width:34px;color:var(--usage-text-secondary)}",
+      ".usage-chart-controls{align-items:center}",
+      ".usage-date-controls{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%}",
+      ".usage-date-controls label{display:flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}",
+      ".usage-date-controls input{width:124px;min-width:0;height:28px;border:1px solid var(--usage-border-control);border-radius:5px;padding:3px 3px 3px 5px;background:var(--usage-surface-panel);color:var(--usage-text-primary);font-size:11px}",
+      ".usage-date-controls input::-webkit-datetime-edit{padding:0}",
+      ".usage-date-controls input::-webkit-calendar-picker-indicator{width:14px;height:14px;margin:0;padding:0;cursor:pointer}",
+      ".usage-settings-menu{position:relative;flex:0 0 auto}",
+      ".usage-settings-menu>summary,.usage-settings-item>summary{list-style:none}",
+      ".usage-settings-menu>summary::-webkit-details-marker,.usage-settings-item>summary::-webkit-details-marker{display:none}",
+      ".usage-settings-menu>summary::marker,.usage-settings-item>summary::marker{content:\"\"}",
+      ".usage-settings-popover{position:absolute;z-index:30;top:calc(100% + 5px);right:0;display:grid;gap:2px;width:174px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip)}",
+      ".usage-settings-menu:not([open])>.usage-settings-popover{display:none}",
+      ".usage-settings-item{position:relative;min-width:0}",
+      ".usage-settings-item>summary{display:grid;grid-template-columns:minmax(0,1fr) auto 10px;align-items:center;gap:5px;min-height:31px;padding:5px 6px;border-radius:6px;color:var(--usage-text-secondary);font-size:11px;cursor:pointer}",
+      ".usage-settings-item>summary:hover,.usage-settings-item[open]>summary,.usage-settings-item:focus-within>summary{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
+      ".usage-settings-category-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}",
+      ".usage-settings-current{max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-muted);font-size:10px}",
+      ".usage-settings-arrow{font-size:15px;line-height:1;color:var(--usage-text-muted)}",
+      ".usage-settings-submenu{position:absolute;z-index:31;top:-5px;right:calc(100% - 1px);display:none;gap:2px;width:164px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip)}",
+      ".usage-settings-item:hover>.usage-settings-submenu,.usage-settings-item:focus-within>.usage-settings-submenu,.usage-settings-item[open]>.usage-settings-submenu{display:grid}",
+      ".usage-settings-option{display:grid;grid-template-columns:minmax(0,1fr) 15px;align-items:center;gap:6px;width:100%;min-height:30px;border:0;border-radius:6px;padding:5px 7px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer}",
+      ".usage-settings-option:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
+      ".usage-settings-option.active{color:var(--usage-accent-link);font-weight:700}",
+      ".usage-settings-check{visibility:hidden;text-align:center;color:var(--usage-accent-link);font-size:11px}",
+      ".usage-settings-option.active .usage-settings-check{visibility:visible}",
+      ".usage-settings-action{display:flex;align-items:center;width:100%;min-height:30px;border:0;border-radius:6px;padding:5px 7px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer}",
+      ".usage-settings-action:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
+      ".usage-settings-action:disabled{opacity:.55;cursor:not-allowed}",
+      ".usage-settings-data-submenu{width:176px}",
+      ".usage-statistics-visibility-option{display:grid!important;grid-template-columns:13px minmax(0,1fr) 15px!important;align-items:center;gap:7px!important;padding:5px 6px;border-radius:5px;color:var(--usage-text-secondary);font-size:11px;cursor:pointer}",
+      ".usage-statistics-visibility-option:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
+      ".usage-statistics-visibility-option input{width:13px!important;height:13px;margin:0;padding:0!important;border:0;background:transparent;accent-color:var(--usage-accent-link)}",
+      ".usage-statistics-visibility-indicator::before{content:\"—\";display:block;text-align:center;color:var(--usage-text-muted);font-style:normal;font-weight:700}",
+      ".usage-statistics-visibility-option:has(input:checked) .usage-statistics-visibility-indicator::before{content:\"✓\";color:var(--usage-accent-link)}",
+      ".usage-statistics-warning{padding:6px 8px;border:1px solid var(--usage-warning-text);border-radius:7px;background:var(--usage-surface-row-hover);color:var(--usage-warning-text);font-size:11px;line-height:1.4}",
       ".usage-view-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin:7px 0 8px;padding:2px;border:1px solid var(--usage-border-panel);border-radius:6px;background:var(--usage-surface-track)}",
       ".usage-view-tab{border:0;background:transparent;color:var(--usage-text-secondary)}",
       ".usage-view-tab.active{background:var(--usage-surface-panel);color:var(--usage-text-primary);box-shadow:0 1px 1px var(--usage-shadow-active-tab)}",
       ".usage-export-panel{padding:6px 2px 4px;display:flex;flex-direction:column;gap:8px}",
-      ".usage-export-title{margin:0;font-size:13px;font-weight:600;color:var(--usage-text-primary)}",
+      ".usage-export-title{margin:0;font-size:14px;line-height:1.35;font-weight:700;color:var(--usage-text-primary)}",
       ".usage-export-hint{margin:0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary)}",
-      ".usage-export-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}",
-      ".usage-export-btn{border:1px solid var(--usage-border-panel);background:var(--usage-surface-panel);color:var(--usage-text-primary);border-radius:6px;padding:7px 8px;font-size:12px;font-weight:600;cursor:pointer;transition:background .12s ease,border-color .12s ease}",
-      ".usage-export-btn:hover{background:var(--usage-surface-track);border-color:var(--usage-accent-strong,var(--usage-text-secondary))}",
+      ".usage-export-actions{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;padding:3px;border:1px solid var(--usage-border-panel);border-radius:8px;background:var(--usage-surface-track)}",
+      ".usage-export-btn{height:30px;min-width:0;border:1px solid transparent;background:transparent;color:var(--usage-text-primary);border-radius:5px;padding:0 4px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .12s ease,border-color .12s ease,color .12s ease}",
+      ".usage-export-btn:hover{background:var(--usage-surface-panel);border-color:var(--usage-border-control);color:var(--usage-accent-link)}",
       ".usage-export-btn:focus-visible{outline:2px solid var(--usage-accent-strong,var(--usage-text-secondary));outline-offset:2px}",
       ".usage-export-btn:active{transform:translateY(1px)}",
-      ".usage-export-btn:disabled,.usage-export-mini:disabled{opacity:.55;cursor:wait;transform:none}",
+      ".usage-export-btn:disabled,.usage-export-mini:disabled{opacity:.55;cursor:not-allowed;transform:none}",
       ".usage-export-status{margin:2px 0 0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary);min-height:14px}",
       ".usage-export-status.error{color:var(--usage-error-status-text,#dc2626)}",
       ".usage-export-warning{color:var(--usage-warning-text,#b45309)}",
-      ".usage-export-selectbar{display:flex;align-items:center;gap:6px}",
-      ".usage-export-mini{border:1px solid var(--usage-border-panel);background:transparent;color:var(--usage-text-secondary);border-radius:5px;padding:3px 8px;font-size:11px;cursor:pointer}",
+      ".usage-export-selectbar{display:grid;grid-template-columns:minmax(96px,1fr) 72px 72px auto;align-items:center;gap:5px}",
+      ".usage-export-search{width:100%;min-width:0;height:28px;border:1px solid var(--usage-border-control);border-radius:6px;padding:0 8px;background:var(--usage-surface-panel);color:var(--usage-text-primary);font-size:11px}",
+      ".usage-export-mini{display:inline-flex;align-items:center;justify-content:center;width:72px;min-height:28px;border:1px solid var(--usage-border-panel);background:transparent;color:var(--usage-text-secondary);border-radius:6px;padding:0 8px;font-size:11px;cursor:pointer;white-space:nowrap}",
       ".usage-export-mini:hover{background:var(--usage-surface-track)}",
-      ".usage-export-selcount{margin-left:auto;font-size:11px;color:var(--usage-text-muted)}",
-      ".usage-export-conv-list{max-height:240px;overflow:auto;border:1px solid var(--usage-border-panel);border-radius:6px;padding:4px;display:flex;flex-direction:column;gap:2px}",
+      ".usage-export-selcount{justify-self:end;margin-left:0;font-size:11px;color:var(--usage-text-muted);white-space:nowrap}",
+      ".usage-export-conv-list{max-height:240px;overflow:auto;scrollbar-gutter:stable;border:1px solid var(--usage-border-panel);border-radius:6px;padding:4px;display:flex;flex-direction:column;gap:2px}",
+      ".usage-export-current{padding-bottom:3px;border-bottom:1px solid var(--usage-border-divider)}",
+      ".usage-export-group{border-bottom:1px solid var(--usage-border-divider);padding:2px 0}",
+      ".usage-export-group:last-child{border-bottom:0}",
+      ".usage-export-group summary{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px;color:var(--usage-text-secondary);font-size:11px;font-weight:700;cursor:pointer;list-style:none}",
+      ".usage-export-group summary::-webkit-details-marker{display:none}",
+      ".usage-export-group summary::before{content:\"▸\";flex:0 0 auto;color:var(--usage-text-muted);transition:transform .12s ease}",
+      ".usage-export-group[open] summary::before{transform:rotate(90deg)}",
+      ".usage-export-group-check{flex:0 0 auto;width:13px;height:13px;margin:0;accent-color:var(--usage-accent-primary);cursor:pointer}",
+      ".usage-export-group summary span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".usage-export-group summary small{flex:0 0 auto;color:var(--usage-text-muted);font-weight:600}",
+      ".usage-export-group:not([open])>.usage-export-group-list{display:none}",
+      ".usage-export-group-list{display:flex;flex-direction:column;gap:2px;padding-left:8px}",
       ".usage-export-conv{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:4px;cursor:pointer;font-size:12px}",
       ".usage-export-conv:hover{background:var(--usage-surface-track)}",
       ".usage-export-conv-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}",
@@ -3612,57 +6133,119 @@
       ".usage-export-conv input{flex:0 0 auto}",
       ".usage-export-conv-badge{margin-left:auto;flex:0 0 auto;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:10px}",
       ".usage-export-conv-badge.current{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
+      ".usage-export-cancel{align-self:flex-start;border:1px solid var(--usage-error-status-text,#dc2626);border-radius:6px;padding:5px 9px;background:transparent;color:var(--usage-error-status-text,#dc2626);font-size:11px;font-weight:700;cursor:pointer}",
+      ".usage-export-cancel:hover{background:var(--usage-error-surface,rgba(220,38,38,.08))}",
+      ".usage-export-cancel:disabled{opacity:.55;cursor:not-allowed}",
       // —— 视觉优化:键盘焦点可见、交互态、溢出处理、减少动画 ——
       ".usage-dashboard button:focus-visible,.usage-dashboard select:focus-visible,.usage-dashboard input:focus-visible{outline:2px solid var(--usage-accent-link,#10a37f);outline-offset:1px}",
       ".usage-view-tab{cursor:pointer;border-radius:5px;transition:background .12s ease,color .12s ease}",
       ".usage-view-tab:hover:not(.active){background:var(--usage-surface-panel);color:var(--usage-text-primary)}",
-      ".usage-language-toggle{cursor:pointer;border-radius:5px;transition:color .12s ease,background .12s ease}",
-      ".usage-language-toggle:hover{color:var(--usage-text-primary);background:var(--usage-surface-track)}",
-      ".usage-controls input:hover,.usage-controls select:hover{border-color:var(--usage-accent-link,var(--usage-text-secondary))}",
-      ".usage-controls input:focus,.usage-controls select:focus{outline:none;border-color:var(--usage-accent-link,#10a37f);box-shadow:0 0 0 2px var(--usage-focus-ring,rgba(16,163,127,.25))}",
-      ".usage-controls input:invalid{border-color:var(--usage-error-status-text,#dc2626)}",
+      ".usage-date-controls input:hover{border-color:var(--usage-accent-link,var(--usage-text-secondary))}",
+      ".usage-date-controls input:focus{outline:none;border-color:var(--usage-accent-link,#10a37f);box-shadow:0 0 0 2px var(--usage-focus-ring,rgba(16,163,127,.25))}",
+      ".usage-date-controls input:invalid{border-color:var(--usage-error-status-text,#dc2626)}",
       ".usage-model-chip{cursor:pointer;max-width:100%;transition:border-color .12s ease,background .12s ease}",
       ".usage-model-chip:hover{border-color:var(--usage-accent-link,var(--usage-text-secondary));background:var(--usage-surface-track)}",
-      ".usage-panel-close{cursor:pointer;border-radius:5px;transition:background .12s ease}",
-      ".usage-panel-close:hover{background:var(--usage-surface-track)}",
-      ".usage-empty{padding:10px 8px;text-align:center;color:var(--usage-text-muted);font-size:11.5px}",
+      ".usage-empty{padding:10px 8px;text-align:center;color:var(--usage-text-muted);font-size:12px}",
       "@media (prefers-reduced-motion:reduce){.usage-dashboard *{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}",
-      ".usage-models{display:flex;flex-wrap:wrap;gap:4px;margin:3px 0 5px;padding-right:2px}",
+      ".usage-models{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0 8px 7px}",
       ".usage-model-chip{display:flex;align-items:center;gap:5px;min-height:24px;border:1px solid var(--usage-border-panel);border-radius:999px;padding:2px 6px;background:transparent;font-size:11px}",
       ".usage-model-chip::before{content:\"\";width:6px;height:6px;border-radius:999px;background:var(--chip);flex:0 0 auto}",
       ".usage-model-chip input{width:13px;height:13px;margin:0;accent-color:var(--chip)}",
+      ".usage-model-chip span,.usage-model-chip b{font-size:11px;line-height:1.3;font-weight:650}",
       ".usage-model-chip b{color:var(--usage-accent-link)}",
+      ".usage-model-chip:has(input:not(:checked)){opacity:.62}",
+      ".usage-model-chip:has(input:checked){background:var(--usage-surface-chip);border-color:var(--chip)}",
       ".usage-view-panel{min-height:0;animation:usage-panel-in .16s ease-out both}",
-      ".usage-dashboard-page .usage-view-tabs{margin:10px 12px}",
-      ".usage-dashboard-page .usage-view-panel{min-height:0;padding:0 12px 12px}",
-      ".usage-chart-wrap{position:relative;border:1px solid var(--usage-border-panel);border-radius:6px;background:var(--usage-surface-panel);margin:3px 0 5px;overflow:hidden}",
+      ".usage-chart-wrap{position:relative;border:1px solid var(--usage-border-panel);border-radius:7px;background:var(--usage-surface-panel);margin:3px 0 5px;overflow:hidden}",
+      ".usage-chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 8px 6px}",
+      ".usage-chart-head strong{font-size:14px;line-height:1.35;font-weight:700;color:var(--usage-text-primary)}",
+      ".usage-chart-head small{font-size:9px;line-height:1.3;font-weight:650;color:var(--usage-text-muted)}",
+      ".usage-donut-wrap{overflow:visible}",
+      ".usage-donut-layout{display:grid;grid-template-columns:minmax(132px,44%) minmax(0,1fr);align-items:center;gap:8px;padding:2px 8px 10px}",
+      ".usage-donut{display:block;width:100%;max-width:164px;height:auto;justify-self:center;overflow:visible}",
+      ".usage-donut-track{stroke:var(--usage-surface-track)}",
+      ".usage-donut-slice{cursor:pointer;opacity:.96;transition:opacity .16s ease,stroke-width .16s ease,filter .16s ease;animation:usage-donut-in .34s ease-out both}",
+      ".usage-donut-slice:hover,.usage-donut-slice:focus-visible{opacity:1;stroke-width:32;filter:drop-shadow(0 2px 3px var(--usage-shadow-accent));outline:none}",
+      ".usage-donut-total{fill:var(--usage-text-primary);font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}",
+      ".usage-donut-center-label{fill:var(--usage-text-muted);font-size:10px;font-weight:650}",
+      ".usage-donut-legend{display:grid;align-content:center;gap:2px;min-width:0}",
+      ".usage-donut-legend-row{display:grid;grid-template-columns:9px minmax(0,1fr) auto auto;align-items:center;gap:5px;min-height:27px;padding:3px 4px;border-radius:6px;color:var(--usage-text-secondary)}",
+      ".usage-donut-legend-row[role=\"button\"]{cursor:pointer}",
+      ".usage-donut-legend-row[role=\"button\"]:hover,.usage-donut-legend-row[role=\"button\"]:focus-visible{background:var(--usage-surface-row-hover);outline:2px solid var(--usage-accent-link);outline-offset:-1px}",
+      ".usage-donut-legend-row i{width:8px;height:8px;border-radius:999px;background:var(--slice);box-shadow:0 0 0 1px var(--usage-border-panel)}",
+      ".usage-donut-legend-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:650;color:var(--usage-text-primary)}",
+      ".usage-donut-legend-row b{font-size:11px;font-weight:750;color:var(--usage-accent-link);font-variant-numeric:tabular-nums}",
+      ".usage-donut-legend-row small{min-width:38px;text-align:right;font-size:10px;color:var(--usage-text-muted);font-variant-numeric:tabular-nums}",
+      ".usage-donut-back{border:0;background:transparent;color:var(--usage-accent-link);padding:2px 0;font:inherit;font-size:10px;font-weight:700;cursor:pointer}",
+      ".usage-donut-back:hover{color:var(--usage-accent-link-hover);text-decoration:underline}",
+      ".usage-donut-back:focus-visible{outline:2px solid var(--usage-accent-link);outline-offset:2px;border-radius:3px}",
+      ".usage-donut-warning{margin:0 8px 6px;padding:6px 7px;border-radius:6px;background:var(--usage-surface-chip);color:var(--usage-warning-text);font-size:10px;line-height:1.4}",
+      ".usage-donut-models{padding-bottom:5px}",
       ".usage-chart{display:block;width:100%;height:auto}",
       ".usage-grid{stroke:var(--usage-border-chart-grid);stroke-width:1;stroke-opacity:1}",
-      ".usage-axis{fill:var(--usage-text-muted);font-size:10px}",
-      ".usage-chart-title{fill:var(--usage-text-primary);font-size:12px;font-weight:800}",
-      ".usage-axis-label{font-size:8.5px;font-weight:700}",
+      ".usage-axis{fill:var(--usage-text-muted);font-size:9px;font-weight:500}",
+      ".usage-axis-label{font-size:9px;font-weight:650}",
       ".usage-axis-date{font-size:9px}",
       ".usage-axis-y{font-variant-numeric:tabular-nums}",
-      ".usage-axis-legend{font-size:8px;dominant-baseline:middle}",
-      ".usage-chart-legend-item text{pointer-events:none}",
-      ".usage-line{stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:900;animation:usage-draw .65s ease-out both}",
-      ".usage-point{stroke:var(--usage-chart-point-stroke);stroke-width:1.25;cursor:pointer;transition:transform .16s ease,r .16s ease}",
+      ".usage-series{clip-path:inset(0 100% 0 0);animation:usage-series-reveal .72s cubic-bezier(.22,.72,.25,1) both}",
+      ".usage-line{stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:var(--usage-line-dash,none);transition:opacity .12s ease}",
+      ".usage-point{stroke:var(--usage-chart-point-stroke);stroke-width:1.25;cursor:pointer;animation:usage-point-in .18s ease-out var(--usage-point-delay,.06s) both;transition:r .16s ease,opacity .12s ease}",
       ".usage-point:hover{r:6}",
-      ".usage-tooltip{position:absolute;z-index:2;max-width:190px;padding:6px 8px;border-radius:7px;background:var(--usage-tooltip-surface);color:var(--usage-text-inverse);font-size:12px;pointer-events:none;box-shadow:0 8px 24px var(--usage-shadow-tooltip)}",
+      ".usage-line[data-focus-dimmed=\"true\"],.usage-point[data-focus-dimmed=\"true\"]{opacity:.12}",
+      ".usage-line-focus{pointer-events:none;opacity:0;stroke-linecap:round;stroke-linejoin:round;transition:opacity .1s ease}",
+      ".usage-line-focus[data-focus-active=\"true\"]{opacity:1}",
+      ".usage-line-focus-halo{stroke:var(--usage-surface-panel);stroke-width:7}",
+      ".usage-line-focus-color{stroke-width:3.5}",
+      ".usage-overlap-ring{fill:none;stroke:var(--usage-text-muted);stroke-width:1.2;stroke-dasharray:2 2;pointer-events:none}",
+      ".usage-model-chip[data-focus-active=\"true\"]{box-shadow:0 0 0 1px var(--chip)}",
+      ".usage-tooltip{position:absolute;z-index:2;max-width:min(260px,calc(100% - 12px));padding:6px 8px;border-radius:7px;background:var(--usage-tooltip-surface);color:var(--usage-text-inverse);font-size:12px;white-space:pre-line;pointer-events:none;box-shadow:0 8px 24px var(--usage-shadow-tooltip)}",
       ".usage-text-panel{min-width:0}",
       ".usage-count-panel .usage-text-panel{display:grid;gap:6px}",
       ".usage-model-text-list{display:grid;gap:6px;margin-top:6px}",
       ".usage-count-list{display:grid;gap:0;margin-top:2px;border-top:1px solid var(--usage-border-divider)}",
       ".usage-count-record{border:0;border-bottom:1px solid var(--usage-border-divider);border-radius:0;background:transparent;overflow:visible}",
       ".usage-count-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;width:100%;padding:5px 0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;list-style:none}",
-      ".usage-count-details{display:grid;gap:5px;padding:0 0 8px 12px;animation:usage-panel-in .14s ease-out both}",
-      ".usage-count-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".usage-count-row::-webkit-details-marker{display:none}",
+      ".usage-count-row::marker{content:\"\"}",
+      ".usage-mapped-record>.usage-count-row{cursor:pointer}",
+      ".usage-mapped-record[open]>.usage-count-row{padding-bottom:7px}",
+      ".usage-count-details{display:grid;gap:5px;padding:0 0 8px 12px}",
+      ".usage-count-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary)}",
       ".usage-count-numbers{text-align:right}",
       ".usage-count-numbers b{display:block;color:var(--usage-accent-link)}",
       ".usage-count-numbers small{display:block;color:var(--usage-text-muted)}",
       ".usage-count-features{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}",
-      ".usage-count-features span{display:inline-flex;gap:4px;align-items:center;min-height:20px;padding:2px 6px;border-radius:999px;background:var(--usage-surface-chip);color:var(--usage-text-body-subtle);font-size:11px}",
+      ".usage-count-features span{display:inline-flex;gap:4px;align-items:center;min-height:20px;padding:2px 6px;border-radius:999px;background:var(--usage-surface-chip);color:var(--usage-text-body-subtle)}",
+      ".usage-count-features span,.usage-count-features b{font-size:11px;line-height:1.35;font-weight:600}",
       ".usage-count-features b{color:var(--usage-accent-link)}",
+      ".usage-internal-request{display:grid;gap:0;padding:0;border-bottom:1px solid var(--usage-border-divider)}",
+      ".usage-internal-request-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px;padding:5px 0}",
+      ".usage-internal-model-copy{display:grid;gap:1px;min-width:0}",
+      ".usage-internal-request-head .usage-internal-model-copy small{color:var(--usage-text-muted)}",
+      ".usage-internal-request-head .usage-internal-model-copy code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary)}",
+      ".usage-internal-count{color:var(--usage-accent-link);white-space:nowrap}",
+      ".usage-internal-response-section{display:grid;gap:1px;padding:3px 0 8px 12px}",
+      ".usage-internal-response-heading{color:var(--usage-text-muted)}",
+      ".usage-internal-responses{display:grid;gap:0}",
+      ".usage-internal-response{display:grid;gap:4px;padding:3px 0 4px;border:0;border-top:1px solid var(--usage-border-divider);border-radius:0;background:transparent}",
+      ".usage-internal-response:first-child{border-top:0}",
+      ".usage-internal-response-summary{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:5px;cursor:pointer;list-style:none}",
+      ".usage-internal-response-summary::-webkit-details-marker{display:none}",
+      ".usage-internal-response-summary::marker{content:\"\"}",
+      ".usage-internal-response-summary>.usage-count-features{margin-top:0}",
+      ".usage-internal-response[open]>.usage-internal-response-summary{padding-bottom:5px;border-bottom:1px solid var(--usage-border-divider)}",
+      ".usage-internal-response-model-row{display:block;min-height:21px}",
+      ".usage-internal-response-value{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 7px}",
+      ".usage-internal-response-value code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary)}",
+      ".usage-internal-efforts-inline{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;min-width:0}",
+      ".usage-internal-effort-label{font-size:11px;line-height:1.35;font-weight:650;color:var(--usage-text-muted)}",
+      ".usage-internal-efforts-inline>span{display:inline-flex;align-items:baseline;gap:4px;color:var(--usage-text-secondary)}",
+      ".usage-internal-subcount,.usage-subcount{color:var(--usage-accent-link);font-variant-numeric:tabular-nums}",
+      ".usage-internal-subcount{margin-left:auto}",
+      ".usage-count-row strong,.usage-count-numbers b,.usage-internal-request-head .usage-internal-model-copy code,.usage-internal-count{font-size:13px;line-height:1.35;font-weight:750}",
+      ".usage-internal-response-value code,.usage-internal-efforts-inline>span,.usage-internal-efforts-inline b,.usage-internal-subcount,.usage-subcount{font-size:12px;line-height:1.4;font-weight:650}",
+      ".usage-internal-request-head .usage-internal-model-copy small,.usage-internal-response-heading,.usage-record-label,.usage-relation-model small{font-size:11px;line-height:1.35;font-weight:650}",
+      ".usage-count-row strong,.usage-internal-request-head .usage-internal-model-copy code,.usage-internal-response-value code,.usage-relation-head code{font-family:system-ui,sans-serif!important;font-style:normal;letter-spacing:normal}",
       ".usage-model-record{border-top:1px solid var(--usage-border-divider);padding-top:6px}",
       ".usage-model-record:first-child{border-top:0;padding-top:0}",
       ".usage-text-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:7px;border-top:1px solid var(--usage-border-divider);padding:5px 0}",
@@ -3671,48 +6254,70 @@
       ".usage-text-row small{display:block;color:var(--usage-text-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".usage-text-count{text-align:right}",
       ".usage-text-count b{display:block;color:var(--usage-accent-link)}",
+      ".usage-text-row strong,.usage-text-count b{font-size:13px;line-height:1.35;font-weight:750}",
       ".usage-record-summary{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;margin:0;padding:3px 0 0;border-top:0}",
       ".usage-model-relations{display:grid;gap:7px}",
       ".usage-model-relation{display:grid;gap:5px;padding:7px;border:1px solid var(--usage-border-panel);border-radius:7px;background:var(--usage-surface-row-hover)}",
       ".usage-model-relation.legacy-unlinked{border-style:dashed}",
-      ".usage-relation-warning{margin:0;color:var(--usage-warning-text);font-size:10px;line-height:1.45}",
+      ".usage-relation-summary{display:grid;gap:5px;min-width:0;cursor:pointer;list-style:none}",
+      ".usage-relation-summary::-webkit-details-marker{display:none}",
+      ".usage-relation-summary::marker{content:\"\"}",
+      ".usage-relation-summary:focus-visible{outline:2px solid var(--usage-accent-link);outline-offset:2px;border-radius:4px}",
+      ".usage-model-relation[open]>.usage-relation-summary{padding-bottom:5px;border-bottom:1px solid var(--usage-border-divider)}",
+      ".usage-relation-warning{display:block;margin:0;color:var(--usage-warning-text);font-size:10px;line-height:1.45}",
       ".usage-relation-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}",
-      ".usage-relation-head strong{display:flex;align-items:center;min-width:0;gap:5px;font-size:11px}",
-      ".usage-relation-head code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}",
+      ".usage-relation-head strong{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;flex:1 1 auto;min-width:0;gap:5px;font-size:11px}",
+      ".usage-relation-head strong.same-model{grid-template-columns:minmax(0,1fr)}",
+      ".usage-relation-model{display:grid;gap:1px;min-width:0}",
+      ".usage-relation-model small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-muted)}",
+      ".usage-relation-head code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".usage-relation-head i{font-style:normal;color:var(--usage-text-muted)}",
-      ".usage-relation-head>span{flex:0 0 auto;color:var(--usage-accent-link);font-weight:700}",
-      ".usage-relation-dimension{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;align-items:start}",
-      ".usage-relation-values{display:flex;flex-wrap:wrap;gap:4px 8px;min-width:0}",
-      ".usage-relation-values>span{font-size:11px;color:var(--usage-text-secondary)}",
+      ".usage-relation-head>span{flex:0 0 auto;color:var(--usage-accent-link)}",
+      ".usage-relation-head code,.usage-relation-head>span{font-size:12px;line-height:1.4;font-weight:650}",
+      ".usage-relation-dimension{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;align-items:baseline;min-width:0}",
+      ".usage-relation-values{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}",
+      ".usage-relation-values>span{display:inline-flex;align-items:baseline;gap:4px;color:var(--usage-text-secondary)}",
+      ".usage-relation-values>span,.usage-relation-values b{font-size:12px;line-height:1.4;font-weight:650}",
       ".usage-relation-values b{color:var(--usage-text-primary)}",
-      ".usage-relation-conversations{border-top:1px solid var(--usage-border-divider);padding-top:5px}",
-      ".usage-relation-conversations summary{cursor:pointer;color:var(--usage-text-secondary);font-size:11px;font-weight:600}",
-      ".usage-relation-conversation-list{display:grid;gap:4px;margin-top:5px}",
+      ".usage-relation-values b.usage-effort-max{color:var(--usage-effort-max)}",
+      ".usage-relation-values b.usage-effort-extended{color:var(--usage-effort-extended)}",
+      ".usage-relation-values b.usage-effort-high{color:var(--usage-effort-high)}",
+      ".usage-relation-values b.usage-effort-standard{color:var(--usage-effort-standard)}",
+      ".usage-relation-values b.usage-effort-medium{color:var(--usage-effort-medium)}",
+      ".usage-relation-values b.usage-effort-low{color:var(--usage-effort-low)}",
+      ".usage-relation-values b.usage-effort-min{color:var(--usage-effort-min)}",
+      ".usage-relation-values b.usage-effort-none{color:var(--usage-effort-none)}",
+      ".usage-relation-values b.usage-effort-unknown{color:var(--usage-effort-unknown)}",
+      ".usage-model-relation:not([open])>.usage-relation-conversation-list{display:none}",
+      ".usage-relation-conversation-list{display:grid;gap:4px;padding-top:0}",
       ".usage-relation-conversation{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px;align-items:start}",
+      ".usage-source-mode-list{display:flex;flex-wrap:wrap;gap:3px;align-items:flex-start}",
       ".usage-source-mode{display:inline-flex;align-items:center;justify-content:center;min-width:38px;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:9px}",
       ".usage-source-mode.work{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
-      ".usage-param-combos,.usage-session-summary,.usage-variant-list,.usage-feature-list{display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 8px;align-items:start}",
+      ".usage-param-combos,.usage-session-summary,.usage-variant-list{display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 8px;align-items:start}",
       ".usage-session-block{padding-top:0}",
-      ".usage-record-label{color:var(--usage-text-muted);font-size:11px;line-height:20px;white-space:nowrap}",
-      ".usage-param-combos>.usage-record-label,.usage-variant-list>.usage-record-label,.usage-feature-list>.usage-record-label{grid-row:1 / -1;align-self:start}",
-      ".usage-param-row,.usage-variant-row,.usage-feature-row{grid-column:2;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;min-width:0;padding:2px 0;transition:background .14s ease}",
+      ".usage-record-label{color:var(--usage-text-muted);white-space:nowrap}",
+      ".usage-param-combos>.usage-record-label,.usage-variant-list>.usage-record-label{grid-row:1 / -1;align-self:start}",
+      ".usage-param-row,.usage-variant-row{grid-column:2;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;min-width:0;padding:2px 0;transition:background .14s ease}",
       ".usage-param-row.latest{grid-template-columns:minmax(0,1fr)}",
-      ".usage-param-row:hover,.usage-variant-row:hover,.usage-feature-row:hover{background:var(--usage-surface-row-hover)}",
-      ".usage-param-row b,.usage-variant-row b,.usage-feature-row b{font-size:11px;color:var(--usage-accent-link-hover);white-space:nowrap}",
-      ".usage-param-row span,.usage-variant-row span,.usage-feature-row span{color:var(--usage-text-body-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".usage-param-row:hover,.usage-variant-row:hover{background:var(--usage-surface-row-hover)}",
+      ".usage-param-row b,.usage-variant-row b{color:var(--usage-accent-link-hover);white-space:nowrap}",
+      ".usage-param-row span,.usage-variant-row span{color:var(--usage-text-body-subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".usage-param-row b,.usage-param-row span,.usage-variant-row b,.usage-variant-row span{font-size:11px;line-height:1.4;font-weight:650}",
       ".usage-record-sessions{display:grid;gap:0;margin:0 0 4px 0;padding:0;list-style:none}",
       ".usage-record-session-row{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:baseline;gap:6px;min-width:0;padding:0;border:0;background:transparent;line-height:17px}",
       ".usage-session-titlebar{display:grid;grid-template-columns:minmax(0,1fr);align-items:center;gap:6px;min-width:0}",
       ".usage-session-title{display:flex;align-items:center;gap:6px;min-width:0;font-weight:700;line-height:1.25}",
       ".usage-session-title input{flex:0 0 auto;width:13px;height:13px;margin:0;accent-color:var(--usage-accent-primary)}",
-      ".usage-index-number{color:var(--usage-text-disabled);font-size:10.5px;line-height:17px;text-align:right;font-variant-numeric:tabular-nums}",
+      ".usage-index-number{color:var(--usage-text-disabled);font-size:11px;line-height:17px;text-align:right;font-variant-numeric:tabular-nums}",
       ".usage-index-content{display:flex;align-items:baseline;gap:6px;min-width:0;overflow:hidden}",
-      ".usage-index-link{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary);text-decoration:none;font-size:11.5px;font-weight:600}",
+      ".usage-index-link{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary);text-decoration:none;font-size:12px;line-height:1.4;font-weight:650}",
+      ".usage-internal-response .usage-index-link{font-size:11px;line-height:1.35;font-weight:600}",
       ".usage-index-link.pending{color:var(--usage-text-secondary)}",
       ".usage-index-link:hover{color:var(--usage-accent-link-hover);text-decoration:underline}",
       ".usage-session-title b{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}",
       ".usage-session-action{display:inline-flex;align-items:center;min-height:22px;padding:0;color:var(--usage-accent-link);background:transparent;text-decoration:none;font-size:11px;font-weight:700;white-space:nowrap}",
-      ".usage-index-content small{flex:0 0 auto;margin-top:0;color:var(--usage-text-muted);font-size:10.5px;white-space:nowrap;font-variant-numeric:tabular-nums}",
+      ".usage-index-content small{flex:0 0 auto;margin-top:0;color:var(--usage-text-muted);font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}",
       ".usage-record-empty{color:var(--usage-text-disabled);font-size:11px;padding:2px 0}",
       ".usage-openai-status{display:grid;gap:6px;margin:0}",
       ".usage-openai-hero{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:0 0 7px;border:0;border-bottom:1px solid var(--usage-border-divider);border-radius:0;background:transparent}",
@@ -3748,10 +6353,13 @@
       ".usage-empty{color:var(--usage-text-muted);padding:8px 0}",
       ".usage-skeleton{display:grid;gap:6px;width:100%;padding:2px 0}",
       ".usage-skeleton i{display:block;height:24px;border-radius:7px;background:linear-gradient(90deg,var(--usage-skeleton-start),var(--usage-skeleton-middle),var(--usage-skeleton-start));background-size:200% 100%;animation:usage-skeleton 1s linear infinite}",
-      "@keyframes usage-draw{from{stroke-dashoffset:900}to{stroke-dashoffset:0}}",
+      "@keyframes usage-series-reveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}",
+      "@keyframes usage-donut-in{from{opacity:0}to{opacity:.96}}",
+      "@keyframes usage-point-in{from{opacity:0}to{opacity:1}}",
       "@keyframes usage-panel-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}",
       "@keyframes usage-skeleton{from{background-position:100% 0}to{background-position:-100% 0}}",
-      "@media (prefers-reduced-motion:reduce){.usage-view-panel,.usage-count-details,.usage-line,.usage-skeleton i{animation:none}.usage-point,.usage-param-row,.usage-variant-row,.usage-feature-row{transition:none}}"
+      "@media (max-width:380px){.usage-donut-layout{grid-template-columns:124px minmax(0,1fr);gap:5px;padding-left:5px;padding-right:5px}.usage-donut-legend-row{gap:4px;padding-left:2px;padding-right:2px}.usage-donut-legend-row small{min-width:34px}}",
+      "@media (prefers-reduced-motion:reduce){.usage-view-panel,.usage-series,.usage-point,.usage-donut-slice,.usage-skeleton i{animation:none}.usage-series{clip-path:none}.usage-point{opacity:1}.usage-point,.usage-donut-slice,.usage-param-row,.usage-variant-row{transition:none}}"
     ].join("");
     root.document.head.appendChild(style);
   }
@@ -3763,11 +6371,25 @@
       options: options || {},
       language: DEFAULT_LANGUAGE,
       activeView: "chart",
+      activeViewSettingsLoaded: false,
+      sourceModeFilter: "all",
+      statisticsMode: DEFAULT_STATISTICS_MODE,
+      chartType: DEFAULT_CHART_TYPE,
+      themeMode: DEFAULT_THEME_MODE,
+      donutModel: "",
+      showTrendChart: true,
+      showTextStatistics: true,
+      settingsMenuOpen: false,
+      settingsSubmenu: "",
       startDate: "",
       endDate: "",
+      dateSettingsLoaded: false,
       selectedModels: {},
       knownModels: {},
       modelSelectionInitialized: false,
+      selectedModelsByStatisticsMode: { mapped: {}, internal: {} },
+      knownModelsByStatisticsMode: { mapped: {}, internal: {} },
+      modelSelectionInitializedByMode: {},
       openaiStatus: null,
       openaiStatusError: "",
       openaiStatusLoaded: false,
@@ -3779,19 +6401,26 @@
       statusError: false,
       statusScope: "global",
       exportConversationList: null,
+      exportConversationListRequest: null,
+      exportConversationListGeneration: 0,
       exportConversationMeta: null,
       exportSelected: {},
+      exportSelectAllMode: false,
       exportSelectionInitialized: false,
+      exportSearch: "",
       exportBusy: false,
+      exportCancelRequested: false,
+      statisticsDataBusy: false,
       stats: { totals: {}, byDate: {}, models: {}, sessionsByModel: {}, variantsByModel: {}, parametersByModel: {}, events: [] }
     };
     subscribePageThemeChanges(state);
     subscribePopupThemeChanges(state);
     subscribeStatsStorageChanges(state);
+    subscribeSettingsStorageChanges(state);
     reload(state);
     return {
-      reload: function reloadHandle() {
-        return reload(state);
+      reload: function reloadHandle(options) {
+        return reload(state, options);
       },
       state: state
     };
@@ -3807,6 +6436,7 @@
     parameterCombinations: parameterCombinations,
     renderActiveView: renderActiveView,
     renderDateControls: renderDateControls,
+    renderSettingsMenu: renderSettingsMenu,
     renderOpenAIStatusPanel: renderOpenAIStatusPanel,
     renderModelTextList: renderModelTextList,
     _test: {
@@ -3814,6 +6444,14 @@
       render: render,
       bindEvents: bindEvents,
       ensureSelection: ensureSelection,
+      chartSeriesForState: chartSeriesForState,
+      internalRequestGroups: internalRequestGroups,
+      normalizeStatisticsMode: normalizeStatisticsMode,
+      normalizeThemeMode: normalizeThemeMode,
+      resolveDashboardTheme: resolveDashboardTheme,
+      renderModelCountRows: renderModelCountRows,
+      renderStatisticsCompletenessWarning: renderStatisticsCompletenessWarning,
+      statisticsTotalsInRange: statisticsTotalsInRange,
       applyPopupThemeVariables: applyPopupThemeVariables,
       applyExportConversationList: applyExportConversationList,
       buildExportArtifacts: buildExportArtifacts,
@@ -3823,8 +6461,18 @@
       localExportDateStamp: localExportDateStamp,
       normalizeConversationCollection: normalizeConversationCollection,
       dateNoLaterThanToday: dateNoLaterThanToday,
+      enrichConversationWithUsageEvents: enrichConversationWithUsageEvents,
+      exportConversationMatchesSearch: exportConversationMatchesSearch,
+      buildStatisticsCsv: buildStatisticsCsv,
+      exportStatisticsData: exportStatisticsData,
+      importStatisticsBackup: importStatisticsBackup,
+      readStatisticsBackupFile: readStatisticsBackupFile,
+      statisticsDataDateStamp: statisticsDataDateStamp,
       modelRelations: modelRelations,
+      reasoningEffortClass: reasoningEffortClass,
+      setExportControlsDisabled: setExportControlsDisabled,
       syncExportSelectionUi: syncExportSelectionUi,
+      syncExportSearchUi: syncExportSearchUi,
       uniqueConversationBases: uniqueConversationBases
     }
   };

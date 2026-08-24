@@ -56,12 +56,16 @@
     if (/^image-\d+-image$/i.test(String(slug || "").replace(/_/g, "-"))) {
       return false;
     }
-    return /^(?:gpt|o\d+(?:-(?:mini|pro|high))?|chat|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(slug);
+    // "chat" by itself is too broad for visible page text: ordinary controls
+    // such as "Chats" were previously accepted as a model slug. Keep the
+    // known ChatGPT route explicitly and let future versioned chat-* routes
+    // pass through hasExplicitVersionEvidence instead.
+    return /^(?:gpt|o\d+(?:-(?:mini|pro|high))?|chat-latest(?:$|[-_.])|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(slug);
   }
 
   function isFeatureNamedSlug(value) {
     var slug = normalizeSlug(value);
-    return /^(?:agent(?:-?mode)?|deep-?(?:research|search)|image(?:-?generation)?|web-?search|realtime|real-time|audio|voice|canvas)(?:$|[-_.])/.test(slug) &&
+    return /^(?:agent(?:-?mode)?|deep-?(?:research|search)|image(?:-?generation)?|web-?search|realtime|real-time|audio|voice|canvas|file-?upload|attachments?|uploads?|code-?interpreter|data-?analysis|python|connectors?|connected-?apps?|gpts|gizmo(?:-?id)?|gpt-?id|custom-?gpt|tasks?|scheduled-?tasks?)(?:$|[-_.])/.test(slug) &&
       !/^(?:gpt-image|dall-e|image-\d)/i.test(slug);
   }
 
@@ -146,14 +150,69 @@
     return mode === "thinking" || mode === "pro";
   }
 
-  function versionPresetForSlug(version, slug) {
-    var clean = normalizeSlug(slug);
-    if (!version || !clean) {
-      return null;
+  function normalizePublicMode(value) {
+    var clean = normalizeWhitespace(value).toLowerCase();
+    if (!clean) {
+      return "";
     }
-    return (version.intelligencePresets || []).filter(function matches(preset) {
-      return preset.modelSlug === clean;
-    })[0] || null;
+    if (/^(?:reasoning|think|thinking)$/.test(clean)) return "thinking";
+    if (/^(?:instant|fast)$/.test(clean)) return clean;
+    if (/^(?:pro|auto)$/.test(clean)) return clean;
+    return inferMode(clean);
+  }
+
+  function publicModeLabel(mode, preset, explicitLabel) {
+    var label = sanitizePublicModelLabel(explicitLabel);
+    if (label) {
+      return label;
+    }
+    label = sanitizePublicModelLabel(
+      preset && (preset.selectedDisplayTitle || preset.title || preset.lane)
+    );
+    if (label) {
+      return label;
+    }
+    var clean = normalizePublicMode(mode);
+    return clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : "";
+  }
+
+  function presetMode(preset) {
+    var source = preset && typeof preset === "object" ? preset : {};
+    return normalizePublicMode(
+      source.lane ||
+      source.selectedDisplayTitle ||
+      source.title
+    );
+  }
+
+  function versionPresetCandidates(version, requestSlug, baseSlug) {
+    var request = normalizeSlug(requestSlug);
+    var base = normalizeSlug(baseSlug);
+    if (!version || (!request && !base)) {
+      return [];
+    }
+    var presets = version.intelligencePresets || [];
+    var exact = presets.filter(function exactRequest(preset) {
+      return preset.modelSlug === request;
+    });
+    if (exact.length) {
+      return exact;
+    }
+    return presets.filter(function baseRequest(preset) {
+      return preset.modelSlug === base;
+    });
+  }
+
+  function versionPresetForSlug(version, requestSlug, baseSlug, modeHint) {
+    var candidates = versionPresetCandidates(version, requestSlug, baseSlug);
+    var expectedMode = normalizePublicMode(modeHint);
+    if (expectedMode) {
+      var matching = candidates.filter(function matchesMode(preset) {
+        return presetMode(preset) === expectedMode;
+      });
+      return matching.length === 1 ? matching[0] : null;
+    }
+    return candidates.length === 1 ? candidates[0] : null;
   }
 
   function chatGPTModeModelFromSlug(apiSlug) {
@@ -342,7 +401,8 @@
               modelSlug: isChatGPTRouteSlug(value.modelSlug || value.model_slug)
                 ? normalizeSlug(value.modelSlug || value.model_slug)
                 : "",
-              lane: normalizeWhitespace(value.lane).toLowerCase().slice(0, 32)
+              lane: normalizeWhitespace(value.lane).toLowerCase().slice(0, 32),
+              presetType: normalizeWhitespace(value.presetType || value.preset_type).toLowerCase().slice(0, 32)
             };
           }).filter(function keepPreset(preset) {
             return preset.modelSlug || preset.title || preset.selectedDisplayTitle;
@@ -511,12 +571,36 @@
     var baseSlug = catalog ? runtimeBaseSlug(catalog, requestSlug) : requestSlug;
     var model = catalog ? runtimeModelBySlug(catalog, baseSlug) : null;
     var version = catalog ? runtimeVersionBySlug(catalog, baseSlug) : null;
-    var mode = inferMode(requestSlug);
+    var requestMode = inferMode(requestSlug);
+    var explicitPublicMode = normalizePublicMode(settings.selectedPublicMode);
+    var explicitPublicModeLabel = sanitizePublicModelLabel(settings.selectedPublicModeLabel);
+    var selectedTextMode = normalizePublicMode(settings.selectedText);
+    // Submit-time selector evidence describes what the user chose. It must
+    // outrank the later request/response slug when resolving the public mode.
+    var modeHint = explicitPublicMode || selectedTextMode || requestMode;
     var label = "";
     var source = "";
     var expectedLabel = "";
 
-    var versionPreset = versionPresetForSlug(version, baseSlug);
+    var presetCandidates = versionPresetCandidates(version, requestSlug, baseSlug);
+    var versionPreset = versionPresetForSlug(version, requestSlug, baseSlug, modeHint);
+    var resolvedPresetMode = presetMode(versionPreset);
+    var mode = requestMode || resolvedPresetMode;
+    var selectedPublicMode = explicitPublicMode || selectedTextMode || resolvedPresetMode || requestMode;
+    var selectedPublicModeSource = explicitPublicMode
+      ? normalizeWhitespace(settings.selectedPublicModeSource || "selector-dom").slice(0, 80)
+      : selectedTextMode
+        ? normalizeWhitespace(settings.selectedPublicModeSource || "selector-dom:model-control").slice(0, 80)
+        : versionPreset && resolvedPresetMode
+          ? "account-catalog:intelligence-preset"
+          : requestMode
+            ? "request-slug"
+            : "";
+    var selectedPublicModeLabel = publicModeLabel(
+      selectedPublicMode,
+      versionPreset,
+      explicitPublicModeLabel
+    );
 
     // ChatGPT exposes "Model" and "Effort" as separate picker fields. The live
     // account catalog can intentionally expose the same internal base slug in
@@ -535,7 +619,7 @@
     if (
       version &&
       version.displayTextForIntelligence &&
-      (usesIntelligenceModel(mode) || versionPreset)
+      (usesIntelligenceModel(requestMode) || presetCandidates.length)
     ) {
       expectedLabel = version.displayTextForIntelligence;
       label = expectedLabel;
@@ -576,6 +660,9 @@
       requestModel: requestSlug,
       baseModel: baseSlug,
       mode: mode,
+      selectedPublicMode: selectedPublicMode,
+      selectedPublicModeLabel: selectedPublicModeLabel,
+      selectedPublicModeSource: selectedPublicModeSource,
       mappingStatus: /^unmapped/.test(source) ? "unmapped" : "mapped",
       source: source,
       catalogObservedAt: catalog ? catalog.observedAt : ""
@@ -604,6 +691,7 @@
     resolveRuntimePublicModelInfo: resolveRuntimePublicModelInfo,
     usesIntelligenceModel: usesIntelligenceModel,
     sanitizePublicModelLabel: sanitizePublicModelLabel,
+    normalizePublicMode: normalizePublicMode,
     sanitizeRuntimeModelCatalog: sanitizeRuntimeModelCatalog,
     selectedPublicModelFromText: selectedPublicModelFromText
   };

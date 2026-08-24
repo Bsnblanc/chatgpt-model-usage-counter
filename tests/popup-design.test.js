@@ -24,7 +24,8 @@ test("expanded model details stay flat without nested card treatments", () => {
   assert.match(dashboard, /data-model-record-details/);
   assert.doesNotMatch(dashboard, /data-model-record-toggle/);
   assert.doesNotMatch(dashboard, /addEventListener\("pointerdown"/);
-  assert.match(dashboard, /<div class="usage-count-row">/);
+  assert.match(dashboard, /<summary class="usage-count-row">/);
+  assert.doesNotMatch(dashboard, /<div class="usage-count-row">/);
   assert.doesNotMatch(dashboard, /<button class="usage-count-row"/);
   assert.match(dashboard, /\.usage-count-row\{[^}]*border:0;[^}]*background:transparent;[^}]*font:inherit/);
   assert.match(dashboard, /\.usage-count-details\{[^}]*padding:0 0 8px 12px/);
@@ -39,7 +40,69 @@ test("expanded model details stay flat without nested card treatments", () => {
   assert.doesNotMatch(dashboard, /usage-session-pills/);
   assert.doesNotMatch(dashboard, /usage-session-inline/);
   assert.doesNotMatch(dashboard, /<details class="usage-count-record">/);
-  assert.doesNotMatch(dashboard, /<summary class="usage-count-row">/);
+});
+
+test("statistics typography has a stable primary, secondary, and dimension hierarchy", () => {
+  const dashboard = dashboardSource();
+
+  assert.match(dashboard, /\.usage-topline h2\{[^}]*font-size:15px;[^}]*line-height:1\.25;[^}]*font-weight:750/);
+  assert.match(dashboard, /\.usage-chart-head strong\{[^}]*font-size:14px;[^}]*line-height:1\.35;[^}]*font-weight:700/);
+  assert.match(dashboard, /\.usage-export-title\{[^}]*font-size:14px;[^}]*line-height:1\.35;[^}]*font-weight:700/);
+  assert.match(
+    dashboard,
+    /\.usage-count-row strong,\.usage-count-numbers b,\.usage-internal-request-head \.usage-internal-model-copy code,\.usage-internal-count\{font-size:13px;line-height:1\.35;font-weight:750\}/
+  );
+  assert.match(
+    dashboard,
+    /\.usage-internal-response-value code,\.usage-internal-efforts-inline>span,\.usage-internal-efforts-inline b,\.usage-internal-subcount,\.usage-subcount\{font-size:12px;line-height:1\.4;font-weight:650\}/
+  );
+  assert.match(
+    dashboard,
+    /\.usage-internal-request-head \.usage-internal-model-copy small,\.usage-internal-response-heading,\.usage-record-label,\.usage-relation-model small\{font-size:11px;line-height:1\.35;font-weight:650\}/
+  );
+  assert.match(
+    dashboard,
+    /\.usage-count-row strong,\.usage-internal-request-head \.usage-internal-model-copy code,\.usage-internal-response-value code,\.usage-relation-head code\{font-family:system-ui,sans-serif!important;font-style:normal;letter-spacing:normal\}/
+  );
+  assert.match(dashboard, /\.usage-internal-request-head\{[^}]*align-items:end/);
+  assert.match(dashboard, /\.usage-internal-request\{[^}]*gap:0;[^}]*padding:0;[^}]*border-bottom:1px solid/);
+  assert.match(dashboard, /\.usage-internal-request-head\{[^}]*padding:5px 0/);
+  assert.match(dashboard, /\.usage-internal-response-section\{display:grid;gap:1px;padding:3px 0 8px 12px\}/);
+  assert.match(dashboard, /\.usage-count-details\{display:grid;gap:5px;padding:0 0 8px 12px\}/);
+  assert.match(dashboard, /\.usage-internal-response\{[^}]*padding:3px 0 4px;[^}]*border:0;[^}]*border-top:1px solid[^}]*border-radius:0;[^}]*background:transparent/);
+  assert.doesNotMatch(dashboard, /\.usage-count-details\{[^}]*animation:/);
+  assert.match(dashboard, /\.usage-model-chip span,\.usage-model-chip b\{font-size:11px;line-height:1\.3;font-weight:650\}/);
+  assert.match(dashboard, /\.usage-chart-head small\{font-size:9px;line-height:1\.3;font-weight:650/);
+  assert.match(dashboard, /\.usage-axis\{[^}]*font-size:9px;[^}]*font-weight:500/);
+  assert.match(dashboard, /\.usage-axis-label\{font-size:9px;font-weight:650\}/);
+  assert.match(dashboard, /\.usage-relation-head code,\.usage-relation-head>span\{font-size:12px;line-height:1\.4;font-weight:650\}/);
+  assert.match(dashboard, /\.usage-relation-values>span,\.usage-relation-values b\{font-size:12px;line-height:1\.4;font-weight:650\}/);
+  assert.match(dashboard, /\.usage-param-row b,\.usage-param-row span,\.usage-variant-row b,\.usage-variant-row span\{font-size:11px;line-height:1\.4;font-weight:650\}/);
+  assert.match(dashboard, /\.usage-index-link\{[^}]*font-size:12px;[^}]*line-height:1\.4;[^}]*font-weight:650/);
+  assert.match(dashboard, /\.usage-internal-response \.usage-index-link\{font-size:11px;line-height:1\.35;font-weight:600\}/);
+  assert.match(dashboard, /\.usage-internal-efforts-inline\{[^}]*display:inline-flex;[^}]*align-items:baseline;[^}]*flex-wrap:wrap/);
+  assert.match(dashboard, /\.usage-relation-dimension\{[^}]*grid-template-columns:72px minmax\(0,1fr\);[^}]*align-items:baseline/);
+  assert.match(dashboard, /\.usage-internal-response-summary\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
+  assert.match(dashboard, /\.usage-internal-response-model-row\{[^}]*display:block/);
+  assert.match(dashboard, /<details class="usage-settings-menu"/);
+  assert.match(dashboard, /class="usage-settings-popover"/);
+  assert.match(dashboard, /renderSettingsCategory\(\s*state,\s*"sections"/);
+  assert.doesNotMatch(dashboard, /usage-statistics-display-menu|usage-statistics-display-popover/);
+  assert.match(dashboard, /type="checkbox" data-statistics-section=/);
+  assert.doesNotMatch(dashboard, /<button[^>]*data-statistics-section=/);
+  const fractionalStatisticsFonts = Array.from(
+    dashboard.matchAll(
+      /"(\.usage-(?:statistics-warning|empty|donut-legend-row small|count-features span,\.usage-count-features b|index-number|index-content small)\{[^"]*?font-size:(\d+\.\d+)px[^"]*?\})"/g
+    ),
+    (match) => `${match[1].match(/^([^{]+)/)[1]}: ${match[2]}px`
+  );
+  assert.deepEqual(
+    fractionalStatisticsFonts,
+    [],
+    `statistics typography must use integer font-size levels; found ${fractionalStatisticsFonts.join(", ")}`
+  );
+  assert.doesNotMatch(dashboard, /ui-monospace|SFMono-Regular|Consolas,monospace/);
+  assert.doesNotMatch(dashboard, /usage-internal-same-note|responseModelSame/);
 });
 
 test("status panel stays flat and scoped to ChatGPT web components", () => {
@@ -62,13 +125,56 @@ test("interactive elements expose visible focus, hover, and reduced-motion handl
   assert.match(dashboard, /:focus-visible\{outline:2px solid/);
   // 标签页 / 输入 / 模型 chip 的交互态
   assert.match(dashboard, /\.usage-view-tab:hover:not\(\.active\)/);
-  assert.match(dashboard, /\.usage-controls input:focus,\.usage-controls select:focus/);
-  assert.match(dashboard, /\.usage-controls input:invalid/);
+  assert.match(dashboard, /\.usage-date-controls input:focus/);
+  assert.match(dashboard, /\.usage-date-controls input:invalid/);
+  assert.match(dashboard, /\.usage-settings-item:hover>\.usage-settings-submenu,\.usage-settings-item:focus-within>\.usage-settings-submenu/);
   assert.match(dashboard, /\.usage-model-chip:hover/);
   // 尊重系统减少动画偏好
   assert.match(dashboard, /@media \(prefers-reduced-motion:reduce\)/);
   // 导出面板按钮也有焦点环
   assert.match(dashboard, /\.usage-export-btn:focus-visible\{outline:2px solid/);
+});
+
+test("chart trajectory and points use synchronized, position-stable animation", () => {
+  const dashboard = dashboardSource();
+
+  const colors = Array.from(
+    dashboard.match(/var COLORS = \[([\s\S]*?)\];/)[1].matchAll(/"([^"]+)"/g),
+    (match) => match[1]
+  );
+  const lineStyles = Array.from(
+    dashboard.match(/var LINE_STYLES = \[([\s\S]*?)\];/)[1].matchAll(/"([^"]+)"/g),
+    (match) => match[1]
+  );
+
+  assert.equal(colors.length, 8);
+  assert.equal(new Set(colors).size, colors.length);
+  assert.ok(colors.every((color, index) => color.includes(`--usage-chart-series-${index + 1}`)));
+  assert.deepEqual(lineStyles, ["none", "8 4", "2 3", "10 3 2 3", "14 4", "4 3 1 3", "1 4", "7 2 1 2"]);
+  assert.equal(new Set(lineStyles).size, lineStyles.length);
+  assert.match(dashboard, /colorByModel\[model\] = COLORS\[index % COLORS\.length\]/);
+  assert.match(dashboard, /lineStyleByModel\[model\] = LINE_STYLES\[index % LINE_STYLES\.length\]/);
+  assert.match(dashboard, /series\.lineStyle = lineStyleByModel\[series\.model\] \|\| "none"/);
+  assert.match(dashboard, /<g class="usage-series"[^>]*style="--usage-line-dash:/);
+  assert.match(dashboard, /\.usage-line\{[^}]*stroke-dasharray:var\(--usage-line-dash,none\)/);
+  assert.match(dashboard, /class="usage-overlap-ring"[^>]*data-overlap-count=/);
+  assert.match(dashboard, /\.usage-overlap-ring\{[^}]*stroke-dasharray:2 2/);
+  assert.match(dashboard, /class="usage-line-focus usage-line-focus-halo"/);
+  assert.match(dashboard, /class="usage-line-focus usage-line-focus-color"/);
+
+  assert.match(dashboard, /var progress = pointCount > 1 \? pointIndex \/ \(pointCount - 1\) : 0/);
+  assert.match(dashboard, /var pointDelay = \(0\.06 \+ progress \* 0\.58\)\.toFixed\(3\)/);
+  assert.match(dashboard, /style="--usage-point-delay:/);
+  assert.match(dashboard, /\.usage-series\{clip-path:inset\(0 100% 0 0\);animation:usage-series-reveal \.72s cubic-bezier\(\.22,\.72,\.25,1\) both\}/);
+  assert.match(dashboard, /\.usage-point\{[^}]*animation:usage-point-in \.18s ease-out var\(--usage-point-delay,\.06s\)/);
+  assert.doesNotMatch(dashboard, /\.usage-point\{[^}]*transform:/);
+  assert.match(dashboard, /@keyframes usage-series-reveal\{from\{clip-path:inset\(0 100% 0 0\)\}to\{clip-path:inset\(0 0 0 0\)\}\}/);
+  assert.match(dashboard, /@keyframes usage-point-in\{from\{opacity:0\}to\{opacity:1\}\}/);
+  assert.doesNotMatch(dashboard, /@keyframes usage-point-in\{[^}]*transform:/);
+  assert.match(
+    dashboard,
+    /@media \(prefers-reduced-motion:reduce\)\{[^}]*\.usage-series,[^}]*\.usage-point,[^}]*\{animation:none\}[^}]*\.usage-series\{clip-path:none\}[^}]*\.usage-point\{opacity:1\}/
+  );
 });
 
 test("export tab is wired with all five conversation formats", () => {

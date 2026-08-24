@@ -110,42 +110,206 @@ function createStats() {
     events: [
       {
         model: "future-family-2026-thinking",
+        requestModel: "future-family-2026-thinking",
+        responseModel: "future-family-2026-thinking",
         modelParameters: {
           model: "future-family-2026-thinking",
           "reasoning.effort": "high",
           "text.verbosity": "medium"
         },
         usageFeatures: ["deep_research"],
+        sourceMode: "chat",
+        conversationId: "conversation-alpha",
+        pageTitle: "Thinking conversation",
+        pageUrl: "https://chatgpt.com/c/conversation-alpha",
         submittedAt: "2026-05-30T15:10:00.000Z"
       },
       {
         model: "future-family-2026-thinking",
+        requestModel: "future-family-2026-thinking",
+        responseModel: "future-family-2026-thinking",
         modelParameters: {
           model: "future-family-2026-thinking",
           "reasoning.effort": "high",
           "text.verbosity": "medium"
         },
         usageFeatures: ["deep_research"],
+        sourceMode: "chat",
+        conversationId: "conversation-alpha",
+        pageTitle: "Thinking conversation",
+        pageUrl: "https://chatgpt.com/c/conversation-alpha",
         submittedAt: "2026-05-30T15:00:00.000Z"
       },
       {
         model: "future-family-2026-instant",
+        requestModel: "future-family-2026-instant",
+        responseModel: "future-family-2026-instant",
         modelParameters: {
           model: "future-family-2026-instant",
           "reasoning.effort": "medium",
           "text.verbosity": "low"
         },
         usageFeatures: ["image_generation"],
+        sourceMode: "chat",
+        conversationId: "conversation-beta",
+        pageTitle: "Instant conversation",
+        pageUrl: "https://chatgpt.com/c/conversation-beta",
         submittedAt: "2026-05-30T14:00:00.000Z"
       }
     ]
   };
 }
 
-function localDateKey(date = new Date()) {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
+function createStatisticsModeStats() {
+  const date = "2026-08-23";
+  const event = (model, requestModel, responseModel, minute) => ({
+    model,
+    requestModel,
+    responseModel,
+    modelParameters: {
+      model: requestModel,
+      "reasoning.effort": "medium"
+    },
+    requestReasoningEffort: "medium",
+    sourceMode: "chat",
+    conversationId: `statistics-mode-${minute}`,
+    pageTitle: `Statistics mode ${minute}`,
+    pageUrl: `https://chatgpt.com/c/statistics-mode-${minute}`,
+    submittedAt: `${date}T10:${minute}:00.000Z`
+  });
+
+  return {
+    totals: {
+      "GPT-5.6 Sol": 4,
+      "GPT-5.6 Luna": 1
+    },
+    byDate: {
+      [date]: {
+        "GPT-5.6 Sol": 4,
+        "GPT-5.6 Luna": 1
+      }
+    },
+    models: {
+      "GPT-5.6 Sol": {
+        label: "GPT-5.6 Sol",
+        publicModel: "GPT-5.6 Sol"
+      },
+      "GPT-5.6 Luna": {
+        label: "GPT-5.6 Luna",
+        publicModel: "GPT-5.6 Luna"
+      }
+    },
+    sessionsByModel: {},
+    variantsByModel: {},
+    featuresByModel: {},
+    parametersByModel: {},
+    relationsByModel: {},
+    events: [
+      event("GPT-5.6 Sol", "gpt-5-6-thinking", "gpt-5-6-thinking", "00"),
+      event("GPT-5.6 Sol", "gpt-5-6-thinking", "gpt-5-6-pro", "01"),
+      event("GPT-5.6 Sol", "gpt-5-6-pro", "gpt-5-6-pro", "02"),
+      event("GPT-5.6 Sol", "", "gpt-5-6-thinking", "03"),
+      event("GPT-5.6 Luna", "gpt-5.6-luna-wm", "", "04")
+    ]
+  };
+}
+
+function renderStatisticsModeDashboard(statisticsMode, language = "en") {
+  const container = new DashboardTestContainer();
+  const state = {
+    container,
+    options: { surface: "popup" },
+    language,
+    activeView: "chart",
+    statisticsMode,
+    sourceModeFilter: "all",
+    loading: false,
+    stats: createStatisticsModeStats(),
+    selectedModels: {},
+    knownModels: {},
+    startDate: "2026-08-23",
+    endDate: "2026-08-23",
+    statusText: "",
+    statusError: false,
+    statusScope: "global"
+  };
+
+  dashboard._test.render(state);
+  return { container, state };
+}
+
+function usageModelChips(html) {
+  return Array.from(String(html || "").matchAll(
+    /<label class="usage-model-chip"[^>]*>[\s\S]*?<input\b[^>]*data-model-toggle="([^"]+)"[^>]*>[\s\S]*?<span>([^<]+)<\/span><b>([^<]+)<\/b><\/label>/g
+  )).map((match) => ({
+    key: match[1],
+    label: match[2],
+    count: match[3]
+  }));
+}
+
+function usageCountRecords(html) {
+  const source = String(html || "");
+  const listStart = source.indexOf('<div class="usage-count-list">');
+  if (listStart < 0) {
+    return [];
+  }
+  const list = source.slice(listStart);
+  const starts = Array.from(list.matchAll(
+    /<(?:details)\b[^>]*class="[^"]*\busage-count-record\b[^"]*"[^>]*>|<(?:section)\b[^>]*class="[^"]*\busage-internal-request\b[^"]*"[^>]*>/g
+  ));
+  return starts.map((match, index) => {
+    const start = match.index;
+    const record = list.slice(start, starts[index + 1] === undefined ? list.length : starts[index + 1].index);
+    const mappedHeading = record.match(/<summary class="usage-count-row">[\s\S]*?<strong>([^<]+)<\/strong>/);
+    const internalHeading = record.match(
+      /<div class="usage-internal-request-head">[\s\S]*?<span class="usage-internal-model-copy">[\s\S]*?<code>([^<]+)<\/code>/
+    );
+    return {
+      heading: mappedHeading?.[1] || internalHeading?.[1] || "",
+      html: record
+    };
+  });
+}
+
+function usageCountRecord(html, heading) {
+  return usageCountRecords(html).find((record) => record.heading === heading);
+}
+
+function usageCountRecordTotal(record) {
+  const html = record && record.html || "";
+  const mapped = html.match(/usage-count-numbers"><b>(\d+)\s/);
+  const internal = html.match(
+    /<div class="usage-internal-request-head">[\s\S]*?<b class="usage-internal-count">(\d+)\s/
+  );
+  return Number(mapped?.[1] || internal?.[1] || 0);
+}
+
+function chartPointTotals(html) {
+  const totals = {};
+  for (const match of String(html || "").matchAll(/<circle\b([^>]*\bclass="usage-point"[^>]*)>/g)) {
+    const attributes = match[1];
+    const model = attributes.match(/\bdata-model="([^"]+)"/)?.[1] || "";
+    const value = Number(attributes.match(/\bdata-value="([^"]+)"/)?.[1]);
+    if (model && Number.isFinite(value)) {
+      totals[model] = (totals[model] || 0) + value;
+    }
+  }
+  return totals;
+}
+
+function visibleUsageText(html) {
+  return String(html || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&(?:[a-z]+|#\d+);/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function utcDateKey(date = new Date()) {
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${month}-${day}`;
 }
 
 async function flushDashboardPromises(ticks = 12) {
@@ -359,6 +523,60 @@ class DashboardTestContainer {
       this.nodes.push(new DashboardTestElement({ class: "usage-refresh", selector: ".usage-refresh" }));
     }
 
+    const statisticsModeButtons = html.matchAll(
+      /<button\b([^>]*\bdata-statistics-mode="([^"]+)"[^>]*)>([\s\S]*?)<\/button>/g
+    );
+    for (const match of statisticsModeButtons) {
+      const attributes = match[1];
+      this.nodes.push(new DashboardTestElement({
+        selector: "[data-statistics-mode]",
+        "data-statistics-mode": match[2],
+        class: attributes.match(/\bclass="([^"]*)"/)?.[1] || "",
+        "aria-pressed": attributes.match(/\baria-pressed="([^"]*)"/)?.[1] || "",
+        textContent: match[3].replace(/<[^>]+>/g, "")
+      }));
+    }
+
+    const themeModeButtons = html.matchAll(
+      /<button\b([^>]*\bdata-theme-select="([^"]+)"[^>]*)>([\s\S]*?)<\/button>/g
+    );
+    for (const match of themeModeButtons) {
+      const attributes = match[1];
+      this.nodes.push(new DashboardTestElement({
+        selector: "[data-theme-select]",
+        "data-theme-select": match[2],
+        class: attributes.match(/\bclass="([^"]*)"/)?.[1] || "",
+        "aria-pressed": attributes.match(/\baria-pressed="([^"]*)"/)?.[1] || "",
+        textContent: match[3].replace(/<[^>]+>/g, "")
+      }));
+    }
+
+    const viewButtons = html.matchAll(
+      /<button\b([^>]*\bdata-view-tab="([^"]+)"[^>]*)>([\s\S]*?)<\/button>/g
+    );
+    for (const match of viewButtons) {
+      const attributes = match[1];
+      this.nodes.push(new DashboardTestElement({
+        selector: "[data-view-tab]",
+        "data-view-tab": match[2],
+        class: attributes.match(/\bclass="([^"]*)"/)?.[1] || "",
+        "aria-selected": attributes.match(/\baria-selected="([^"]*)"/)?.[1] || "",
+        textContent: match[3].replace(/<[^>]+>/g, "")
+      }));
+    }
+
+    const statisticsSectionInputs = html.matchAll(
+      /<input\b([^>]*\bdata-statistics-section="([^"]+)"[^>]*)>/g
+    );
+    for (const match of statisticsSectionInputs) {
+      const attributes = match[1];
+      this.nodes.push(new DashboardTestElement({
+        selector: "[data-statistics-section]",
+        "data-statistics-section": match[2],
+        checked: /\bchecked\b/.test(attributes)
+      }));
+    }
+
     const status = html.match(/<div class="usage-status[^"]*"[^>]*>([\s\S]*?)<\/div>/);
     if (status) {
       this.nodes.push(new DashboardTestElement({
@@ -374,7 +592,7 @@ class DashboardTestContainer {
   }
 
   querySelectorAll(selector) {
-    if (selector === "[data-view-tab]" || selector === "[data-model-toggle]") {
+    if (selector === "[data-model-toggle]") {
       return [];
     }
     return this.nodes.filter((node) => node.attributes.selector === selector);
@@ -419,14 +637,25 @@ test("dashboard treats canvas and versioned feature slugs as features, not model
   };
   stats.events.unshift({
     model: "future-family-2026-thinking",
+    requestModel: "future-family-2026-thinking",
+    responseModel: "future-family-2026-thinking",
     modelParameters: { model: "future-family-2026-thinking" },
     usageFeatures: ["canvas"],
+    sourceMode: "chat",
     submittedAt: "2026-05-30T15:20:00.000Z"
   });
 
-  const html = dashboard.renderModelTextList(stats, { language: "en" });
+  const html = dashboard.renderActiveView({
+    language: "en",
+    activeView: "chart",
+    loading: false,
+    stats,
+    selectedModels: { "future-family-2026-thinking": true },
+    startDate: "2026-05-30",
+    endDate: "2026-05-30"
+  }, ["future-family-2026-thinking"]);
 
-  assert.match(html, /Canvas/);
+  assert.match(html, /usage-count-features[\s\S]*Canvas <b>1<\/b>/);
   assert.doesNotMatch(html, /<strong>canvas<\/strong>/);
   assert.doesNotMatch(html, /<strong>canvas-v2<\/strong>/);
 });
@@ -478,7 +707,7 @@ test("dashboard keeps recorded Deep Research and Agent Mode choices", () => {
   assert.match(html, /agent-mode/);
 });
 
-test("dashboard fills missing event feature rows from stored aggregates in the selected range", () => {
+test("dashboard does not infer range feature counts from all-time aggregates", () => {
   const stats = createStats();
   const model = "future-family-2026-thinking";
   stats.totals[model] = 4;
@@ -503,18 +732,21 @@ test("dashboard fills missing event feature rows from stored aggregates in the s
     }
   ];
 
-  const html = dashboard.renderModelTextList(stats, {
+  const html = dashboard.renderActiveView({
     language: "en",
+    activeView: "chart",
+    loading: false,
+    stats,
+    selectedModels: { [model]: true },
     startDate: "2026-06-03",
     endDate: "2026-06-03"
-  });
+  }, [model]);
 
-  assert.match(html, /Features/);
-  assert.match(html, /Web search/);
-  assert.match(html, /2 times/);
+  assert.doesNotMatch(html, /Web search/);
+  assert.doesNotMatch(html, /usage-feature-row|<span class="usage-record-label">Features<\/span>/);
 });
 
-test("dashboard text rows clarify selected range and all-time totals", () => {
+test("dashboard model rows show one count without repeating range, all-time, or today labels", () => {
   const stats = createStats();
   const model = "future-family-2026-thinking";
   stats.totals[model] = 5;
@@ -525,11 +757,11 @@ test("dashboard text rows clarify selected range and all-time totals", () => {
     endDate: "2026-06-03"
   });
 
-  assert.match(html, /Range 2/);
-  assert.match(html, /All time 5/);
+  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2 times<\/b>/);
+  assert.doesNotMatch(html, /Range 2|All time 5|Today/);
 });
 
-test("dashboard falls back to stored sessions when selected range events are outside the cache", () => {
+test("dashboard does not assign all-time sessions to a selected range without dated relation evidence", () => {
   const stats = createStats();
   const model = "future-family-2026-thinking";
   stats.byDate["2026-06-03"] = { [model]: 1 };
@@ -549,11 +781,12 @@ test("dashboard falls back to stored sessions when selected range events are out
     endDate: "2026-06-03"
   });
 
-  assert.match(html, /Stored session outside event cache/);
-  assert.doesNotMatch(html, /No conversations for this record/);
+  assert.doesNotMatch(html, /Stored session outside event cache/);
+  assert.match(html, /Historical records not linked/);
+  assert.match(html, /No conversations for this record/);
 });
 
-test("dashboard uses stored sessions when firstSubmittedAt is inside the selected range", () => {
+test("dashboard does not infer a selected-range conversation from firstSubmittedAt alone", () => {
   const stats = createStats();
   const model = "future-family-2026-thinking";
   stats.byDate["2026-06-03"] = { [model]: 1 };
@@ -576,10 +809,11 @@ test("dashboard uses stored sessions when firstSubmittedAt is inside the selecte
     endDate: "2026-06-03"
   });
 
-  assert.match(html, /Stored session first date in range/);
+  assert.doesNotMatch(html, /Stored session first date in range/);
+  assert.match(html, /Historical records not linked/);
 });
 
-test("dashboard prefers stored session counts when cached range events undercount the same conversation", () => {
+test("dashboard preserves an unlinked remainder without inflating a dated conversation", () => {
   const stats = createStats();
   const model = "future-family-2026-thinking";
   stats.byDate["2026-06-03"] = { [model]: 3 };
@@ -596,6 +830,8 @@ test("dashboard prefers stored session counts when cached range events undercoun
   stats.events = [
     {
       model,
+      requestModel: model,
+      responseModel: model,
       conversationId: "capped",
       pageTitle: "Event capped session",
       pageUrl: "https://chatgpt.com/c/capped",
@@ -611,10 +847,9 @@ test("dashboard prefers stored session counts when cached range events undercoun
     endDate: "2026-06-03"
   });
 
-  assert.match(html, /Stored capped session/);
+  assert.match(html, /Event capped session/);
   assert.match(html, /Historical records not linked/);
-  assert.match(html, /Stored capped session[\s\S]*2 times/);
-  assert.match(html, /Event capped session[\s\S]*1 times/);
+  assert.doesNotMatch(html, /Stored capped session/);
 });
 
 test("modelVariants falls back to stored variants when selected range events are empty", () => {
@@ -648,7 +883,7 @@ test("dashboard renders stored variants when selected range events are empty", (
   assert.match(html, /future-family-2026-thinking/);
 });
 
-test("dashboard shows stored feature counts in range when selected range events are empty", () => {
+test("dashboard does not show lifetime feature pills as selected-range counts", () => {
   const stats = createStats();
   const model = "future-family-2026-thinking";
   stats.byDate["2026-06-03"] = { [model]: 1 };
@@ -659,18 +894,20 @@ test("dashboard shows stored feature counts in range when selected range events 
     lastSubmittedAt: "2026-06-03T09:00:00.000Z"
   };
 
-  const html = dashboard.renderModelTextList(stats, {
+  const html = dashboard.renderActiveView({
     language: "en",
+    activeView: "chart",
+    loading: false,
+    stats,
+    selectedModels: { [model]: true },
     startDate: "2026-06-03",
     endDate: "2026-06-03"
-  });
+  }, [model]);
 
   assert.match(html, /future-family-2026-thinking/);
-  assert.match(html, /Features/);
-  assert.match(html, /Web search/);
-  assert.match(html, /<b>1 times<\/b><span>Web search<\/span>/);
+  assert.doesNotMatch(html, /Web search/);
+  assert.doesNotMatch(html, /usage-feature-row|<span class="usage-record-label">Features<\/span>/);
   assert.doesNotMatch(html, /Deep research/);
-  assert.doesNotMatch(html, /Deep research[\s\S]*2 times/);
 });
 
 test("dashboard hides dirty zero-count image feature rows and keeps real image model rows", () => {
@@ -700,13 +937,30 @@ test("dashboard hides dirty zero-count image feature rows and keeps real image m
     count: 1,
     lastSubmittedAt: "2026-05-30T15:20:00.000Z"
   };
+  stats.events[0].usageFeatures = ["image_generation"];
 
-  const html = dashboard.renderModelTextList(stats, { language: "en" });
+  const visibleModels = [
+    "image-2",
+    "image-1",
+    "dall-e",
+    "future-family-2026-thinking",
+    "future-family-2026-instant",
+    "gpt-image"
+  ];
+  const html = dashboard.renderActiveView({
+    language: "en",
+    activeView: "chart",
+    loading: false,
+    stats,
+    selectedModels: Object.fromEntries(visibleModels.map((model) => [model, true])),
+    startDate: "2026-05-30",
+    endDate: "2026-05-30"
+  }, visibleModels);
 
   imageModels.forEach((model) => {
     assert.match(html, new RegExp(`<strong>${model}<\\/strong>`), model);
   });
-  assert.match(html, /Image generation/);
+  assert.match(html, /usage-count-features[\s\S]*Image generation <b>1<\/b>/);
   assert.doesNotMatch(html, /<strong>image-2-image<\/strong>/);
   assert.doesNotMatch(html, /Dirty zero-count image feature row/);
 });
@@ -743,30 +997,163 @@ test("dashboard page theme detects dark computed ChatGPT background without dark
   }
 });
 
-test("popup theme: stored ChatGPT theme drives popup CSS variables (same token set as in-page panel)", () => {
+test("popup theme: the shared manual theme mode drives popup CSS variables", () => {
   const applied = {};
   const popupEl = { style: { setProperty(name, value) { applied[name] = value; } } };
   const container = { querySelector(sel) { return sel === ".usage-dashboard-popup" ? popupEl : null; } };
-  const state = { options: { surface: "popup" }, container, resolvedPopupTheme: "dark" };
+  const state = { options: { surface: "popup" }, container, themeMode: "dark" };
 
   dashboard._test.applyPopupThemeVariables(state);
   // 暗色:surface-page 与 surface-panel 同为 #2a2b32(原来 page 是 #1a1a2e navy,与页面内面板有色差);
   // 统一后弹窗与页面内面板背景真正一致,且不是纯黑(用户:两个面板色差不一样、别黑)。
   assert.equal(applied["--usage-surface-page"], "#2a2b32");
   assert.equal(applied["--usage-text-primary"], "#ececf1");
+  assert.equal(applied["--usage-chart-series-1"], "#60a5fa");
+  const darkEffortColors = [
+    "--usage-effort-max",
+    "--usage-effort-extended",
+    "--usage-effort-high",
+    "--usage-effort-standard",
+    "--usage-effort-medium",
+    "--usage-effort-low",
+    "--usage-effort-min",
+    "--usage-effort-none",
+    "--usage-effort-unknown"
+  ].map((name) => applied[name]);
+  assert.equal(new Set(darkEffortColors).size, darkEffortColors.length);
+  assert.equal(applied["color-scheme"], "dark");
 
-  state.resolvedPopupTheme = "light";
+  state.themeMode = "light";
   dashboard._test.applyPopupThemeVariables(state);
   // 亮色:surface-page 也统一成 #fbfcfa(原来是 #f7f8f6,与页面内面板 #fbfcfa 有细微色差)
   assert.equal(applied["--usage-surface-page"], "#fbfcfa");
   assert.equal(applied["--usage-text-primary"], "#18201c");
+  assert.equal(applied["--usage-chart-series-1"], "#2563eb");
+  const lightEffortColors = [
+    "--usage-effort-max",
+    "--usage-effort-extended",
+    "--usage-effort-high",
+    "--usage-effort-standard",
+    "--usage-effort-medium",
+    "--usage-effort-low",
+    "--usage-effort-min",
+    "--usage-effort-none",
+    "--usage-effort-unknown"
+  ].map((name) => applied[name]);
+  assert.equal(new Set(lightEffortColors).size, lightEffortColors.length);
+  assert.equal(applied["color-scheme"], "light");
 
   // 非 popup 表面不受影响(该函数只服务弹窗)
   const pageApplied = {};
   const pageEl = { style: { setProperty(n, v) { pageApplied[n] = v; } } };
-  const pageState = { options: { surface: "page" }, container: { querySelector() { return pageEl; } }, resolvedPopupTheme: "dark" };
+  const pageState = { options: { surface: "page" }, container: { querySelector() { return pageEl; } }, themeMode: "dark" };
   dashboard._test.applyPopupThemeVariables(pageState);
   assert.equal(Object.keys(pageApplied).length, 0);
+});
+
+test("theme mode supports system, light, and dark without inheriting the host page theme", () => {
+  const previousMatchMedia = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: true });
+  try {
+    assert.equal(dashboard._test.normalizeThemeMode("unsupported"), "system");
+    assert.equal(dashboard._test.resolveDashboardTheme({ themeMode: "system" }), "dark");
+    assert.equal(dashboard._test.resolveDashboardTheme({ themeMode: "light" }), "light");
+    assert.equal(dashboard._test.resolveDashboardTheme({ themeMode: "dark" }), "dark");
+  } finally {
+    globalThis.matchMedia = previousMatchMedia;
+  }
+});
+
+test("every reasoning effort strength receives its own visual color class", () => {
+  const mapped = {
+    max: dashboard._test.reasoningEffortClass("max"),
+    extended: dashboard._test.reasoningEffortClass("extended"),
+    high: dashboard._test.reasoningEffortClass("high"),
+    standard: dashboard._test.reasoningEffortClass("standard"),
+    medium: dashboard._test.reasoningEffortClass("medium"),
+    low: dashboard._test.reasoningEffortClass("low"),
+    min: dashboard._test.reasoningEffortClass("min"),
+    none: dashboard._test.reasoningEffortClass("none"),
+    unknown: dashboard._test.reasoningEffortClass("unspecified")
+  };
+
+  assert.deepEqual(mapped, {
+    max: "max",
+    extended: "extended",
+    high: "high",
+    standard: "standard",
+    medium: "medium",
+    low: "low",
+    min: "min",
+    none: "none",
+    unknown: "unknown"
+  });
+  assert.equal(new Set(Object.values(mapped)).size, Object.keys(mapped).length);
+  assert.equal(dashboard._test.reasoningEffortClass("xhigh"), "extended");
+  assert.equal(dashboard._test.reasoningEffortClass("minimal"), "min");
+});
+
+test("internal statistics order reasoning effort from low to high and keeps units only on the request group", () => {
+  const requestModel = "gpt-5-6-thinking";
+  const responseModel = "gpt-5-6-thinking";
+  const efforts = ["max", "low", "standard", "", "none", "extended", "medium", "min", "high"];
+  const stats = createStats();
+  stats.totals = { "GPT-5.6 Sol": efforts.length };
+  stats.byDate = { "2026-08-23": { "GPT-5.6 Sol": efforts.length } };
+  stats.events = efforts.map((effort, index) => ({
+    model: "GPT-5.6 Sol",
+    requestModel,
+    responseModel,
+    requestReasoningEffort: effort,
+    usageFeatures: index === 0 ? ["web_search"] : [],
+    conversationId: "effort-order",
+    pageTitle: "Effort order",
+    submittedAt: `2026-08-23T10:${String(index).padStart(2, "0")}:00.000Z`
+  }));
+  const html = dashboard._test.renderModelCountRows({
+    language: "en",
+    stats,
+    statisticsMode: "internal",
+    sourceModeFilter: "all",
+    startDate: "2026-08-23",
+    endDate: "2026-08-23",
+    loading: false
+  }, [requestModel]);
+  const visible = visibleUsageText(html);
+  const orderedLabels = ["none", "min", "low", "medium", "standard", "high", "extended", "max", "Unknown"];
+  const positions = orderedLabels.map((label) => visible.indexOf(label));
+
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual([...positions].sort((left, right) => left - right), positions);
+  assert.match(html, /usage-internal-count">9 times<\/b>/);
+  assert.match(
+    html,
+    /usage-internal-response-value"><code>gpt-5-6-thinking<\/code><span class="usage-internal-efforts-inline" aria-label="Reasoning effort">[\s\S]*usage-internal-subcount">9<\/b>/
+  );
+  assert.doesNotMatch(html, /<span class="usage-record-label">Reasoning effort<\/span>/);
+  assert.match(html, /Web search <b>1<\/b>/);
+  assert.equal((html.match(/\btimes\b/g) || []).length, 1);
+});
+
+test("statistics mode keeps one stable chart title while changing the plotted classification", () => {
+  const stats = createStatisticsModeStats();
+  ["mapped", "internal"].forEach((statisticsMode) => {
+    const models = statisticsMode === "mapped"
+      ? ["GPT-5.6 Sol", "GPT-5.6 Luna"]
+      : ["gpt-5-6-thinking", "gpt-5-6-pro", "__unknown_request_model__", "gpt-5.6-luna-wm"];
+    const html = dashboard.renderActiveView({
+      language: "en",
+      activeView: "chart",
+      statisticsMode,
+      startDate: "2026-08-23",
+      endDate: "2026-08-23",
+      selectedModels: Object.fromEntries(models.map((model) => [model, true])),
+      stats
+    }, models);
+
+    assert.match(html, /<div class="usage-chart-head"><strong>Model usage trend<\/strong>/);
+    assert.doesNotMatch(html, /Mapped model usage trend|Internal request model usage trend/);
+  });
 });
 
 test("dashboard page theme treats dark main surface as dark over light page chrome", () => {
@@ -824,7 +1211,7 @@ test("dashboard render prunes stale selected zero-count models from count, chips
   dashboard._test.render(state);
 
   assert.equal(state.selectedModels["image-2-image"], undefined);
-  assert.match(container.innerHTML, /10 total \| 4 selected/);
+  assert.doesNotMatch(container.innerHTML, /answered|pending|related conversations|historical records not linked/);
   ["gpt-image", "dall-e", "image-1", "image-2"].forEach((model) => {
     assert.match(container.innerHTML, new RegExp(`data-model-toggle="${model}" checked`), `${model} chip is selected`);
     assert.match(container.innerHTML, new RegExp(`data-model="${model}"`), `${model} chart series is rendered`);
@@ -859,7 +1246,7 @@ test("dashboard export view heading shows Export, not the stats title/subtitle",
 
   // 导出页标题应是 Export,而不是统计页的 "Model usage" + "X total | N selected"(用户:导出界面标题不对)。
   assert.match(container.innerHTML, /<h2>Export<\/h2>/);
-  assert.match(container.innerHTML, /Choose one or more conversations from the list/);
+  assert.doesNotMatch(container.innerHTML, /Choose one or more conversations from the list/);
   assert.match(container.innerHTML, /data-export-conv="chat-0001"/);
   assert.match(container.innerHTML, /data-export-conv="chat-0002"/);
   assert.match(container.innerHTML, /Archived/);
@@ -867,6 +1254,63 @@ test("dashboard export view heading shows Export, not the stats title/subtitle",
   assert.doesNotMatch(container.innerHTML, /data-export-scope=/);
   assert.match(container.innerHTML, /data-export-format="json" disabled/);
   assert.doesNotMatch(container.innerHTML, /\d+ total \| \d+ selected/);
+});
+
+test("popup and page dashboards share aligned header controls and popup spacing", () => {
+  const popupContainer = new DashboardTestContainer();
+  const pageContainer = new DashboardTestContainer();
+  const base = {
+    language: "en",
+    activeView: "chart",
+    loading: false,
+    stats: createStats(),
+    selectedModels: { "future-family-2026-thinking": true },
+    startDate: "2026-05-30",
+    endDate: "2026-05-30",
+    statusText: "",
+    statusError: false,
+    statusScope: "global"
+  };
+
+  dashboard._test.render({
+    ...base,
+    container: popupContainer,
+    options: { surface: "popup" }
+  });
+  dashboard._test.render({
+    ...base,
+    container: pageContainer,
+    options: { surface: "page", onClose() {} }
+  });
+
+  assert.match(popupContainer.innerHTML, /usage-header-action usage-refresh/);
+  assert.match(popupContainer.innerHTML, /usage-header-action usage-settings-trigger/);
+  assert.equal((popupContainer.innerHTML.match(/class="usage-settings-menu"/g) || []).length, 1);
+  assert.doesNotMatch(popupContainer.innerHTML, /usage-language-toggle|data-language-toggle/);
+  assert.doesNotMatch(popupContainer.innerHTML, /usage-panel-close/);
+  assert.match(pageContainer.innerHTML, /usage-header-action usage-refresh/);
+  assert.match(pageContainer.innerHTML, /usage-header-action usage-settings-trigger/);
+  assert.equal((pageContainer.innerHTML.match(/class="usage-settings-menu"/g) || []).length, 1);
+  assert.doesNotMatch(pageContainer.innerHTML, /usage-language-toggle|data-language-toggle/);
+  assert.match(pageContainer.innerHTML, /usage-header-action usage-panel-close/);
+  ["language", "source", "statistics", "sections"].forEach((category) => {
+    assert.match(popupContainer.innerHTML, new RegExp(`data-settings-category="${category}"`));
+    assert.match(pageContainer.innerHTML, new RegExp(`data-settings-category="${category}"`));
+  });
+  assert.doesNotMatch(popupContainer.innerHTML, /data-settings-category="dates"/);
+
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "dashboard.js"), "utf8");
+  assert.match(source, /\.usage-dashboard-page\{[^}]*padding:8px/);
+  assert.match(source, /\.usage-topline\{[^}]*align-items:center;[^}]*min-height:30px/);
+  assert.match(source, /\.usage-header-action\{[^}]*height:30px;[^}]*border:0/);
+  assert.match(source, /\.usage-dashboard button,\.usage-dashboard select,\.usage-dashboard input\{font:inherit\}/);
+  assert.match(source, /\.usage-settings-item:hover>\.usage-settings-submenu,\.usage-settings-item:focus-within>\.usage-settings-submenu/);
+  assert.match(source, /\.usage-settings-submenu\{[^}]*right:calc\(100% - 1px\)/);
+  assert.doesNotMatch(source, /\.usage-dashboard-page \.usage-view-tabs\{/);
+  assert.doesNotMatch(source, /\.usage-dashboard-page \.usage-view-panel\{/);
+
+  const popupSource = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "popup.js"), "utf8");
+  assert.match(popupSource, /onLanguageChange[\s\S]*document\.documentElement\.lang/);
 });
 
 test("dashboard render shows empty state when stale selected zero-count model is the only model", () => {
@@ -889,14 +1333,14 @@ test("dashboard render shows empty state when stale selected zero-count model is
   dashboard._test.render(state);
 
   assert.equal(state.selectedModels["image-2-image"], undefined);
-  assert.match(container.innerHTML, /0 total \| 0 selected/);
+  assert.doesNotMatch(container.innerHTML, /total ·|answered|pending/);
   assert.match(container.innerHTML, /No model records yet\./);
   assert.doesNotMatch(container.innerHTML, /data-model-toggle=/);
   assert.doesNotMatch(container.innerHTML, /data-model="image-2-image"/);
   assert.doesNotMatch(container.innerHTML, />image-2-image</);
 });
 
-test("usage chart separates date ticks, axis label, and legend rows", () => {
+test("model toggles are the single chart visibility and legend control", () => {
   const model = "future-family-2026-thinking";
   const html = dashboard.renderActiveView(
     {
@@ -912,21 +1356,84 @@ test("usage chart separates date ticks, axis label, and legend rows", () => {
   );
   const dateY = Number(html.match(/class="usage-axis usage-axis-date"[^>]*y="([0-9.]+)"|y="([0-9.]+)" class="usage-axis usage-axis-date"/)?.slice(1).find(Boolean));
   const xAxisY = Number(html.match(/y="([0-9.]+)" class="usage-axis usage-axis-label" text-anchor="end">Date/)?.[1]);
-  const legendY = Number(html.match(/y="([0-9.]+)" class="usage-axis usage-axis-label">Legend/)?.[1]);
 
   assert.match(html, /Model usage trend/);
-  assert.match(html, />Count<\/text>/);
+  assert.doesNotMatch(html, /Mapped model usage trend|Internal request model usage trend/);
+  assert.match(html, /<small>Count<\/small>/);
   assert.match(html, />Date<\/text>/);
-  assert.match(html, />Legend<\/text>/);
+  assert.match(html, /data-model-toggle="future-family-2026-thinking" checked/);
+  assert.doesNotMatch(html, />Legend<\/text>|usage-chart-legend-item/);
   assert.ok(Number.isFinite(dateY), "date tick y position should be rendered");
   assert.ok(Number.isFinite(xAxisY), "x-axis label y position should be rendered");
-  assert.ok(Number.isFinite(legendY), "legend label y position should be rendered");
   assert.ok(xAxisY - dateY >= 10, "x-axis label should not overlap date ticks");
-  assert.ok(legendY - xAxisY >= 10, "legend row should not overlap x-axis label");
 });
 
-test("the default date range ends on the browser-local current day", () => {
-  const today = localDateKey();
+test("chart colors stay aligned with model toggles when an earlier model is hidden", () => {
+  const model = "future-family-2026-instant";
+  const html = dashboard.renderActiveView(
+    {
+      language: "en",
+      activeView: "chart",
+      loading: false,
+      stats: createStats(),
+      selectedModels: { [model]: true },
+      startDate: "2026-05-30",
+      endDate: "2026-05-30"
+    },
+    [model]
+  );
+
+  assert.match(
+    html,
+    /style="--chip:var\(--usage-chart-series-2,#dc2626\)"><input type="checkbox" data-model-toggle="future-family-2026-instant" checked/
+  );
+  assert.match(
+    html,
+    /fill="var\(--usage-chart-series-2,#dc2626\)" data-model="future-family-2026-instant"/
+  );
+});
+
+test("chart path and points animate in trajectory order without shifting point positions", () => {
+  const model = "future-family-2026-thinking";
+  const stats = createStats();
+  stats.totals = { [model]: 6 };
+  stats.byDate = {
+    "2026-05-28": { [model]: 1 },
+    "2026-05-29": { [model]: 2 },
+    "2026-05-30": { [model]: 3 }
+  };
+  const html = dashboard.renderActiveView(
+    {
+      language: "en",
+      activeView: "chart",
+      loading: false,
+      stats,
+      selectedModels: { [model]: true },
+      startDate: "2026-05-28",
+      endDate: "2026-05-30"
+    },
+    [model]
+  );
+  const delays = Array.from(
+    html.matchAll(/class="usage-point"[^>]*style="--usage-point-delay:([0-9.]+)s"/g),
+    (match) => Number(match[1])
+  );
+  const source = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "src", "dashboard.js"),
+    "utf8"
+  );
+
+  assert.match(html, /<g class="usage-series"[^>]*><path class="usage-line"/);
+  assert.deepEqual(delays, [0.06, 0.35, 0.64]);
+  assert.match(source, /\.usage-series\{[^}]*clip-path:inset\(0 100% 0 0\);[^}]*animation:usage-series-reveal \.72s/);
+  assert.match(source, /\.usage-line\{[^}]*stroke-dasharray:var\(--usage-line-dash,none\)/);
+  assert.match(source, /\.usage-point\{[^}]*animation:usage-point-in \.18s ease-out var\(--usage-point-delay,\.06s\)/);
+  assert.match(source, /@keyframes usage-point-in\{from\{opacity:0\}to\{opacity:1\}\}/);
+  assert.doesNotMatch(source, /@keyframes usage-point-in\{[^}]*transform:/);
+});
+
+test("the default date range ends on the current UTC calendar day", () => {
+  const today = utcDateKey();
   const model = "future-family-current-day";
   const data = dashboard.chartSeries(
     {
@@ -947,11 +1454,11 @@ test("the default date range ends on the browser-local current day", () => {
   assert.equal(data.series[0].values.at(-1), 1);
 });
 
-test("saved or entered future dates are clamped to the browser-local current day", () => {
-  const today = localDateKey();
+test("saved or entered future dates are clamped to the current UTC calendar day", () => {
+  const today = utcDateKey();
   const tomorrowDate = new Date();
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrow = localDateKey(tomorrowDate);
+  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
+  const tomorrow = utcDateKey(tomorrowDate);
 
   assert.equal(dashboard._test.dateNoLaterThanToday(tomorrow), today);
   assert.equal(
@@ -980,10 +1487,8 @@ test("renderModelTextList keeps legacy aggregate details and conversations insid
   assert.match(html, /reasoning.effort=high/);
   assert.match(html, /text.verbosity=medium/);
   assert.doesNotMatch(html, /model=future-family-2026-thinking/);
-  assert.match(html, /Features/);
-  assert.match(html, /Deep Research/);
-  assert.match(html, /Image generation/);
-  assert.match(html, /Related conversations/);
+  assert.doesNotMatch(html, /Features|usage-feature-list|usage-feature-row/);
+  assert.doesNotMatch(html, />Related conversations · \d+<\/summary>/);
   assert.match(html, /Thinking conversation/);
   assert.match(html, /Instant conversation/);
   assert.match(html, /usage-relation-conversation/);
@@ -1018,6 +1523,24 @@ test("related conversation rows render title links without selection controls", 
   assert.doesNotMatch(indexRow, />Open</);
 });
 
+test("relation cards hide the related-conversation label and reveal the list when the card is opened", () => {
+  const html = dashboard.renderModelTextList(createStats(), { language: "en" });
+  const chineseHtml = dashboard.renderModelTextList(createStats(), { language: "zh" });
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "dashboard.js"), "utf8");
+
+  assert.match(
+    html,
+    /<details class="usage-model-relation(?: legacy-unlinked)?"><summary class="usage-relation-summary" data-relation-toggle aria-label="Related conversations · 1">/
+  );
+  assert.doesNotMatch(html, />Related conversations · 1<\/summary>/);
+  assert.doesNotMatch(chineseHtml, />关联对话 · 1<\/summary>/);
+  assert.doesNotMatch(html, /<details class="usage-model-relation" open/);
+  assert.match(
+    source,
+    /\.usage-model-relation:not\(\[open\]\)>\.usage-relation-conversation-list\{display:none\}/
+  );
+});
+
 test("usage count details keep request-response relations and their conversations in one hierarchy", () => {
   const html = dashboard.renderActiveView(
     {
@@ -1036,17 +1559,122 @@ test("usage count details keep request-response relations and their conversation
   const details = html.slice(detailsStart);
 
   assert.notEqual(detailsStart, -1);
-  assert.match(html, /<div class="usage-count-row">/);
+  assert.match(html, /<summary class="usage-count-row">/);
   assert.doesNotMatch(html, /data-model-record-toggle/);
   assert.doesNotMatch(html, /usage-count-caret/);
-  assert.match(details, /future-family-2026-thinking[\s\S]*Response pending/);
-  assert.match(details, /Reasoning effort/);
-  assert.match(details, /Features/);
-  assert.match(details, /Related conversations/);
-  assert.match(details, /usage-relation-conversation/);
+  assert.doesNotMatch(details, /Request model|Response model|Reasoning effort/);
+  assert.doesNotMatch(details, />Related conversations · \d+<\/summary>/);
+  assert.match(details, /usage-record-session-row/);
+  assert.match(details, /Thinking conversation/);
   assert.doesNotMatch(details, /usage-session-titlebar/);
   assert.match(source, /\.usage-count-record\{[^}]*border:0;[^}]*border-bottom:1px solid var\(--usage-border-divider\);[^}]*background:transparent/);
-  assert.match(source, /\.usage-model-relation\{[^}]*border:1px solid var\(--usage-border-panel\)/);
+  assert.match(source, /\.usage-mapped-record>\.usage-count-row\{cursor:pointer\}/);
+});
+
+test("relation cards omit feature detail rows in both languages while title pills remain", () => {
+  ["en", "zh"].forEach((language) => {
+    const html = dashboard.renderActiveView(
+      {
+        language,
+        activeView: "chart",
+        loading: false,
+        stats: createStats(),
+        selectedModels: { "future-family-2026-thinking": true },
+        startDate: "2026-05-30",
+        endDate: "2026-05-30"
+      },
+      ["future-family-2026-thinking"]
+    );
+    const details = html.slice(html.indexOf('data-model-record-details="future-family-2026-thinking"'));
+
+    assert.match(html, /usage-count-features/);
+    assert.match(html, /Deep Research/);
+    assert.doesNotMatch(details, /<span class="usage-record-label">(?:Features|功能)<\/span>/);
+    assert.doesNotMatch(details, /usage-feature-row|usage-feature-list/);
+  });
+});
+
+test("GPTs feature counts stay only in title pills across chart, text, page, and popup surfaces", () => {
+  const model = "future-family-2026-thinking";
+  const stats = createStats();
+  stats.totals = { [model]: 15 };
+  stats.byDate = { "2026-05-30": { [model]: 15 } };
+  stats.events = Array.from({ length: 15 }, (_, index) => ({
+    model,
+    requestModel: model,
+    responseModel: "future-family-2026-pro",
+    requestReasoningEffort: "high",
+    usageFeatures: ["gpts"],
+    sourceMode: "chat",
+    submittedAt: `2026-05-30T15:${String(index).padStart(2, "0")}:00.000Z`
+  }));
+  stats.featuresByModel = {
+    [model]: {
+      total: 15,
+      features: {
+        gpts: {
+          id: "gpts",
+          count: 15,
+          lastSubmittedAt: "2026-05-30T15:10:00.000Z"
+        }
+      }
+    }
+  };
+  stats.relationsByModel = {
+    [model]: {
+      relation: {
+        requestModel: model,
+        responseModel: "future-family-2026-pro",
+        count: 15,
+        efforts: { high: 15 },
+        features: { gpts: 15 },
+        conversations: {}
+      }
+    }
+  };
+
+  ["en", "zh"].forEach((language) => {
+    const state = {
+      language,
+      activeView: "chart",
+      loading: false,
+      stats,
+      selectedModels: { [model]: true },
+      startDate: "2026-05-30",
+      endDate: "2026-05-30",
+      statusText: "",
+      statusError: false,
+      statusScope: "global"
+    };
+    const chartHtml = dashboard.renderActiveView(state, [model]);
+    const textHtml = dashboard.renderModelTextList(stats, state);
+    const relationStart = chartHtml.indexOf('<div class="usage-model-relations">');
+    const relationHtml = chartHtml.slice(relationStart);
+
+    assert.match(chartHtml, /usage-count-features"><span>GPTs <b>15<\/b><\/span>/);
+    assert.match(textHtml, /usage-count-features"><span>GPTs <b>15<\/b><\/span>/);
+    assert.doesNotMatch(relationHtml, /<span class="usage-record-label">(?:Features|功能)<\/span>/);
+    assert.doesNotMatch(relationHtml, /GPTs 15 (?:times|次)|usage-feature-row|usage-feature-list/);
+    assert.doesNotMatch(relationHtml, /(?:Features|功能)[\s\S]*>—</);
+
+    ["popup", "page"].forEach((surface) => {
+      const container = new DashboardTestContainer();
+      dashboard._test.render({
+        ...state,
+        container,
+        options: surface === "page"
+          ? { surface, onClose() {} }
+          : { surface }
+      });
+      const renderedRelation = container.innerHTML.slice(
+        container.innerHTML.indexOf('<div class="usage-model-relations">')
+      );
+
+      assert.match(container.innerHTML, /usage-count-features"><span>GPTs <b>15<\/b><\/span>/);
+      assert.doesNotMatch(renderedRelation, /<span class="usage-record-label">(?:Features|功能)<\/span>/);
+      assert.doesNotMatch(renderedRelation, /GPTs 15 (?:times|次)|usage-feature-row|usage-feature-list/);
+    });
+  });
 });
 
 test("usage count details render inline without popup row toggles", () => {
@@ -1072,10 +1700,10 @@ test("usage count details render inline without popup row toggles", () => {
   assert.equal(toggle, null);
   assert.match(container.innerHTML, /usage-count-details" data-model-record-details="future-family-2026-thinking">/);
   assert.doesNotMatch(container.innerHTML, /usage-count-details" data-model-record-details="future-family-2026-thinking" hidden/);
-  assert.doesNotMatch(container.innerHTML, /<details class="usage-count-record">/);
-  assert.doesNotMatch(container.innerHTML, /<summary class="usage-count-row">/);
+  assert.match(container.innerHTML, /<details class="usage-count-record usage-mapped-record"/);
+  assert.match(container.innerHTML, /<summary class="usage-count-row">/);
   assert.doesNotMatch(container.innerHTML, /<button class="usage-count-row"/);
-  assert.match(container.innerHTML, /<div class="usage-count-row">/);
+  assert.doesNotMatch(container.innerHTML, /<div class="usage-count-row">/);
 });
 
 test("usage date range filters model counts, features, parameters, and conversation index", () => {
@@ -1090,6 +1718,8 @@ test("usage date range filters model counts, features, parameters, and conversat
   }));
   stats.events.push({
     model: "future-family-2026-thinking",
+    requestModel: "future-family-2026-thinking",
+    responseModel: "future-family-2026-thinking",
     modelParameters: {
       model: "future-family-2026-thinking",
       "reasoning.effort": "low"
@@ -1113,9 +1743,9 @@ test("usage date range filters model counts, features, parameters, and conversat
     ["future-family-2026-thinking"]
   );
 
-  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2<\/b>/);
+  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2 times<\/b>/);
   assert.match(html, /Deep Research <b>2<\/b>/);
-  assert.match(html, /Reasoning effort[\s\S]*<b>high<\/b> 2 times/);
+  assert.doesNotMatch(html, /Reasoning effort/);
   assert.match(html, /Thinking conversation/);
   assert.doesNotMatch(html, /Web search/);
   assert.doesNotMatch(html, /reasoning\.effort=low/);
@@ -1124,10 +1754,16 @@ test("usage date range filters model counts, features, parameters, and conversat
 
 test("dashboard normalizes raw event feature aliases before display", () => {
   const stats = createStats();
+  stats.featuresByModel["future-family-2026-thinking"] = {
+    total: 1,
+    features: {}
+  };
   stats.events = [
     {
       model: "future-family-2026-thinking",
-      usageFeatures: ["websearch", "deepsearch", "dalle", "canvases"],
+      requestModel: "future-family-2026-thinking",
+      responseModel: "future-family-2026-thinking",
+      usageFeatures: ["websearch", "dalle", "canvases"],
       submittedAt: "2026-05-30T15:10:00.000Z"
     }
   ];
@@ -1145,15 +1781,13 @@ test("dashboard normalizes raw event feature aliases before display", () => {
   );
 
   assert.match(html, /Web Search|Web search/);
-  assert.match(html, /Deep Research/);
   assert.match(html, /Image generation/);
   assert.match(html, /Canvas/);
   assert.doesNotMatch(html, /websearch/);
-  assert.doesNotMatch(html, /deepsearch/);
   assert.doesNotMatch(html, /dalle/);
 });
 
-test("explicit date range does not reuse cached sessions outside the selected range", () => {
+test("explicit date range uses dated relations and ignores cached sessions outside the range", () => {
   const stats = createStats();
   stats.sessionsByModel["future-family-2026-thinking"] = {
     outside: {
@@ -1178,15 +1812,15 @@ test("explicit date range does not reuse cached sessions outside the selected ra
     ["future-family-2026-thinking"]
   );
 
-  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2<\/b>/);
-  assert.match(html, /No conversations for this record/);
+  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2 times<\/b>/);
+  assert.match(html, /Thinking conversation/);
   assert.doesNotMatch(html, /Outside cached conversation/);
   assert.doesNotMatch(html, /2026-06-01/);
 });
 
-test("model rows keep today's count inside the selected date range", () => {
+test("model rows use the selected range count without repeating today's or all-time count", () => {
   const stats = createStats();
-  const today = localDateKey();
+  const today = utcDateKey();
   const selectedDate = today === "2026-05-30" ? "2026-05-29" : "2026-05-30";
   stats.totals = { "future-family-2026-thinking": 9 };
   stats.byDate = {
@@ -1200,8 +1834,8 @@ test("model rows keep today's count inside the selected date range", () => {
     endDate: selectedDate
   });
 
-  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2<\/b><small>Range 2 \| All time 9 \| Today 0<\/small>/);
-  assert.doesNotMatch(html, /Today 7/);
+  assert.match(html, /future-family-2026-thinking[\s\S]*<b>2 times<\/b>/);
+  assert.doesNotMatch(html, /Range|All time|Today/);
 });
 
 test("modelVariants returns exact response model counts", () => {
@@ -1255,7 +1889,376 @@ test("modelVariants uses responseModel instead of the requested route for actual
   assert.equal(variants[0].apiModel, "gpt-5-6-pro");
 });
 
-test("request-only events stay in a pending request-response relation", () => {
+test("one statisticsMode switch changes both chart series and lower statistics", () => {
+  const { container, state } = renderStatisticsModeDashboard("mapped");
+  const controls = container.querySelectorAll("[data-statistics-mode]");
+  const mappedControl = controls.find((control) => control.getAttribute("data-statistics-mode") === "mapped");
+  const internalControl = controls.find((control) => control.getAttribute("data-statistics-mode") === "internal");
+
+  assert.equal(controls.length, 2, "the dashboard should render one two-choice statisticsMode switch");
+  assert.ok(mappedControl, "the shared switch should include mapped mode");
+  assert.ok(internalControl, "the shared switch should include internal mode");
+  assert.equal(mappedControl.getAttribute("aria-pressed"), "true");
+  assert.deepEqual(
+    usageModelChips(container.innerHTML).map((chip) => chip.label).sort(),
+    ["GPT-5.6 Luna", "GPT-5.6 Sol"]
+  );
+  assert.deepEqual(
+    usageCountRecords(container.innerHTML).map((record) => record.heading).sort(),
+    ["GPT-5.6 Luna", "GPT-5.6 Sol"]
+  );
+
+  internalControl.dispatch("click");
+
+  assert.equal(state.statisticsMode, "internal");
+  assert.deepEqual(
+    usageModelChips(container.innerHTML).map((chip) => chip.label).sort(),
+    ["Unknown", "gpt-5-6-pro", "gpt-5-6-thinking", "gpt-5.6-luna-wm"].sort(),
+    "one switch action should replace the chart series with requestModel series"
+  );
+  assert.deepEqual(
+    usageCountRecords(container.innerHTML).map((record) => record.heading).sort(),
+    ["Unknown", "gpt-5-6-pro", "gpt-5-6-thinking", "gpt-5.6-luna-wm"].sort(),
+    "the same switch action should replace the lower statistics with requestModel groups"
+  );
+  const rerenderedControls = container.querySelectorAll("[data-statistics-mode]");
+  assert.equal(rerenderedControls.length, 2);
+  assert.equal(
+    rerenderedControls.find((control) => control.getAttribute("data-statistics-mode") === "internal")
+      ?.getAttribute("aria-pressed"),
+    "true"
+  );
+});
+
+test("trend chart and text statistics can be shown or hidden independently", () => {
+  const { container, state } = renderStatisticsModeDashboard("internal", "en");
+  const controls = container.querySelectorAll("[data-statistics-section]");
+  const trend = controls.find((control) => control.getAttribute("data-statistics-section") === "trend");
+  const textStatistics = controls.find((control) => control.getAttribute("data-statistics-section") === "text");
+
+  assert.equal(controls.length, 2);
+  assert.equal(trend.checked, true);
+  assert.equal(textStatistics.checked, true);
+  assert.match(container.innerHTML, /class="usage-settings-menu"/);
+  assert.match(container.innerHTML, /data-settings-category="sections"/);
+  assert.doesNotMatch(container.innerHTML, /usage-statistics-display-menu|usage-statistics-display-popover/);
+  assert.doesNotMatch(container.innerHTML, /<button[^>]*data-statistics-section=/);
+  assert.match(container.innerHTML, /class="usage-chart-wrap"/);
+  assert.match(container.innerHTML, /class="usage-count-list"/);
+
+  trend.checked = false;
+  trend.dispatch("change");
+  assert.equal(state.showTrendChart, false);
+  assert.doesNotMatch(container.innerHTML, /class="usage-chart-wrap"/);
+  assert.match(container.innerHTML, /class="usage-count-list"/);
+  assert.equal(
+    container.querySelectorAll("[data-statistics-section]")
+      .find((control) => control.getAttribute("data-statistics-section") === "trend")
+      .checked,
+    false
+  );
+
+  const rerenderedText = container.querySelectorAll("[data-statistics-section]")
+    .find((control) => control.getAttribute("data-statistics-section") === "text");
+  rerenderedText.checked = false;
+  rerenderedText.dispatch("change");
+  assert.equal(state.showTextStatistics, false);
+  assert.doesNotMatch(container.innerHTML, /class="usage-chart-wrap"/);
+  assert.doesNotMatch(container.innerHTML, /class="usage-count-list"/);
+  assert.equal(container.querySelectorAll("[data-statistics-section]").length, 2);
+
+  const rerenderedTrend = container.querySelectorAll("[data-statistics-section]")
+    .find((control) => control.getAttribute("data-statistics-section") === "trend");
+  rerenderedTrend.checked = true;
+  rerenderedTrend.dispatch("change");
+  assert.equal(state.showTrendChart, true);
+  assert.match(container.innerHTML, /class="usage-chart-wrap"/);
+  assert.doesNotMatch(container.innerHTML, /class="usage-count-list"/);
+});
+
+test("mapped statisticsMode aggregates only public models and hides every internal slug", () => {
+  const { container } = renderStatisticsModeDashboard("mapped");
+  const html = container.innerHTML;
+  const chips = usageModelChips(html);
+  const records = usageCountRecords(html);
+
+  assert.deepEqual(
+    Object.fromEntries(chips.map((chip) => [chip.label, chip.count])),
+    {
+      "GPT-5.6 Sol": "4 times",
+      "GPT-5.6 Luna": "1 times"
+    }
+  );
+  assert.deepEqual(chartPointTotals(html), {
+    "GPT-5.6 Sol": 4,
+    "GPT-5.6 Luna": 1
+  });
+  assert.deepEqual(
+    records.map((record) => record.heading).sort(),
+    ["GPT-5.6 Luna", "GPT-5.6 Sol"]
+  );
+  ["gpt-5-6-thinking", "gpt-5-6-pro", "gpt-5.6-luna-wm"].forEach((slug) => {
+    assert.equal(html.includes(slug), false, `mapped mode must not expose internal slug ${slug}`);
+  });
+});
+
+test("internal statisticsMode charts requestModel and renders one request heading with responseModel children", () => {
+  const { container } = renderStatisticsModeDashboard("internal");
+  const html = container.innerHTML;
+  const chips = usageModelChips(html);
+  const records = usageCountRecords(html);
+  const chipByLabel = Object.fromEntries(chips.map((chip) => [chip.label, chip]));
+  const chartTotals = chartPointTotals(html);
+
+  assert.deepEqual(
+    Object.fromEntries(chips.map((chip) => [chip.label, chip.count])),
+    {
+      "gpt-5-6-thinking": "2 times",
+      "gpt-5-6-pro": "1 times",
+      Unknown: "1 times",
+      "gpt-5.6-luna-wm": "1 times"
+    }
+  );
+  assert.equal(chartTotals[chipByLabel["gpt-5-6-thinking"].key], 2);
+  assert.equal(chartTotals[chipByLabel["gpt-5-6-pro"].key], 1);
+  assert.equal(chartTotals[chipByLabel.Unknown.key], 1);
+  assert.equal(chartTotals[chipByLabel["gpt-5.6-luna-wm"].key], 1);
+  assert.equal(chartTotals["GPT-5.6 Sol"], undefined);
+  assert.equal(chartTotals["GPT-5.6 Luna"], undefined);
+
+  assert.equal(records.filter((record) => record.heading === "gpt-5-6-thinking").length, 1);
+  assert.equal(records.filter((record) => record.heading === "gpt-5-6-pro").length, 1);
+  const thinkingRecord = usageCountRecord(html, "gpt-5-6-thinking");
+  assert.ok(thinkingRecord);
+  assert.equal(usageCountRecordTotal(thinkingRecord), 2);
+  assert.equal(
+    (thinkingRecord.html.match(/class="usage-internal-response-heading">Actual response model<\/small>/g) || []).length,
+    1,
+    "one request-model group should render the actual-response heading once"
+  );
+  assert.match(
+    thinkingRecord.html,
+    /data-response-model-child="gpt-5-6-thinking"[\s\S]*?<code>gpt-5-6-thinking<\/code><span class="usage-internal-efforts-inline" aria-label="Reasoning effort">/
+  );
+  assert.match(thinkingRecord.html, /class="usage-internal-effort-label">Effort<\/small>/);
+  assert.equal(
+    (visibleUsageText(thinkingRecord.html).match(/gpt-5-6-thinking/g) || []).length,
+    2,
+    "the request heading and actual response row must each show the exact slug"
+  );
+  assert.doesNotMatch(thinkingRecord.html, /Same as request model|usage-internal-same-note/);
+  assert.doesNotMatch(thinkingRecord.html, /<span class="usage-record-label">Reasoning effort<\/span>/);
+  assert.match(
+    thinkingRecord.html,
+    /data-response-model-child="gpt-5-6-pro"[\s\S]*?<code>gpt-5-6-pro<\/code>/
+  );
+
+  const chineseHtml = renderStatisticsModeDashboard("internal", "zh").container.innerHTML;
+  const chineseThinkingRecord = usageCountRecord(chineseHtml, "gpt-5-6-thinking");
+  assert.ok(chineseThinkingRecord);
+  assert.equal(
+    (chineseThinkingRecord.html.match(/class="usage-internal-response-heading">实际回复型号<\/small>/g) || []).length,
+    1
+  );
+  assert.match(
+    chineseThinkingRecord.html,
+    /data-response-model-child="gpt-5-6-thinking"[\s\S]*?<code>gpt-5-6-thinking<\/code><span class="usage-internal-efforts-inline" aria-label="思考强度">/
+  );
+  assert.match(chineseThinkingRecord.html, /class="usage-internal-effort-label">强度<\/small>/);
+  assert.doesNotMatch(chineseThinkingRecord.html, /与请求型号一致|usage-internal-same-note/);
+  assert.doesNotMatch(chineseThinkingRecord.html, /<span class="usage-record-label">思考强度<\/span>/);
+  assert.equal(
+    (visibleUsageText(chineseThinkingRecord.html).match(/gpt-5-6-thinking/g) || []).length,
+    2
+  );
+});
+
+test("internal statisticsMode shows unknown request and response independently in both languages", () => {
+  [
+    { language: "en", unknown: "Unknown" },
+    { language: "zh", unknown: "未知" }
+  ].forEach(({ language, unknown }) => {
+    const { container } = renderStatisticsModeDashboard("internal", language);
+    const html = container.innerHTML;
+    const unknownRequest = usageCountRecord(html, unknown);
+    const unknownResponse = usageCountRecord(html, "gpt-5.6-luna-wm");
+
+    assert.ok(unknownRequest, `${language}: missing requestModel should have its own ${unknown} heading`);
+    assert.match(
+      visibleUsageText(unknownRequest.html),
+      new RegExp(`${unknown}[\\s\\S]*gpt-5-6-thinking`)
+    );
+    assert.ok(unknownResponse, `${language}: known requestModel should keep its exact heading`);
+    assert.match(
+      visibleUsageText(unknownResponse.html),
+      new RegExp(`gpt-5\\.6-luna-wm[\\s\\S]*${unknown}`)
+    );
+    assert.equal(
+      (visibleUsageText(unknownResponse.html).match(/gpt-5\.6-luna-wm/g) || []).length,
+      1,
+      `${language}: a missing responseModel must not be filled with requestModel`
+    );
+  });
+});
+
+test("Pro and Thinking can share one mapped public model while remaining separate internal groups", () => {
+  const mapped = renderStatisticsModeDashboard("mapped").container.innerHTML;
+  const internal = renderStatisticsModeDashboard("internal").container.innerHTML;
+  const mappedSol = usageCountRecord(mapped, "GPT-5.6 Sol");
+  const internalThinking = usageCountRecord(internal, "gpt-5-6-thinking");
+  const internalPro = usageCountRecord(internal, "gpt-5-6-pro");
+
+  assert.ok(mappedSol);
+  assert.equal(usageCountRecordTotal(mappedSol), 4);
+  assert.equal(usageCountRecords(mapped).filter((record) => record.heading === "GPT-5.6 Sol").length, 1);
+  assert.ok(internalThinking);
+  assert.ok(internalPro);
+  assert.equal(usageCountRecordTotal(internalThinking), 2);
+  assert.equal(usageCountRecordTotal(internalPro), 1);
+  assert.equal(usageCountRecords(internal).filter((record) => record.heading === "gpt-5-6-thinking").length, 1);
+  assert.equal(usageCountRecords(internal).filter((record) => record.heading === "gpt-5-6-pro").length, 1);
+});
+
+test("internal statistics keeps unavailable request evidence unknown instead of reusing legacy fields", () => {
+  const stats = createStatisticsModeStats();
+  stats.totals = { "GPT-5.6 Sol": 1 };
+  stats.byDate = { "2026-08-23": { "GPT-5.6 Sol": 1 } };
+  stats.events = [{
+    model: "GPT-5.6 Sol",
+    requestModel: "gpt-should-not-be-used",
+    requestModelEvidence: "unavailable",
+    apiModel: "gpt-should-not-be-used",
+    modelParameters: { model: "gpt-should-not-be-used" },
+    responseModel: "gpt-5-6-thinking",
+    submittedAt: "2026-08-23T10:00:00.000Z"
+  }];
+  const state = {
+    language: "en",
+    statisticsMode: "internal",
+    sourceModeFilter: "all",
+    startDate: "2026-08-23",
+    endDate: "2026-08-23"
+  };
+
+  assert.deepEqual(dashboard._test.statisticsTotalsInRange(stats, state), {
+    __unknown_request_model__: 1
+  });
+  const html = dashboard._test.renderModelCountRows(
+    Object.assign({ stats, loading: false }, state),
+    ["__unknown_request_model__"]
+  );
+  assert.match(html, /data-request-model-group="__unknown_request_model__"/);
+  assert.doesNotMatch(html, /gpt-should-not-be-used/);
+  assert.match(html, /gpt-5-6-thinking/);
+});
+
+test("internal statistics retains exact new request and response slugs even when public mapping is absent", () => {
+  const stats = {
+    totals: {},
+    byDate: {},
+    models: {},
+    sessionsByModel: {},
+    variantsByModel: {},
+    featuresByModel: {},
+    parametersByModel: {},
+    relationsByModel: {},
+    events: [{
+      model: "",
+      requestModel: "gpt-9-1-thinking",
+      requestModelEvidence: "trusted",
+      responseModel: "gpt-9-1-pro",
+      submittedAt: "2026-08-23T10:00:00.000Z"
+    }]
+  };
+  const state = {
+    language: "en",
+    statisticsMode: "internal",
+    sourceModeFilter: "all",
+    startDate: "2026-08-23",
+    endDate: "2026-08-23"
+  };
+
+  assert.deepEqual(dashboard._test.statisticsTotalsInRange(stats, state), {
+    "gpt-9-1-thinking": 1
+  });
+  const html = dashboard._test.renderModelCountRows(
+    Object.assign({ stats, loading: false }, state),
+    ["gpt-9-1-thinking"]
+  );
+  assert.match(html, /data-request-model-group="gpt-9-1-thinking"/);
+  assert.match(html, /data-response-model-child="gpt-9-1-pro"/);
+});
+
+test("event-backed statistics warns once when retained event history is incomplete", () => {
+  const stats = Object.assign(createStatisticsModeStats(), { eventHistoryComplete: false });
+  const base = {
+    language: "en",
+    stats,
+    sourceModeFilter: "all",
+    statisticsMode: "mapped"
+  };
+
+  assert.equal(dashboard._test.renderStatisticsCompletenessWarning(base), "");
+  assert.match(
+    dashboard._test.renderStatisticsCompletenessWarning(
+      Object.assign({}, base, { statisticsMode: "internal" })
+    ),
+    /does not represent the full history/
+  );
+  assert.match(
+    dashboard._test.renderStatisticsCompletenessWarning(
+      Object.assign({}, base, { sourceModeFilter: "chat" })
+    ),
+    /does not represent the full history/
+  );
+});
+
+test("internal response children keep feature pills and mixed Chat Work conversation contributions", () => {
+  const stats = createStatisticsModeStats();
+  stats.totals = { "GPT-5.6 Sol": 2 };
+  stats.byDate = { "2026-08-23": { "GPT-5.6 Sol": 2 } };
+  stats.events = [
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-pro",
+      requestReasoningEffort: "high",
+      usageFeatures: ["web_search"],
+      sourceMode: "chat",
+      conversationId: "mixed-source",
+      pageTitle: "Mixed source",
+      submittedAt: "2026-08-23T10:00:00.000Z"
+    },
+    {
+      model: "GPT-5.6 Sol",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-pro",
+      requestReasoningEffort: "max",
+      usageFeatures: ["image_generation"],
+      sourceMode: "work",
+      conversationId: "mixed-source",
+      pageTitle: "Mixed source",
+      submittedAt: "2026-08-23T10:01:00.000Z"
+    }
+  ];
+  const state = {
+    language: "en",
+    stats,
+    statisticsMode: "internal",
+    sourceModeFilter: "all",
+    startDate: "2026-08-23",
+    endDate: "2026-08-23",
+    loading: false
+  };
+  const html = dashboard._test.renderModelCountRows(state, ["gpt-5-6-thinking"]);
+
+  assert.match(html, /Web search <b>1<\/b>/);
+  assert.match(html, /Image generation <b>1<\/b>/);
+  assert.match(html, /usage-source-mode chat">Chat 1<\/span>/);
+  assert.match(html, /usage-source-mode work">Work 1<\/span>/);
+});
+
+test("request-only events show an unknown actual response without inventing a model", () => {
   const stats = createStats();
   stats.totals = { "GPT-5.6 Sol": 2 };
   stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 2 } };
@@ -1286,13 +2289,48 @@ test("request-only events stay in a pending request-response relation", () => {
 
   assert.deepEqual(variants.map((variant) => [variant.name, variant.count]), [["gpt-5-6-pro", 1]]);
   assert.deepEqual(requests.map((request) => [request.name, request.count]), [["gpt-5-6-thinking", 2]]);
-  assert.match(html, /gpt-5-6-thinking<\/code><i>&rarr;<\/i><code>gpt-5-6-pro/);
-  assert.match(html, /待确认实际回复/);
+  assert.match(html, /gpt-5-6-thinking<\/code>[\s\S]*?&rarr;[\s\S]*?<code>gpt-5-6-pro/);
+  assert.match(html, /请求型号<\/small><code>gpt-5-6-thinking<\/code>[\s\S]*?实际回复型号<\/small><code>未知<\/code>/);
+  assert.match(html, /思考强度<\/span>[\s\S]*?<b class="usage-effort-unknown">未知<\/b>/);
   assert.equal((html.match(/gpt-5-6-pro/g) || []).length, 1);
-  assert.equal((html.match(/待确认实际回复/g) || []).length, 1);
 });
 
-test("chart count details show each request-response pair and pending pair together", () => {
+test("a response-only event keeps the exact response relation and labels every missing dimension as unknown", () => {
+  const model = "GPT-5.6 Sol";
+  const stats = createStats();
+  stats.totals = { [model]: 1 };
+  stats.byDate = { "2026-05-30": { [model]: 1 } };
+  stats.events = [{
+    model,
+    requestModel: "",
+    responseModel: "gpt-5-6-thinking",
+    sourceMode: "",
+    conversationId: "response-only",
+    pageTitle: "Response only",
+    pageUrl: "https://chatgpt.com/c/response-only",
+    submittedAt: "2026-05-30T15:00:00.000Z"
+  }];
+
+  const relations = dashboard._test.modelRelations(stats, model, {
+    startDate: "2026-05-30",
+    endDate: "2026-05-30"
+  });
+  const html = dashboard.renderModelTextList(stats, {
+    language: "zh",
+    startDate: "2026-05-30",
+    endDate: "2026-05-30"
+  });
+
+  assert.equal(relations.length, 1);
+  assert.equal(relations[0].requestModel, "");
+  assert.equal(relations[0].responseModel, "gpt-5-6-thinking");
+  assert.match(html, /请求型号<\/small><code>未知<\/code>/);
+  assert.match(html, /实际回复型号<\/small><code>gpt-5-6-thinking<\/code>/);
+  assert.match(html, /思考强度<\/span>[\s\S]*?<b class="usage-effort-unknown">未知<\/b>/);
+  assert.match(html, /usage-source-mode unknown">未知<\/span>/);
+});
+
+test("chart count details show exact request-response pairs and the unknown pair together", () => {
   const stats = createStats();
   stats.totals = { "GPT-5.6 Sol": 3 };
   stats.byDate = { "2026-05-30": { "GPT-5.6 Sol": 3 } };
@@ -1324,18 +2362,32 @@ test("chart count details show each request-response pair and pending pair toget
     {
       language: "zh",
       activeView: "chart",
+      statisticsMode: "internal",
       startDate: "2026-05-30",
       endDate: "2026-05-30",
-      selectedModels: { "GPT-5.6 Sol": true },
+      selectedModels: {
+        "gpt-5-6-thinking": true,
+        "gpt-5-6": true
+      },
       stats
     },
-    ["GPT-5.6 Sol"]
+    ["gpt-5-6-thinking", "gpt-5-6"]
   );
 
-  assert.match(html, /gpt-5-6-thinking<\/code><i>&rarr;<\/i><code>gpt-5-6-thinking/);
-  assert.match(html, /gpt-5-6<\/code><i>&rarr;<\/i><code>gpt-5-6/);
-  assert.match(html, /待确认实际回复/);
-  assert.equal((html.match(/class="usage-model-relation"/g) || []).length, 3);
+  assert.match(html, /data-request-model-group="gpt-5-6-thinking"/);
+  assert.match(html, /data-response-model-child="gpt-5-6-thinking"[\s\S]*<code>gpt-5-6-thinking<\/code>/);
+  assert.match(html, /data-request-model-group="gpt-5-6"/);
+  assert.match(html, /data-response-model-child="gpt-5-6"[\s\S]*<code>gpt-5-6<\/code>/);
+  assert.doesNotMatch(html, /与请求型号一致|usage-internal-same-note/);
+  assert.equal(
+    (html.match(/class="usage-internal-response-heading">实际回复型号<\/small>/g) || []).length,
+    2,
+    "each request-model group should show the actual-response heading once"
+  );
+  assert.equal((html.match(/<code>gpt-5-6-thinking<\/code>/g) || []).length, 2);
+  assert.equal((html.match(/<code>gpt-5-6<\/code>/g) || []).length, 2);
+  assert.match(html, /未知/);
+  assert.equal((html.match(/class="usage-internal-response"/g) || []).length, 3);
 });
 
 test("Chat and Work contributions stay under the same exact request-response relation and their own conversations", () => {
@@ -1389,7 +2441,11 @@ test("Chat and Work contributions stay under the same exact request-response rel
   assert.deepEqual(relations[0].efforts, { high: 1, low: 1 });
   assert.deepEqual(relations[0].features, { web_search: 1, connectors: 1 });
   assert.equal(Object.values(relations[0].conversations).reduce((sum, item) => sum + item.count, 0), 2);
-  assert.match(html, /gpt-5\.6-terra-wm<\/code><i>&rarr;<\/i><code>gpt-5\.6-terra-wm/);
+  assert.match(html, /Request and response model match<\/small><code>gpt-5\.6-terra-wm<\/code>/);
+  assert.doesNotMatch(
+    html,
+    /gpt-5\.6-terra-wm<\/code>[\s\S]*?&rarr;[\s\S]*?<code>gpt-5\.6-terra-wm/
+  );
   assert.match(html, /Work research/);
   assert.match(html, /Chat research/);
   assert.match(html, /class="usage-source-mode work">Work/);
@@ -1550,16 +2606,22 @@ test("dashboard refreshes usage stats when local storage changes", async () => {
   };
 
   try {
-    dashboard.init(container, { surface: "popup" });
+    const instance = dashboard.init(container, { surface: "popup" });
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(storageListeners.length, 1);
-    assert.match(container.innerHTML, /3 total/);
+    assert.equal(storageListeners.length, 2);
+    assert.match(container.innerHTML, /data-model-toggle="future-family-2026-thinking" checked[\s\S]*2 times/);
 
-    storageListeners[0]({ "chatgptModelUsageStats.v1": { newValue: updatedStats } }, "local");
+    instance.state.statisticsDataBusy = true;
+    instance.state.statusText = "Restored 41 usage records";
+    dashboard._test.render(instance.state);
+    storageListeners.forEach((listener) => {
+      listener({ "chatgptModelUsageStats.v1": { newValue: updatedStats } }, "local");
+    });
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
+    instance.state.statisticsDataBusy = false;
   } finally {
     if (typeof previousHandler === "undefined") {
       delete globalThis.ChatGPTUsageDashboardMessageHandler;
@@ -1579,8 +2641,229 @@ test("dashboard refreshes usage stats when local storage changes", async () => {
   }
 
   assert.equal(usageGetCount, 2);
-  assert.match(container.innerHTML, /4 total/);
+  assert.match(container.innerHTML, /data-model-toggle="future-family-2026-thinking" checked[\s\S]*3 times/);
   assert.match(container.innerHTML, /future-family-2026-thinking/);
+  assert.match(container.innerHTML, /Restored 41 usage records/);
+});
+
+test("the page entry and toolbar popup restore and synchronize one shared last main view", async () => {
+  const previousHandler = globalThis.ChatGPTUsageDashboardMessageHandler;
+  const previousList = globalThis.__chatgptUsageListConversations;
+  const previousChrome = globalThis.chrome;
+  const previousDocument = globalThis.document;
+  const storageListeners = [];
+  const popupContainer = new DashboardTestContainer();
+  const pageContainer = new DashboardTestContainer();
+  let storedSettings = {
+    language: "en",
+    activeView: "status",
+    statisticsMode: "mapped",
+    chartType: "line",
+    themeMode: "system",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true,
+    startDate: "2026-05-30",
+    endDate: "2026-05-30"
+  };
+  let exportListRequests = 0;
+  const settingsSetPayloads = [];
+
+  globalThis.document = {
+    getElementById() {
+      return null;
+    },
+    createElement() {
+      return { id: "", textContent: "" };
+    },
+    head: {
+      appendChild() {}
+    }
+  };
+  globalThis.chrome = {
+    runtime: {
+      lastError: null
+    },
+    storage: {
+      onChanged: {
+        addListener(listener) {
+          storageListeners.push(listener);
+        }
+      }
+    },
+    tabs: {
+      query(_query, callback) {
+        callback([{ id: 7 }]);
+      },
+      sendMessage(_tabId, message, callback) {
+        if (message.type === "conversation.list") {
+          exportListRequests += 1;
+          callback({
+            ok: true,
+            conversations: [{ id: "shared-view-chat", title: "Shared view chat" }],
+            complete: true,
+            source: "account"
+          });
+          return;
+        }
+        callback({ ok: true });
+      }
+    }
+  };
+  globalThis.ChatGPTUsageDashboardMessageHandler = (message) => {
+    if (message.type === "usage.get") {
+      return { ok: true, stats: createStats() };
+    }
+    if (message.type === "settings.get") {
+      return { ok: true, settings: { ...storedSettings } };
+    }
+    if (message.type === "settings.set") {
+      settingsSetPayloads.push({ ...message.settings });
+      storedSettings = { ...storedSettings, ...message.settings };
+      storageListeners.forEach((listener) => {
+        listener({
+          "chatgptModelUsageSettings.v1": {
+            newValue: { ...storedSettings }
+          }
+        }, "local");
+      });
+      return { ok: true, settings: { ...storedSettings } };
+    }
+    if (message.type === "openai.status.get") {
+      return {
+        ok: true,
+        status: {
+          fetchedAt: "2026-08-23T12:00:00.000Z",
+          sourceUrl: "https://status.openai.com/",
+          page: { name: "OpenAI", updatedAt: "2026-08-23T12:00:00.000Z" },
+          status: { indicator: "none", description: "All Systems Operational" },
+          components: [],
+          incidents: []
+        }
+      };
+    }
+    return undefined;
+  };
+  globalThis.__chatgptUsageListConversations = () => {
+    exportListRequests += 1;
+    return {
+      conversations: [{ id: "shared-view-chat", title: "Shared view chat" }],
+      complete: true,
+      source: "account"
+    };
+  };
+
+  try {
+    const popup = dashboard.init(popupContainer, { surface: "popup" });
+    await flushDashboardPromises();
+    assert.equal(popup.state.activeView, "status");
+    assert.equal(
+      popupContainer.querySelectorAll("[data-view-tab]")
+        .find((button) => button.getAttribute("data-view-tab") === "status")
+        .getAttribute("aria-selected"),
+      "true"
+    );
+
+    popupContainer.querySelectorAll("[data-view-tab]")
+      .find((button) => button.getAttribute("data-view-tab") === "export")
+      .dispatch("click");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.activeView, "export");
+    assert.deepEqual(settingsSetPayloads.at(-1), { activeView: "export" });
+    assert.equal(popup.state.activeView, "export");
+    assert.deepEqual(
+      popup.state.exportConversationList.map((conversation) => conversation.id),
+      ["shared-view-chat"]
+    );
+
+    const page = dashboard.init(pageContainer, { surface: "page" });
+    await flushDashboardPromises();
+    assert.equal(page.state.activeView, "export");
+    assert.deepEqual(
+      page.state.exportConversationList.map((conversation) => conversation.id),
+      ["shared-view-chat"]
+    );
+    assert.equal(exportListRequests, 2, "each newly opened surface loads the restored export view");
+
+    pageContainer.querySelectorAll("[data-view-tab]")
+      .find((button) => button.getAttribute("data-view-tab") === "chart")
+      .dispatch("click");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.activeView, "chart");
+    assert.equal(page.state.activeView, "chart");
+    assert.equal(popup.state.activeView, "chart");
+
+    const popupTrend = popupContainer.querySelectorAll("[data-statistics-section]")
+      .find((button) => button.getAttribute("data-statistics-section") === "trend");
+    popupTrend.checked = false;
+    popupTrend.dispatch("change");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.showTrendChart, false);
+    assert.deepEqual(settingsSetPayloads.at(-1), { showTrendChart: false });
+    assert.equal(page.state.showTrendChart, false);
+    assert.equal(popup.state.showTrendChart, false);
+
+    const popupText = popupContainer.querySelectorAll("[data-statistics-section]")
+      .find((button) => button.getAttribute("data-statistics-section") === "text");
+    popupText.checked = false;
+    popupText.dispatch("change");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.showTextStatistics, false);
+    assert.deepEqual(settingsSetPayloads.at(-1), { showTextStatistics: false });
+    assert.equal(page.state.showTextStatistics, false);
+    assert.equal(popup.state.showTextStatistics, false);
+    assert.equal(pageContainer.querySelectorAll("[data-statistics-section]").length, 2);
+
+    pageContainer.querySelectorAll("[data-statistics-mode]")
+      .find((button) => button.getAttribute("data-statistics-mode") === "internal")
+      .dispatch("click");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.statisticsMode, "internal");
+    assert.equal(page.state.statisticsMode, "internal");
+    assert.equal(popup.state.statisticsMode, "internal");
+
+    popupContainer.querySelectorAll("[data-theme-select]")
+      .find((button) => button.getAttribute("data-theme-select") === "dark")
+      .dispatch("click");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.themeMode, "dark");
+    assert.deepEqual(settingsSetPayloads.at(-1), { themeMode: "dark" });
+    assert.equal(page.state.themeMode, "dark");
+    assert.equal(popup.state.themeMode, "dark");
+
+    popupContainer.querySelectorAll("[data-view-tab]")
+      .find((button) => button.getAttribute("data-view-tab") === "status")
+      .dispatch("click");
+    await flushDashboardPromises();
+    assert.equal(storedSettings.activeView, "status");
+    assert.equal(page.state.activeView, "status");
+    assert.equal(popup.state.activeView, "status");
+
+    page.state.activeView = "chart";
+    await page.reload({ restoreActiveView: true });
+    assert.equal(page.state.activeView, "status", "reopening an existing page panel restores the shared last view");
+  } finally {
+    if (typeof previousHandler === "undefined") {
+      delete globalThis.ChatGPTUsageDashboardMessageHandler;
+    } else {
+      globalThis.ChatGPTUsageDashboardMessageHandler = previousHandler;
+    }
+    if (typeof previousList === "undefined") {
+      delete globalThis.__chatgptUsageListConversations;
+    } else {
+      globalThis.__chatgptUsageListConversations = previousList;
+    }
+    if (typeof previousChrome === "undefined") {
+      delete globalThis.chrome;
+    } else {
+      globalThis.chrome = previousChrome;
+    }
+    if (typeof previousDocument === "undefined") {
+      delete globalThis.document;
+    } else {
+      globalThis.document = previousDocument;
+    }
+  }
 });
 
 test("newly counted models become visible by default without reselecting a model the user cleared", () => {
@@ -1615,7 +2898,7 @@ test("newly counted models become visible by default without reselecting a model
   assert.equal(state.selectedModels["future-family-2027-pro"], true);
 });
 
-test("dashboard refresh reloads the account conversation list in the export view", async () => {
+test("dashboard reuses the loaded conversation list until the user explicitly refreshes it", async () => {
   const previousHandler = globalThis.ChatGPTUsageDashboardMessageHandler;
   const previousList = globalThis.__chatgptUsageListConversations;
   const previousChrome = globalThis.chrome;
@@ -1673,8 +2956,19 @@ test("dashboard refresh reloads the account conversation list in the export view
     assert.equal(listRequestCount, 1);
     assert.deepEqual(instance.state.exportConversationList.map((conversation) => conversation.id), ["chat-1"]);
 
+    await instance.reload({ skipExportList: true });
+    assert.equal(
+      listRequestCount,
+      1,
+      "a statistics-only reload must not supersede the active export index"
+    );
+
     instance.state.exportSelected = { "chat-1": true };
     await instance.reload();
+    assert.equal(listRequestCount, 1);
+    assert.deepEqual(instance.state.exportConversationList.map((conversation) => conversation.id), ["chat-1"]);
+
+    await instance.reload({ forceExportList: true });
     assert.equal(listRequestCount, 2);
     assert.deepEqual(instance.state.exportConversationList.map((conversation) => conversation.id), ["chat-1", "chat-2"]);
     assert.deepEqual(instance.state.exportSelected, { "chat-1": true });
@@ -1702,7 +2996,7 @@ test("dashboard refresh reloads the account conversation list in the export view
   }
 });
 
-test("dashboard refresh keeps parameter rows and in-range aggregate feature rows when range events are empty", async () => {
+test("dashboard refresh keeps in-range aggregate feature rows without exposing internal parameters in mapped mode", async () => {
   const previousHandler = globalThis.ChatGPTUsageDashboardMessageHandler;
   const previousChrome = globalThis.chrome;
   const previousDocument = globalThis.document;
@@ -1756,6 +3050,26 @@ test("dashboard refresh keeps parameter rows and in-range aggregate feature rows
         }
       }
     },
+    analyticsByDate: {
+      "2026-05-30": {
+        chat: {
+          [model]: {
+            [`${model}\u0001${model}`]: {
+              requestModel: model,
+              responseModel: model,
+              count: 5,
+              efforts: { high: 5 },
+              features: { web_search: 5 },
+              sourceModes: { chat: 5 },
+              conversations: {},
+              firstSubmittedAt: "2026-05-30T18:00:00.000Z",
+              lastSubmittedAt: "2026-05-30T18:00:00.000Z"
+            }
+          }
+        }
+      }
+    },
+    analyticsHistoryComplete: true,
     events: []
   };
   let usageGetCount = 0;
@@ -1796,8 +3110,10 @@ test("dashboard refresh keeps parameter rows and in-range aggregate feature rows
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(storageListeners.length, 1);
-    storageListeners[0]({ "chatgptModelUsageStats.v1": { newValue: updatedStats } }, "local");
+    assert.equal(storageListeners.length, 2);
+    storageListeners.forEach((listener) => {
+      listener({ "chatgptModelUsageStats.v1": { newValue: updatedStats } }, "local");
+    });
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
   } finally {
@@ -1819,15 +3135,16 @@ test("dashboard refresh keeps parameter rows and in-range aggregate feature rows
   }
 
   assert.equal(usageGetCount, 2);
-  assert.match(container.innerHTML, /class="usage-feature-row"/);
+  assert.match(container.innerHTML, /class="usage-count-features"/);
   assert.match(container.innerHTML, /Web search/);
   assert.match(container.innerHTML, /Web search[\s\S]*5/);
-  assert.match(container.innerHTML, /class="usage-param-row"/);
-  assert.match(container.innerHTML, /reasoning\.effort=high/);
-  assert.match(container.innerHTML, /web_search_options\.search_context_size=low/);
+  assert.doesNotMatch(container.innerHTML, /class="usage-feature-row"/);
+  assert.doesNotMatch(container.innerHTML, /class="usage-param-row"/);
+  assert.doesNotMatch(container.innerHTML, /reasoning\.effort=high/);
+  assert.doesNotMatch(container.innerHTML, /web_search_options\.search_context_size=low/);
 });
 
-test("custom date controls render only inside the usage view", () => {
+test("date range stays in the usage view while other settings stay in the title-bar menu", () => {
   const state = {
     language: "en",
     activeView: "chart",
@@ -1838,8 +3155,13 @@ test("custom date controls render only inside the usage view", () => {
   };
 
   const chartHtml = dashboard.renderActiveView(state, ["future-family-2026-thinking"]);
-  assert.match(chartHtml, /usage-date-controls/);
-  assert.match(chartHtml, /Custom dates/);
+  const chartSettings = dashboard.renderSettingsMenu(state);
+  assert.match(chartHtml, /usage-start-date|Custom dates/);
+  assert.match(chartSettings, /class="usage-settings-menu"/);
+  assert.doesNotMatch(chartSettings, /usage-start-date|usage-settings-date-submenu|Custom dates/);
+  assert.match(chartSettings, /data-theme-select="system"/);
+  assert.match(chartSettings, /data-theme-select="light"/);
+  assert.match(chartSettings, /data-theme-select="dark"/);
   assert.match(chartHtml, /viewBox="0 0 360 192"/);
   assert.doesNotMatch(chartHtml, /usage-event-text-list/);
   assert.doesNotMatch(chartHtml, /Recent records/);
@@ -1850,7 +3172,11 @@ test("custom date controls render only inside the usage view", () => {
     status: { indicator: "none", description: "All Systems Operational" },
     components: []
   };
-  assert.doesNotMatch(dashboard.renderActiveView(state, []), /usage-date-controls/);
+  const statusSettings = dashboard.renderSettingsMenu(state);
+  assert.doesNotMatch(dashboard.renderActiveView(state, []), /usage-start-date|Custom dates/);
+  assert.doesNotMatch(statusSettings, /usage-start-date|data-source-filter|data-statistics-mode|data-statistics-section/);
+  assert.match(statusSettings, /data-language-select="zh"/);
+  assert.match(statusSettings, /data-theme-select="system"/);
 });
 
 test("exportTargetPlan follows the visible checkbox list and ignores unselected entries", async () => {
@@ -1890,6 +3216,213 @@ test("export requires an explicit list selection and enables formats only after 
   assert.match(selectedHtml, /1 selected/);
   assert.doesNotMatch(selectedHtml, /data-export-format="json" disabled/);
   assert.deepEqual((await dashboard._test.exportTargetPlan(state)).ids, ["chat-0002"]);
+});
+
+test("export list keeps the current chat first and groups remaining chats by project directory", () => {
+  const html = dashboard.renderActiveView({
+    language: "en",
+    activeView: "export",
+    exportConversationList: [
+      {
+        id: "current-project-chat",
+        title: "Current project chat",
+        current: true,
+        groupType: "project",
+        projectId: "project-alpha",
+        projectName: "Alpha project"
+      },
+      {
+        id: "project-chat",
+        title: "Another project chat",
+        groupType: "project",
+        projectId: "project-alpha",
+        projectName: "Alpha project"
+      },
+      {
+        id: "regular-chat",
+        title: "Regular chat"
+      }
+    ],
+    exportSelected: { "current-project-chat": true },
+    exportSearch: ""
+  }, []);
+
+  const currentIndex = html.indexOf('data-export-conv-row="current-project-chat"');
+  const projectIndex = html.indexOf('data-export-group="project:project-alpha"');
+  const regularIndex = html.indexOf('data-export-group="ungrouped"');
+  const projectSummary = html.slice(
+    html.indexOf("<summary>", projectIndex),
+    html.indexOf("</summary>", projectIndex)
+  );
+
+  assert.ok(currentIndex >= 0 && currentIndex < projectIndex, "current chat must be globally first");
+  assert.ok(projectIndex >= 0 && projectIndex < regularIndex, "project directory must precede regular chats");
+  assert.match(html, /<details class="usage-export-group" data-export-group="project:project-alpha" open>/);
+  assert.match(projectSummary, /Alpha project/);
+  assert.match(projectSummary, /type="checkbox" data-export-project-toggle="project-alpha"/);
+  assert.match(html, /Not in a project \/ regular chats/);
+  assert.equal((html.match(/data-export-conv="current-project-chat"/g) || []).length, 1);
+  assert.match(html, /data-export-conv="current-project-chat"[^>]*checked/);
+  assert.doesNotMatch(html, /data-export-conv="project-chat"[^>]*checked/);
+  assert.doesNotMatch(html, /data-export-conv="regular-chat"[^>]*checked/);
+});
+
+test("export search includes project directory names without replacing item checkboxes", () => {
+  assert.equal(
+    dashboard._test.exportConversationMatchesSearch(
+      {
+        id: "project-chat",
+        title: "Conversation",
+        groupType: "project",
+        projectId: "project-alpha",
+        projectName: "Alpha project"
+      },
+      "alpha project"
+    ),
+    true
+  );
+});
+
+test("export project grouping keeps the highest-trust rendered project name", () => {
+  const projectId = "g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const html = dashboard.renderActiveView({
+    language: "zh",
+    activeView: "export",
+    exportConversationList: [
+      {
+        id: "exact-chat",
+        title: "Exact",
+        groupType: "project",
+        projectId,
+        projectName: "@#!#",
+        projectNameSource: "main-world-react",
+        projectOrder: 0
+      },
+      {
+        id: "stale-chat",
+        title: "Stale",
+        groupType: "project",
+        projectId,
+        projectName: "old-route-slug",
+        projectNameSource: "account-index",
+        projectOrder: 0
+      }
+    ],
+    exportSelected: {},
+    exportSearch: ""
+  }, []);
+
+  const groupIndex = html.indexOf(`data-export-group="project:${projectId}"`);
+  const summary = html.slice(html.indexOf("<summary>", groupIndex), html.indexOf("</summary>", groupIndex));
+  assert.match(summary, /@#!#/);
+  assert.doesNotMatch(summary, /old-route-slug/);
+});
+
+test("export project grouping keeps an unresolved project selectable without showing its raw id as the title", () => {
+  const projectId = "g-p-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const html = dashboard.renderActiveView({
+    language: "en",
+    activeView: "export",
+    exportConversationList: [
+      {
+        id: "unresolved-project-chat",
+        title: "Still readable",
+        groupType: "project",
+        projectId,
+        projectName: "Unnamed project"
+      }
+    ],
+    exportSelected: {},
+    exportSearch: ""
+  }, []);
+
+  const groupIndex = html.indexOf(`data-export-group="project:${projectId}"`);
+  const summary = html.slice(html.indexOf("<summary>", groupIndex), html.indexOf("</summary>", groupIndex));
+  assert.match(summary, /Unknown project/);
+  assert.doesNotMatch(summary, /Unnamed project/);
+  assert.doesNotMatch(summary, new RegExp(`>${projectId}<`));
+  assert.match(summary, new RegExp(`data-export-project-toggle="${projectId}"`));
+});
+
+test("project checkbox selects and clears every conversation in that project only", () => {
+  const projectToggle = new DashboardTestElement({
+    "data-export-project-toggle": "project-alpha"
+  });
+  const first = new DashboardTestElement({ "data-export-conv": "project-chat-1" });
+  const second = new DashboardTestElement({ "data-export-conv": "project-chat-2" });
+  const ordinary = new DashboardTestElement({ "data-export-conv": "ordinary-chat" });
+  const count = new DashboardTestElement({ selector: ".usage-export-selcount" });
+  const format = new DashboardTestElement({ "data-export-format": "json" });
+  const container = {
+    querySelector(selector) {
+      return selector === ".usage-export-selcount" ? count : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "[data-export-project-toggle]") return [projectToggle];
+      if (selector === "[data-export-conv]") return [first, second, ordinary];
+      if (selector === "[data-export-format]") return [format];
+      if (selector === "[data-export-selectall],[data-export-selectnone]") return [];
+      return [];
+    }
+  };
+  const state = {
+    language: "en",
+    container,
+    options: {},
+    exportConversationList: [
+      {
+        id: "project-chat-1",
+        groupType: "project",
+        projectId: "project-alpha",
+        projectName: "Alpha project"
+      },
+      {
+        id: "project-chat-2",
+        groupType: "project",
+        projectId: "project-alpha",
+        projectName: "Alpha project"
+      },
+      {
+        id: "ordinary-chat",
+        title: "Ordinary"
+      }
+    ],
+    exportSelected: {},
+    exportBusy: false
+  };
+
+  dashboard._test.bindEvents(state);
+  projectToggle.checked = true;
+  projectToggle.dispatch("change");
+  assert.deepEqual(state.exportSelected, {
+    "project-chat-1": true,
+    "project-chat-2": true
+  });
+  assert.equal(first.checked, true);
+  assert.equal(second.checked, true);
+  assert.equal(ordinary.checked, false);
+  assert.equal(count.textContent, "2 selected");
+
+  projectToggle.checked = false;
+  projectToggle.dispatch("change");
+  assert.deepEqual(state.exportSelected, {});
+  assert.equal(first.checked, false);
+  assert.equal(second.checked, false);
+  assert.equal(ordinary.checked, false);
+  assert.equal(count.textContent, "0 selected");
+});
+
+test("export bulk buttons use equal compact dimensions", () => {
+  const source = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "dashboard.js"), "utf8");
+
+  assert.match(
+    source,
+    /\.usage-export-selectbar\{display:grid;grid-template-columns:minmax\(96px,1fr\) 72px 72px auto/
+  );
+  assert.match(
+    source,
+    /\.usage-export-mini\{[^}]*width:72px;min-height:28px/
+  );
 });
 
 test("export checkbox changes update only existing controls without rebuilding or scrolling the view", () => {
@@ -1957,6 +3490,40 @@ test("export checkbox changes update only existing controls without rebuilding o
   assert.equal(container.scrollTop, 137);
 });
 
+test("the export cancel control is hidden again after an operation finishes", () => {
+  const cancel = new DashboardTestElement({ "data-export-cancel": "" });
+  cancel.hidden = true;
+  const format = new DashboardTestElement({ "data-export-format": "json" });
+  const container = {
+    querySelector(selector) {
+      return selector === "[data-export-cancel]" ? cancel : null;
+    },
+    querySelectorAll(selector) {
+      if (selector === "[data-export-format]") return [format];
+      if (selector === "[data-export-conv]") return [];
+      if (selector === "[data-export-selectall],[data-export-selectnone]") return [];
+      if (selector === "[data-export-format],[data-export-selectall],[data-export-selectnone],[data-export-conv]") {
+        return [format];
+      }
+      return [];
+    }
+  };
+  const state = {
+    language: "en",
+    container,
+    exportConversationList: [{ id: "chat-0001", title: "One" }],
+    exportSelected: { "chat-0001": true },
+    exportBusy: true,
+    exportCancelRequested: false
+  };
+
+  dashboard._test.setExportControlsDisabled(state, true);
+  assert.equal(cancel.hidden, false);
+  state.exportBusy = false;
+  dashboard._test.setExportControlsDisabled(state, false);
+  assert.equal(cancel.hidden, true);
+});
+
 test("the current conversation is first and selected only on the first export-list load", () => {
   const container = new DashboardTestContainer();
   const state = {
@@ -2004,6 +3571,214 @@ test("the current conversation is first and selected only on the first export-li
   state.exportSelected = {};
   dashboard._test.applyExportConversationList(state, result);
   assert.deepEqual(state.exportSelected, {}, "a user-cleared current conversation stays cleared on refresh");
+});
+
+test("full-list select all automatically includes conversations discovered by an explicit refresh", () => {
+  const state = {
+    container: new DashboardTestContainer(),
+    options: { surface: "page" },
+    language: "en",
+    activeView: "export",
+    startDate: "2026-08-01",
+    endDate: "2026-08-23",
+    selectedModels: {},
+    knownModels: {},
+    modelSelectionInitialized: true,
+    stats: {
+      totals: {},
+      byDate: {},
+      models: {},
+      sessionsByModel: {},
+      variantsByModel: {},
+      featuresByModel: {},
+      parametersByModel: {},
+      relationsByModel: {},
+      events: []
+    },
+    exportSelected: { "chat-1": true, "chat-2": true },
+    exportSelectAllMode: true,
+    exportSelectionInitialized: true,
+    exportSearch: "",
+    exportBusy: false,
+    statusText: "",
+    statusError: false
+  };
+
+  dashboard._test.applyExportConversationList(state, {
+    conversations: [
+      { id: "chat-1", title: "One" },
+      { id: "chat-2", title: "Two" },
+      { id: "chat-3", title: "Newly discovered" }
+    ],
+    complete: true,
+    source: "account"
+  });
+
+  assert.deepEqual(state.exportSelected, {
+    "chat-1": true,
+    "chat-2": true,
+    "chat-3": true
+  });
+});
+
+function usagePromptHash(value) {
+  let hash = 2166136261;
+  const text = String(value || "")
+    .replace(/[\u200b-\u200f\u2060]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+test("export enrichment uses the final response message id to keep Chat and Work evidence on the same turn", () => {
+  const conversation = {
+    id: "work-conversation",
+    messages: [
+      { id: "user-1", role: "user", text: "Build the report." },
+      { id: "assistant-final", role: "assistant", text: "Finished." }
+    ]
+  };
+  const enriched = dashboard._test.enrichConversationWithUsageEvents(conversation, {
+    events: [{
+      conversationId: "work-conversation",
+      responseMessageId: "assistant-final",
+      selectedPublicModel: "5.6 Terra",
+      selectedPublicModelSource: "work-selector-dom",
+      requestModel: "gpt-5.6-terra-wm",
+      requestModelEvidence: "trusted",
+      responseModel: "gpt-5.6-terra-wm",
+      responseObservedAt: "2026-08-23T12:00:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      requestReasoningEffort: "high",
+      modelParameters: { model: "gpt-5.6-terra-wm", "reasoning.effort": "high" },
+      usageFeatures: ["web_search"],
+      sourceMode: "work"
+    }]
+  });
+  const assistant = enriched.messages[1];
+
+  assert.equal(assistant.selectedPublicModel, "5.6 Terra");
+  assert.equal(assistant.requestModel, "gpt-5.6-terra-wm");
+  assert.equal(assistant.responseModel, "gpt-5.6-terra-wm");
+  assert.equal(assistant.model, "gpt-5.6-terra-wm");
+  assert.equal(assistant.requestReasoningEffort, "high");
+  assert.equal(assistant.parameters.model, "gpt-5.6-terra-wm");
+  assert.deepEqual(assistant.features, ["web_search"]);
+});
+
+test("export enrichment matches repeated prompts to their nearest turns without crossing conversations", () => {
+  const prompt = "Repeat   this prompt";
+  const conversation = {
+    id: "repeat-conversation",
+    messages: [
+      { id: "u1", role: "user", text: "Repeat this prompt", createTime: "2026-08-23T12:00:00.000Z" },
+      { id: "a1", role: "assistant", text: "First" },
+      { id: "u2", role: "user", text: prompt, createTime: "2026-08-23T12:10:00.000Z" },
+      { id: "a2", role: "assistant", text: "Second" }
+    ]
+  };
+  const hash = usagePromptHash(prompt);
+  const event = (submittedAt, requestModel, responseModel) => ({
+    conversationId: "repeat-conversation",
+    promptHash: hash,
+    submittedAt,
+    requestModel,
+    requestModelEvidence: "trusted",
+    responseModel,
+    responseObservedAt: submittedAt,
+    responseObservedSource: "message-dom:model-slug"
+  });
+  const enriched = dashboard._test.enrichConversationWithUsageEvents(conversation, {
+    events: [
+      event("2026-08-23T12:10:02.000Z", "request-second", "response-second"),
+      {
+        ...event("2026-08-23T12:00:02.000Z", "request-first", "response-first"),
+        conversationId: "different-conversation"
+      },
+      event("2026-08-23T12:00:02.000Z", "request-first", "response-first")
+    ]
+  });
+
+  assert.equal(enriched.messages[1].requestModel, "request-first");
+  assert.equal(enriched.messages[1].responseModel, "response-first");
+  assert.equal(enriched.messages[3].requestModel, "request-second");
+  assert.equal(enriched.messages[3].responseModel, "response-second");
+});
+
+test("export enrichment repairs prompt hashes produced by the legacy duplicated contenteditable text bug", () => {
+  const prompt = "拖动windows窗口慢动作原因";
+  const duplicatedPrompt = `${prompt} ${prompt}`;
+  const enriched = dashboard._test.enrichConversationWithUsageEvents({
+    id: "legacy-duplicated-prompt",
+    messages: [
+      {
+        id: "user-current",
+        role: "user",
+        text: prompt,
+        createTime: "2026-08-23T01:29:16.481Z"
+      },
+      {
+        id: "assistant-current",
+        role: "assistant",
+        text: "Answer",
+        metadata: { model_slug: "gpt-5-6-thinking" }
+      }
+    ]
+  }, {
+    events: [{
+      conversationId: "legacy-duplicated-prompt",
+      submittedAt: "2026-08-23T01:29:16.464Z",
+      promptHash: usagePromptHash(duplicatedPrompt),
+      promptLength: duplicatedPrompt.length,
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "request+account-catalog",
+      requestModel: "gpt-5-6-thinking",
+      requestModelEvidence: "trusted",
+      modelObservedSource: "webRequest"
+    }]
+  });
+  const assistant = enriched.messages[1];
+
+  assert.equal(assistant.selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(assistant.requestModel, "gpt-5-6-thinking");
+  assert.equal(assistant.responseModel, "gpt-5-6-thinking");
+});
+
+test("export enrichment keeps untrusted request evidence unavailable and never treats a generic model field as the response", () => {
+  const enriched = dashboard._test.enrichConversationWithUsageEvents({
+    id: "untrusted-conversation",
+    messages: [
+      { id: "u1", role: "user", text: "Question" },
+      { id: "a1", role: "assistant", text: "Answer", model: "generic-untrusted-model" }
+    ]
+  }, {
+    events: [{
+      conversationId: "untrusted-conversation",
+      responseMessageId: "a1",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "request+account-catalog",
+      requestModel: "untrusted-request",
+      requestModelEvidence: "unavailable",
+      responseModel: "trusted-response",
+      responseObservedAt: "2026-08-23T12:00:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      requestReasoningEffort: "high",
+      modelParameters: { model: "untrusted-request", "reasoning.effort": "high" },
+      usageFeatures: ["web_search"]
+    }]
+  });
+  const assistant = enriched.messages[1];
+
+  assert.equal(assistant.selectedPublicModel || "", "");
+  assert.equal(assistant.requestModel || "", "");
+  assert.equal(assistant.responseModel, "trusted-response");
+  assert.equal(assistant.requestReasoningEffort || "", "");
+  assert.deepEqual(assistant.parameters, {});
+  assert.deepEqual(assistant.features, []);
 });
 
 test("export view reports an unavailable account index instead of showing an unexplained empty list", () => {
@@ -2211,6 +3986,55 @@ test("multi-conversation export keeps requested order and never archives an unre
   assert.doesNotMatch(buffer.toString("utf8"), /Secret|must not export|Duplicate|duplicate/);
 });
 
+test("an operation-stop response aborts later export chunks and creates no partial archive", async () => {
+  let collectionCalls = 0;
+  let downloadCalls = 0;
+  const previousCollector = globalThis.__chatgptUsageCollectMany;
+  globalThis.__chatgptUsageCollectMany = async () => {
+    collectionCalls += 1;
+    const error = new Error("ChatGPT history request failed (429)");
+    error.status = 429;
+    error.stopOperation = true;
+    error.incomplete = true;
+    throw error;
+  };
+  const archiveExporter = Object.assign({}, exporter, {
+    downloadBlob() {
+      downloadCalls += 1;
+    }
+  });
+  const state = {
+    language: "en",
+    options: { surface: "page" },
+    container: { querySelector: () => null }
+  };
+
+  try {
+    await assert.rejects(
+      dashboard._test.downloadConversationArchiveByIds(
+        state,
+        archiveExporter,
+        {
+          ids: Array.from({ length: 13 }, (_, index) => `chat-${String(index + 1).padStart(4, "0")}`),
+          complete: true,
+          warnings: []
+        },
+        "json"
+      ),
+      (error) => error && error.stopOperation === true && error.status === 429
+    );
+  } finally {
+    if (typeof previousCollector === "undefined") {
+      delete globalThis.__chatgptUsageCollectMany;
+    } else {
+      globalThis.__chatgptUsageCollectMany = previousCollector;
+    }
+  }
+
+  assert.equal(collectionCalls, 1, "no later six-item chunk may start");
+  assert.equal(downloadCalls, 0);
+});
+
 test("multi-conversation PNG archive keeps exactly one PNG per selected conversation", async () => {
   let downloaded = null;
   const previousCollector = globalThis.__chatgptUsageCollectMany;
@@ -2291,8 +4115,11 @@ test("multi-conversation PNG archive keeps exactly one PNG per selected conversa
   assert.equal(pngBuildCount, 2);
 });
 
-test("archive filenames use the browser-local calendar date", () => {
-  assert.equal(dashboard._test.localExportDateStamp(new Date(2026, 7, 22, 23, 30)), "2026-08-22");
+test("archive filenames use the current UTC calendar date", () => {
+  assert.equal(
+    dashboard._test.localExportDateStamp(new Date("2026-08-24T00:30:00.000Z")),
+    "2026-08-24",
+  );
 });
 
 test("conversation archive basenames avoid case-insensitive and generated-suffix collisions", () => {
@@ -2304,6 +4131,6 @@ test("conversation archive basenames avoid case-insensitive and generated-suffix
     { id: "chat-0005", title: "con" }
   ]);
 
-  assert.deepEqual(bases, ["Report", "report-2", "Report-2-2", "_CON", "_con-2"]);
+  assert.deepEqual(bases, ["Report", "report-chat0002", "Report-2", "_CON", "_con-chat0005"]);
   assert.equal(new Set(bases.map((name) => name.toLowerCase())).size, bases.length);
 });

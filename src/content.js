@@ -1,6 +1,16 @@
 (function initContentScript() {
   "use strict";
 
+  // The manifest excludes ChatGPT data endpoints, and this runtime guard
+  // protects already-open tabs or manual reinjection after an extension
+  // update. Only actual ChatGPT application pages receive the dashboard.
+  if (
+    typeof location !== "undefined" &&
+    /^\/(?:api|backend-api)(?:\/|$)/i.test(String(location.pathname || ""))
+  ) {
+    return;
+  }
+
   if (document.documentElement && typeof document.documentElement.setAttribute === "function") {
     document.documentElement.setAttribute(
       "data-chatgpt-model-usage-content-entry",
@@ -55,10 +65,11 @@
   var MESSAGE_MATCH_WINDOW_MS = 60000;
   var COMPOSER_POLL_MS = 500;
   var MODEL_OBSERVATION_WAIT_MS = 12000;
-  var FINAL_RESPONSE_MODEL_WAIT_MS = 1500;
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var STATUS_KEY = "chatgptModelUsageOpenAIStatus.v1";
   var CATALOG_SESSION_KEY = "chatgptModelUsageCatalog.session.v1";
+  var RUNTIME_MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
+  var RUNTIME_MODEL_CATALOG_REFRESH_ATTEMPT_TTL_MS = 5 * 60 * 1000;
   var lastSubmission = null;
   var lastDirectSubmission = null;
   var lastComposerSnapshot = null;
@@ -67,15 +78,31 @@
   var runtimeModelCatalogPromise = null;
   var runtimeModelCatalogSessionLoaded = false;
   var runtimeModelCatalogRefreshAttempts = {};
+  var pendingUnknownRuntimeModelSlugs = {};
   var pendingSubmissions = [];
   var pendingSubmissionTimer = null;
   var pendingResponseObservations = [];
   var submissionSequence = 0;
   var seenUserMessages = new Set();
   var seenAssistantModelMessages = new Set();
-  var pendingAssistantModelCandidate = null;
-  var pendingAssistantModelTimer = null;
+  var seenAssistantOutcomeTurns = new Set();
+  var pendingRecoveryConversationId = "";
+  var pendingRecoveryLastAttemptAt = 0;
+  var pendingRecoveryInFlight = false;
+  var pendingRecoverySentSubmissionIds = new Set();
   var ensureUsagePanelMounted = null;
+  var ACCOUNT_REQUEST_MAX_CONCURRENCY = 1;
+  var ACCOUNT_REQUEST_MIN_GAP_MS = 1000;
+  var ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS = 60 * 1000;
+  var ACCOUNT_REQUEST_DEFAULT_429_WAIT_MS = 30 * 1000;
+  var ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION = 800;
+  var ACCOUNT_HISTORY_MAX_OPERATION_MS = 10 * 60 * 1000;
+  var accountRequestQueue = [];
+  var accountRequestActiveCount = 0;
+  var accountRequestNextStartAt = 0;
+  var accountRequestCooldownUntil = 0;
+  var accountRequestLongBlockUntil = 0;
+  var accountRequestPumpTimer = null;
 
   function setDiagnostic(name, value) {
     if (!document.documentElement || typeof document.documentElement.setAttribute !== "function") {
@@ -139,6 +166,178 @@
       .trim();
   }
 
+  function sanitizeMessageId(value) {
+    return String(value || "")
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim()
+      .slice(0, 160);
+  }
+
+  function retryAfterDelayMs(response) {
+    var value = "";
+    try {
+      value = response && response.headers && typeof response.headers.get === "function"
+        ? String(response.headers.get("retry-after") || "").trim()
+        : "";
+    } catch (_) {}
+    if (/^\d+(?:\.\d+)?$/.test(value)) {
+      return Math.max(0, Number(value) * 1000);
+    }
+    var retryDate = Date.parse(value);
+    return Number.isNaN(retryDate)
+      ? ACCOUNT_REQUEST_DEFAULT_429_WAIT_MS
+      : Math.max(0, retryDate - Date.now());
+  }
+
+  function accountRequestBlockedError(delayMs) {
+    var error = new Error("ChatGPT account reads are paused by Retry-After.");
+    error.status = 429;
+    error.stopOperation = true;
+    error.retryAfterMs = Math.max(0, Number(delayMs) || 0);
+    return error;
+  }
+
+  function globalAccountRequestBlockedError(response) {
+    var error = new Error(String(
+      response && response.error ||
+      "ChatGPT account request coordination stopped this operation."
+    ));
+    error.status = Number(response && response.status) || 0;
+    error.stopOperation = true;
+    error.incomplete = true;
+    error.retryAfterMs = Math.max(0, Number(response && response.retryAfterMs) || 0);
+    return error;
+  }
+
+  function acquireGlobalAccountRequestPermit() {
+    return runtimeMessage({ type: "account.request.acquire" }).then(function acquired(response) {
+      if (response && response.granted === true && response.permitId) {
+        return String(response.permitId);
+      }
+      if (response && (response.stopOperation || response.ok === false)) {
+        throw globalAccountRequestBlockedError(response);
+      }
+      // A real extension page must never bypass the extension-level scheduler:
+      // doing so would let another tab ignore the global start gap or cooldown.
+      // Tests whose runtime mock has no extension id keep the local scheduler.
+      if (!initialRuntimeId) {
+        return "";
+      }
+      throw globalAccountRequestBlockedError({
+        error: "ChatGPT account request coordination is unavailable."
+      });
+    });
+  }
+
+  function completeGlobalAccountRequestPermit(permitId, response, error) {
+    if (!permitId) {
+      return Promise.resolve(null);
+    }
+    var status = Number(response && response.status) || Number(error && error.status) || 0;
+    var retryAfterMs = status === 429
+      ? Math.max(
+          0,
+          Number(error && error.retryAfterMs) ||
+          retryAfterDelayMs(response)
+        )
+      : 0;
+    return runtimeMessage({
+      type: "account.request.complete",
+      permitId: permitId,
+      status: status,
+      retryAfterMs: retryAfterMs
+    }).catch(function ignorePermitReleaseFailure() {
+      return null;
+    });
+  }
+
+  function noteAccountRequestResponse(response) {
+    if (!response || Number(response.status) !== 429) {
+      return;
+    }
+    var delay = retryAfterDelayMs(response);
+    var until = Date.now() + delay;
+    accountRequestCooldownUntil = Math.max(accountRequestCooldownUntil, until);
+    if (delay > ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS) {
+      accountRequestLongBlockUntil = Math.max(accountRequestLongBlockUntil, until);
+    }
+  }
+
+  function pumpAccountRequestQueue() {
+    if (
+      accountRequestPumpTimer ||
+      accountRequestActiveCount >= ACCOUNT_REQUEST_MAX_CONCURRENCY ||
+      !accountRequestQueue.length
+    ) {
+      return;
+    }
+
+    var now = Date.now();
+    if (accountRequestLongBlockUntil > now) {
+      var blockedError = accountRequestBlockedError(accountRequestLongBlockUntil - now);
+      while (accountRequestQueue.length) {
+        accountRequestQueue.shift().reject(blockedError);
+      }
+      return;
+    }
+    if (accountRequestLongBlockUntil && accountRequestLongBlockUntil <= now) {
+      accountRequestLongBlockUntil = 0;
+    }
+
+    var startAt = Math.max(now, accountRequestNextStartAt, accountRequestCooldownUntil);
+    if (startAt > now) {
+      accountRequestPumpTimer = setTimeout(function resumeAccountRequestQueue() {
+        accountRequestPumpTimer = null;
+        pumpAccountRequestQueue();
+      }, startAt - now);
+      return;
+    }
+
+    var item = accountRequestQueue.shift();
+    accountRequestActiveCount += 1;
+    var globalPermitId = "";
+    Promise.resolve()
+      .then(function acquireGlobalPermit() {
+        return acquireGlobalAccountRequestPermit();
+      })
+      .then(function startAccountRequest(permitId) {
+        globalPermitId = permitId;
+        // Reserve the next local slot immediately before the real fetch starts.
+        // Authorization and background-permit waits happen before this point,
+        // so they cannot make two actual request starts collapse together.
+        accountRequestNextStartAt = Date.now() + ACCOUNT_REQUEST_MIN_GAP_MS;
+        return item.task();
+      })
+      .then(function accountRequestSucceeded(response) {
+        return completeGlobalAccountRequestPermit(globalPermitId, response, null).then(function released() {
+          noteAccountRequestResponse(response);
+          item.resolve(response);
+        });
+      }, function accountRequestFailed(error) {
+        return completeGlobalAccountRequestPermit(globalPermitId, null, error).then(function releasedAfterFailure() {
+          item.reject(error);
+        });
+      })
+      .finally(function releaseAccountRequestSlot() {
+        accountRequestActiveCount = Math.max(0, accountRequestActiveCount - 1);
+        pumpAccountRequestQueue();
+      });
+    pumpAccountRequestQueue();
+  }
+
+  function scheduleAccountRequest(task) {
+    return new Promise(function enqueueAccountRequest(resolve, reject) {
+      accountRequestQueue.push({
+        task: typeof task === "function" ? task : function invalidTask() {
+          throw new Error("ChatGPT account request task is unavailable.");
+        },
+        resolve: resolve,
+        reject: reject
+      });
+      pumpAccountRequestQueue();
+    });
+  }
+
   function sanitizeRuntimeModelCatalog(value) {
     if (!modelCatalog || typeof modelCatalog.sanitizeRuntimeModelCatalog !== "function") {
       return null;
@@ -200,10 +399,10 @@
   }
 
   function loadRuntimeModelCatalogFromSession(force) {
-    if (force && !runtimeModelCatalog) {
+    if (force) {
       runtimeModelCatalogSessionLoaded = false;
     }
-    if (runtimeModelCatalog || runtimeModelCatalogSessionLoaded) {
+    if (!force && (runtimeModelCatalog || runtimeModelCatalogSessionLoaded)) {
       return Promise.resolve(runtimeModelCatalog);
     }
     runtimeModelCatalogSessionLoaded = true;
@@ -224,6 +423,36 @@
     return Boolean(resolved && resolved.mappingStatus === "mapped" && resolved.publicModel);
   }
 
+  function runtimeModelCatalogIsFresh(catalog) {
+    var observedAt = new Date(catalog && catalog.observedAt || "").getTime();
+    return !Number.isNaN(observedAt) &&
+      Date.now() - observedAt >= 0 &&
+      Date.now() - observedAt < RUNTIME_MODEL_CATALOG_TTL_MS;
+  }
+
+  function rememberRuntimeModelSlug(slug) {
+    var model = canonicalRequestModelSlug(slug);
+    if (!model) {
+      return;
+    }
+    if (runtimeModelIsMapped(model)) {
+      delete pendingUnknownRuntimeModelSlugs[model];
+      return;
+    }
+    pendingUnknownRuntimeModelSlugs[model] = true;
+  }
+
+  function nextUnknownRuntimeModelSlug() {
+    var slugs = Object.keys(pendingUnknownRuntimeModelSlugs);
+    for (var index = 0; index < slugs.length; index += 1) {
+      if (!runtimeModelIsMapped(slugs[index])) {
+        return slugs[index];
+      }
+      delete pendingUnknownRuntimeModelSlugs[slugs[index]];
+    }
+    return "";
+  }
+
   function refreshRuntimeModelCatalog(reason, unknownSlug) {
     if (runtimeModelCatalogPromise) {
       return runtimeModelCatalogPromise;
@@ -232,30 +461,36 @@
       return Promise.resolve(null);
     }
     var refreshKey = unknownSlug ? "unknown:" + canonicalRequestModelSlug(unknownSlug) : String(reason || "panel-open");
-    if (runtimeModelCatalogRefreshAttempts[refreshKey]) {
+    var attemptedAt = Number(runtimeModelCatalogRefreshAttempts[refreshKey]) || 0;
+    if (attemptedAt && Date.now() - attemptedAt < RUNTIME_MODEL_CATALOG_REFRESH_ATTEMPT_TTL_MS) {
       return Promise.resolve(runtimeModelCatalog);
     }
-    runtimeModelCatalogRefreshAttempts[refreshKey] = true;
+    runtimeModelCatalogRefreshAttempts[refreshKey] = Date.now();
     runtimeModelCatalogPromise = runtimeMessage({
       type: "usage.catalog.refresh.claim",
       reason: String(reason || "panel-open").slice(0, 32),
       unknownSlug: canonicalRequestModelSlug(unknownSlug || "")
     }).then(function refreshClaimed(response) {
       if (!response || response.claimed !== true) {
-        return runtimeModelCatalog;
+        return loadRuntimeModelCatalogFromSession(true);
       }
       var source = window.ChatGPTConversationSource;
+      var scheduledFetch = function scheduledCatalogFetch(url, options) {
+        return scheduleAccountRequest(function startCatalogFetch() {
+          return fetch(url, options);
+        });
+      };
       var catalogRequest = source && typeof source.requestJson === "function"
         ? source.requestJson(
-            fetch,
+            scheduledFetch,
             "/backend-api/models?history_and_training_disabled=false",
-            { requestGapMs: 150, maxAttempts: 1 }
+            { requestGapMs: 0, maxAttempts: 1 }
           )
-        : fetch("/backend-api/models?history_and_training_disabled=false", {
-            method: "GET",
-            credentials: "include",
-            cache: "no-store",
-            headers: { accept: "application/json" }
+        : scheduledFetch("/backend-api/models?history_and_training_disabled=false", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: { accept: "application/json" }
           }).then(function parseCatalogResponse(catalogResponse) {
             if (!catalogResponse || !catalogResponse.ok || typeof catalogResponse.json !== "function") {
               var status = Number(catalogResponse && catalogResponse.status) || 0;
@@ -271,12 +506,23 @@
           throw new Error("model-catalog-empty");
         }
         runtimeModelCatalog = catalog;
+        Object.keys(pendingUnknownRuntimeModelSlugs).forEach(function removeMappedPendingSlug(slug) {
+          if (runtimeModelIsMapped(slug)) {
+            delete pendingUnknownRuntimeModelSlugs[slug];
+          }
+        });
         setDiagnostic("model-catalog-status", "ok");
         setDiagnostic("model-catalog-observed-at", catalog.observedAt || "");
         publishRuntimeModelCatalog(catalog);
         return catalog;
       });
     }).catch(function catalogFailed(error) {
+      delete runtimeModelCatalogRefreshAttempts[refreshKey];
+      runtimeMessage({
+        type: "usage.catalog.refresh.release",
+        reason: String(reason || "panel-open").slice(0, 32),
+        unknownSlug: canonicalRequestModelSlug(unknownSlug || "")
+      });
       setDiagnostic("model-catalog-status", "error:" + String((error && error.message) || error || "unknown").slice(0, 80));
       return null;
     }).then(function allowFutureRefresh(result) {
@@ -288,7 +534,8 @@
 
   function ensureRuntimeModelCatalog(reason, unknownSlug) {
     return loadRuntimeModelCatalogFromSession(!runtimeModelCatalog).then(function loaded(catalog) {
-      if (catalog && (!unknownSlug || runtimeModelIsMapped(unknownSlug))) {
+      var needsUnknownSlugRefresh = Boolean(unknownSlug && !runtimeModelIsMapped(unknownSlug));
+      if (catalog && !needsUnknownSlugRefresh && runtimeModelCatalogIsFresh(catalog)) {
         return catalog;
       }
       return refreshRuntimeModelCatalog(reason, unknownSlug);
@@ -351,6 +598,31 @@
     return null;
   }
 
+  function findRegenerateTarget(event) {
+    var path = getEventPath(event);
+    for (var index = 0; index < path.length; index += 1) {
+      var element = path[index];
+      if (!element || typeof element.getAttribute !== "function") {
+        continue;
+      }
+      var tagName = String(element.tagName || "").toLowerCase();
+      var role = String(element.getAttribute("role") || "").toLowerCase();
+      if (tagName !== "button" && role !== "button") {
+        continue;
+      }
+      var label = normalizePromptText([
+        element.getAttribute("aria-label"),
+        element.getAttribute("title"),
+        element.getAttribute("data-testid"),
+        getElementText(element)
+      ].filter(Boolean).join(" "));
+      if (/(?:^|\b)(?:regenerate|retry|try again)(?:\b|$)|重新生成|重试回答/i.test(label)) {
+        return element;
+      }
+    }
+    return null;
+  }
+
   function findComposerTarget(event) {
     if (detector.isComposerElement(event.target)) {
       return event.target;
@@ -393,8 +665,74 @@
   function hasPublicModelSelection(modelInfo) {
     return Boolean(
       modelInfo &&
-      normalizePromptText(modelInfo.selectedPublicModel || modelInfo.publicModel || modelInfo.label)
+      normalizePromptText(modelInfo.selectedPublicModel || modelInfo.publicModel)
     );
+  }
+
+  function normalizeSelectedPublicMode(value) {
+    if (modelCatalog && typeof modelCatalog.normalizePublicMode === "function") {
+      return modelCatalog.normalizePublicMode(value);
+    }
+    var clean = normalizePromptText(value).toLowerCase();
+    if (/^(?:reasoning|think|thinking)$/.test(clean)) return "thinking";
+    if (/^(?:auto|fast|instant|pro)$/.test(clean)) return clean;
+    var match = clean.match(/(?:^|[-_.\s])(thinking|instant|fast|auto|pro)(?:$|[-_.\s])/i);
+    return match ? match[1].toLowerCase() : "";
+  }
+
+  function selectedPublicModeLabel(value, mode) {
+    var clean = normalizePromptText(value).slice(0, 64);
+    if (clean && modelCatalog && typeof modelCatalog.sanitizePublicModelLabel === "function") {
+      clean = modelCatalog.sanitizePublicModelLabel(clean);
+    }
+    if (clean) {
+      return clean;
+    }
+    var normalized = normalizeSelectedPublicMode(mode);
+    return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "";
+  }
+
+  function submittedPublicModeMetadata(modelInfo) {
+    var source = modelInfo && typeof modelInfo === "object" ? modelInfo : {};
+    var mode = normalizeSelectedPublicMode(source.selectedPublicMode);
+    var modeSource = String(source.selectedPublicModeSource || "").slice(0, 80);
+    var modeLabel = "";
+
+    // A Work product may legitimately contain "Pro" in its model name. Only
+    // explicit mode fields may classify that selector; never reinterpret the
+    // Work model label as a public mode.
+    if (!mode && !/^work-selector-dom$/i.test(String(source.selectedPublicModelSource || ""))) {
+      mode = normalizeSelectedPublicMode(source.selectedText);
+      if (mode) {
+        modeSource = modeSource || "selector-dom:model-control";
+      }
+    }
+    if (mode) {
+      modeLabel = selectedPublicModeLabel(source.selectedPublicModeLabel, mode);
+      modeSource = modeSource ||
+        String(source.selectedPublicModelSource || "selector-dom").slice(0, 80);
+    }
+    return {
+      selectedPublicMode: mode,
+      selectedPublicModeLabel: modeLabel,
+      selectedPublicModeSource: modeSource
+    };
+  }
+
+  function applySubmittedPublicModeMetadata(modelInfo) {
+    if (!modelInfo || typeof modelInfo !== "object") {
+      return modelInfo;
+    }
+    var metadata = submittedPublicModeMetadata(modelInfo);
+    modelInfo.selectedPublicMode = metadata.selectedPublicMode;
+    modelInfo.selectedPublicModeLabel = metadata.selectedPublicModeLabel;
+    modelInfo.selectedPublicModeSource = metadata.selectedPublicModeSource;
+    return modelInfo;
+  }
+
+  function hasSubmittedPublicSelection(modelInfo) {
+    return hasPublicModelSelection(modelInfo) ||
+      Boolean(submittedPublicModeMetadata(modelInfo).selectedPublicMode);
   }
 
   function isRequestModelSource(source) {
@@ -445,7 +783,7 @@
     if (/^image-\d+-image$/i.test(String(value || "").replace(/_/g, "-"))) {
       return false;
     }
-    return /^(?:gpt|o\d|chat|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(String(value || ""));
+    return /^(?:gpt|o\d|chat-latest(?:$|[-_.])|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(String(value || ""));
   }
 
   function hasGenericRequestModelEvidence(value) {
@@ -873,7 +1211,7 @@
         var parts = safeKey.split(".");
         return nestedRoot(parts[0]) && !parts.some(denied) ? safeKey : "";
       }
-      return /^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel|temperature|top_p|top_k|top_logprobs|logprobs|logit_bias|frequency_penalty|presence_penalty|max_tokens|max_output_tokens|max_completion_tokens|max_response_output_tokens|max_tool_calls|seed|n|stop|tools|tool_choice|parallel_tool_calls|response_format|modalities|output_modalities|voice|speed|service_tier|store|truncation|prompt_cache_key|prompt_cache_retention|safety_identifier|include|reasoning|text|audio|prediction|input_audio_format|output_audio_format|input_audio_transcription|turn_detection|web_search_options|image_generation_options|size|quality|style|background|moderation|output_format|output_compression|format|encoding_format|dimensions|language|timestamp_granularities|best_of|suffix|echo)$/i.test(safeKey) ? safeKey : "";
+      return /^(model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel|temperature|top_p|top_k|top_logprobs|logprobs|logit_bias|frequency_penalty|presence_penalty|max_tokens|max_output_tokens|max_completion_tokens|max_response_output_tokens|max_tool_calls|seed|n|stop|tools|tool_choice|parallel_tool_calls|response_format|modalities|output_modalities|voice|speed|service_tier|store|truncation|prompt_cache_retention|include|reasoning|text|audio|prediction|input_audio_format|output_audio_format|input_audio_transcription|turn_detection|web_search_options|image_generation_options|size|quality|style|background|moderation|output_format|output_compression|format|encoding_format|dimensions|language|timestamp_granularities|best_of|suffix|echo)$/i.test(safeKey) ? safeKey : "";
     }
 
     Object.keys(source).some(function copy(key) {
@@ -973,6 +1311,7 @@
       }
       info.selectedPublicModel = info.publicModel || "";
       info.selectedPublicModelSource = info.selectedPublicModel ? "selector-dom" : "";
+      applySubmittedPublicModeMetadata(info);
       setDiagnostic("detected-model", info.label);
       setDiagnostic("detected-api-model", info.apiModel);
       setDiagnostic("detected-public-model", info.selectedPublicModel);
@@ -986,6 +1325,7 @@
       info.selectedPublicModel = info.publicModel;
       info.selectedPublicModelSource = String(info.selectedPublicModelSource || "selector-dom").slice(0, 80);
       info.observedSource = info.observedSource || info.selectedPublicModelSource;
+      applySubmittedPublicModeMetadata(info);
       setDiagnostic("detected-public-model", info.selectedPublicModel);
       setDiagnostic("detected-model-source", info.observedSource);
       return info;
@@ -1067,13 +1407,24 @@
     return "unknown";
   }
 
-  function createSubmissionId(now, promptHash) {
+  function createSubmissionId(now) {
     submissionSequence += 1;
+    var nonce = "";
+    try {
+      if (typeof crypto !== "undefined" && crypto && typeof crypto.getRandomValues === "function") {
+        var bytes = new Uint32Array(2);
+        crypto.getRandomValues(bytes);
+        nonce = bytes[0].toString(36) + bytes[1].toString(36);
+      }
+    } catch (_) {}
+    if (!nonce) {
+      nonce = Math.random().toString(36).slice(2, 14);
+    }
     return [
       "usage",
       Number(now || Date.now()).toString(36),
       submissionSequence.toString(36),
-      String(promptHash || "").slice(0, 12)
+      nonce.slice(0, 16)
     ].join("-");
   }
 
@@ -1091,7 +1442,7 @@
     });
   }
 
-  function rememberPendingResponseObservation(submissionId, submittedAt, pageUrl) {
+  function rememberPendingResponseObservation(submissionId, submittedAt, pageUrl, requestMessageId) {
     if (!submissionId) {
       return;
     }
@@ -1101,8 +1452,22 @@
       submissionId: submissionId,
       submittedAt: Number(submittedAt || Date.now()),
       conversationId: conversationIdFromCurrentLocation(),
-      pageUrl: String(pageUrl || location.href || "")
+      pageUrl: String(pageUrl || location.href || ""),
+      requestMessageId: sanitizeMessageId(requestMessageId),
+      recorded: false,
+      sending: false,
+      responseCandidate: null
     });
+  }
+
+  function pendingResponseObservationById(submissionId) {
+    var id = String(submissionId || "");
+    for (var index = pendingResponseObservations.length - 1; index >= 0; index -= 1) {
+      if (pendingResponseObservations[index].submissionId === id) {
+        return pendingResponseObservations[index];
+      }
+    }
+    return null;
   }
 
   function clearOlderPendingResponsesForConversation(submittedAt) {
@@ -1112,62 +1477,148 @@
     });
   }
 
-  function sendResponseObservation(responseModel, observedSource, observedAt) {
+  function dispatchPendingResponseObservation(pending) {
+    if (!pending || !pending.recorded || pending.sending || !pending.responseCandidate) {
+      return false;
+    }
+    var candidate = pending.responseCandidate;
+    rememberRuntimeModelSlug(candidate.model);
+    var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
+    if (!runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
+      return false;
+    }
+    pending.sending = true;
+    try {
+      runtime.sendMessage({
+        type: "usage.response",
+        payload: {
+          submissionId: pending.submissionId,
+          conversationId: candidate.conversationId || pending.conversationId,
+          requestMessageId: candidate.requestMessageId || pending.requestMessageId,
+          responseModel: candidate.model || "",
+          usageFeatures: candidate.usageFeatures || [],
+          runtimeModelCatalog: runtimeModelCatalog,
+          pageUrl: candidate.pageUrl || pending.pageUrl,
+          pageTitle: candidate.pageTitle || document.title,
+          responseMessageId: candidate.responseMessageId,
+          observedSource: candidate.modelObservedSource || candidate.featureObservedSource,
+          featureObservedSource: candidate.featureObservedSource || "",
+          observedAt: new Date(candidate.observedAt).toISOString()
+        }
+      }, function responseObserved(response) {
+        pending.sending = false;
+        if (runtime.lastError || !response || !response.ok) {
+          setDiagnostic("last-response-status", "error");
+          return;
+        }
+        if (pending.responseCandidate === candidate) {
+          pending.responseCandidate = null;
+        }
+        setDiagnostic("last-response-status", response.updated ? "updated" : "unchanged");
+        if (candidate.model) {
+          setDiagnostic("last-response-model", candidate.model);
+        }
+        dispatchPendingResponseObservation(pending);
+      });
+    } catch (error) {
+      pending.sending = false;
+      if (/context invalidated|Extension context/i.test(String((error && error.message) || error || ""))) {
+        handleExtensionContextInvalidated();
+      }
+      return false;
+    }
+    return true;
+  }
+
+  function markPendingResponseRecorded(submissionId) {
+    var pending = pendingResponseObservationById(submissionId);
+    if (!pending) {
+      return false;
+    }
+    pending.recorded = true;
+    dispatchPendingResponseObservation(pending);
+    return true;
+  }
+
+  function sendAssistantOutcomeObservation(
+    responseModel,
+    usageFeatures,
+    observedSource,
+    observedAt,
+    responseMessageId,
+    requestMessageId
+  ) {
     var model = canonicalRequestModelSlug(responseModel);
+    var features = normalizeUsageFeatures(usageFeatures);
     if (!isActualRequestModelSlug(model)) {
+      model = "";
+    }
+    if (!model && !features.length) {
       return false;
     }
     prunePendingResponseObservations(observedAt);
     var conversationId = conversationIdFromCurrentLocation();
+    var exactRequestMessageId = sanitizeMessageId(requestMessageId);
     var matchIndex = -1;
-    for (var index = pendingResponseObservations.length - 1; index >= 0; index -= 1) {
-      if (!conversationId || pendingResponseObservations[index].conversationId === conversationId) {
-        matchIndex = index;
-        break;
+    if (exactRequestMessageId) {
+      for (var exactIndex = pendingResponseObservations.length - 1; exactIndex >= 0; exactIndex -= 1) {
+        if (sanitizeMessageId(pendingResponseObservations[exactIndex].requestMessageId) === exactRequestMessageId) {
+          matchIndex = exactIndex;
+          break;
+        }
+      }
+    }
+    if (matchIndex < 0) {
+      for (var index = pendingResponseObservations.length - 1; index >= 0; index -= 1) {
+        var pendingConversationId = pendingResponseObservations[index].conversationId;
+        if (
+          !conversationId ||
+          !pendingConversationId ||
+          pendingConversationId === conversationId
+        ) {
+          matchIndex = index;
+          break;
+        }
       }
     }
     if (matchIndex < 0) {
       return false;
     }
 
-    var pending = pendingResponseObservations.splice(matchIndex, 1)[0];
-    var currentConversationId = conversationIdFromCurrentLocation();
-    var currentPageUrl = String(location && location.href || "");
-    var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
-    if (!runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
-      return false;
-    }
-    try {
-      runtime.sendMessage({
-        type: "usage.response",
-        payload: {
-          submissionId: pending.submissionId,
-          conversationId: pending.conversationId || currentConversationId,
-          responseModel: model,
-          runtimeModelCatalog: runtimeModelCatalog,
-          pageUrl: currentConversationId ? currentPageUrl : (pending.pageUrl || currentPageUrl),
-          pageTitle: document.title,
-          observedSource: String(observedSource || "message-dom:model-slug").slice(0, 64),
-          observedAt: new Date(Number(observedAt || Date.now())).toISOString()
-        }
-      }, function responseObserved(response) {
-        if (runtime.lastError || !response || !response.ok) {
-          setDiagnostic("last-response-status", "error");
-          return;
-        }
-        setDiagnostic("last-response-status", response.updated ? "updated" : "unchanged");
-        setDiagnostic("last-response-model", model);
-      });
-    } catch (error) {
-      if (/context invalidated|Extension context/i.test(String((error && error.message) || error || ""))) {
-        handleExtensionContextInvalidated();
-      }
-      return false;
-    }
-    if (!runtimeModelIsMapped(model)) {
-      ensureRuntimeModelCatalog("unknown-response", model);
-    }
+    var pending = pendingResponseObservations[matchIndex];
+    var previousCandidate = pending.responseCandidate || {};
+    pending.responseCandidate = {
+      model: model || previousCandidate.model || "",
+      modelObservedSource: model
+        ? String(observedSource || "message-dom:model-slug").slice(0, 64)
+        : String(previousCandidate.modelObservedSource || "").slice(0, 64),
+      usageFeatures: normalizeUsageFeatures([].concat(
+        previousCandidate.usageFeatures || [],
+        features
+      )),
+      featureObservedSource: features.length
+        ? String(observedSource || "message-dom:feature").slice(0, 64)
+        : String(previousCandidate.featureObservedSource || "").slice(0, 64),
+      conversationId: conversationId || pending.conversationId,
+      requestMessageId: exactRequestMessageId || pending.requestMessageId,
+      pageUrl: String(location && location.href || pending.pageUrl || ""),
+      pageTitle: String(document && document.title || ""),
+      responseMessageId: String(responseMessageId || "").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 160),
+      observedAt: Number(observedAt || Date.now())
+    };
+    dispatchPendingResponseObservation(pending);
     return true;
+  }
+
+  function sendResponseObservation(responseModel, observedSource, observedAt, responseMessageId, requestMessageId) {
+    return sendAssistantOutcomeObservation(
+      responseModel,
+      [],
+      observedSource,
+      observedAt,
+      responseMessageId,
+      requestMessageId
+    );
   }
 
   function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures, submissionId, sourceMode) {
@@ -1181,12 +1632,25 @@
     var selectedPublicModelSource = resolved
       ? modelInfo.selectedPublicModelSource || (publicModel ? "selector-dom" : "")
       : "";
+    var selectedPublicModeMetadata = resolved
+      ? submittedPublicModeMetadata(modelInfo)
+      : submittedPublicModeMetadata(null);
     var requestModel = resolved ? modelInfo.requestModel || modelParameters.model || apiModel : "";
-    var responseModel = resolved ? modelInfo.responseModel || "" : "";
+    rememberRuntimeModelSlug(requestModel);
+    var pendingResponse = pendingResponseObservationById(submissionId);
+    var requestMessageId = sanitizeMessageId(
+      (pendingResponse && pendingResponse.requestMessageId) ||
+      (modelInfo && modelInfo.requestMessageId)
+    );
+    // A submit-time observation proves the request route, not the final
+    // assistant model. The latter is written only by usage.response after the
+    // final content-bearing assistant message exposes metadata.model_slug.
+    var responseModel = "";
     var observedSource = resolved ? modelInfo.observedSource || "page" : "pending-webRequest";
     var usageFeatures = resolved ? normalizeUsageFeatures(modelInfo.usageFeatures) : normalizeUsageFeatures(pendingUsageFeatures);
     var duplicateKey = model || "pending-webRequest";
     if (isDuplicate(duplicateKey, promptText, now)) {
+      removePendingResponseObservation(submissionId);
       return false;
     }
     if (source !== "message-dom" && lastComposerSnapshot && lastComposerSnapshot.hash === hashText(promptText)) {
@@ -1196,6 +1660,17 @@
       lastDirectSubmission = { hash: hashText(promptText), time: now };
     }
 
+    var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
+    if (!runtime || typeof runtime.sendMessage !== "function") {
+      removePendingResponseObservation(submissionId);
+      setDiagnostic("last-record-status", "error:runtime-unavailable");
+      return false;
+    }
+    if (extensionContextLost) {
+      // 已知扩展上下文失效(扩展被重载/更新),不再尝试发送,避免重复抛错。
+      removePendingResponseObservation(submissionId);
+      return false;
+    }
     setDiagnostic("last-record-status", "sending");
     setDiagnostic("last-record-model", model);
     setDiagnostic("last-record-api-model", apiModel);
@@ -1206,22 +1681,6 @@
       setDiagnostic("last-record-parameters", "");
     }
     setDiagnostic("last-record-source", source);
-
-    var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
-    if (!runtime || typeof runtime.sendMessage !== "function") {
-      setDiagnostic("last-record-status", "error:runtime-unavailable");
-      return false;
-    }
-    if (extensionContextLost) {
-      // 已知扩展上下文失效(扩展被重载/更新),不再尝试发送,避免重复抛错。
-      return false;
-    }
-    if (responseModel) {
-      clearOlderPendingResponsesForConversation(now);
-    } else {
-      rememberPendingResponseObservation(submissionId, now, location.href);
-    }
-
     try {
     runtime.sendMessage(
       {
@@ -1231,6 +1690,9 @@
           publicModel: publicModel,
           selectedPublicModel: publicModel,
           selectedPublicModelSource: selectedPublicModelSource,
+          selectedPublicMode: selectedPublicModeMetadata.selectedPublicMode,
+          selectedPublicModeLabel: selectedPublicModeMetadata.selectedPublicModeLabel,
+          selectedPublicModeSource: selectedPublicModeMetadata.selectedPublicModeSource,
           apiModel: apiModel,
           chatgptModel: chatgptModel,
           requestModel: requestModel,
@@ -1241,6 +1703,7 @@
           usageFeatures: usageFeatures,
           modelObservedSource: observedSource,
           submissionId: submissionId,
+          requestMessageId: requestMessageId,
           source: source,
           sourceMode: normalizeSourceMode(sourceMode),
           pageUrl: location.href,
@@ -1278,6 +1741,16 @@
         }
 
         var event = response.event || {};
+        var pending = pendingResponseObservationById(submissionId);
+        if (pending) {
+          pending.requestMessageId = sanitizeMessageId(
+            event.requestMessageId || pending.requestMessageId
+          );
+          pending.conversationId = String(
+            event.conversationId || pending.conversationId || ""
+          ).slice(0, 128);
+        }
+        markPendingResponseRecorded(submissionId);
         if (event.model) {
           setDiagnostic("last-record-model", event.model);
         }
@@ -1296,16 +1769,6 @@
         }
         setDiagnostic("last-record-status", "ok");
         setDiagnostic("last-record-total", response.stats && response.stats.totals ? response.stats.totals[event.model || model] || 0 : 0);
-        if (
-          event.responseModel &&
-          String(event.modelMappingStatus || "").toLowerCase() === "unmapped"
-        ) {
-          // A response slug can already be present in the first completed
-          // observation. Refresh the session catalog here as well as in the
-          // later DOM-reconciliation path, then let the background rebuild
-          // this same event without adding another count.
-          ensureRuntimeModelCatalog("unknown-response", event.responseModel);
-        }
       }
     );
     } catch (sendError) {
@@ -1335,7 +1798,7 @@
 
     items.forEach(function flushPendingItem(item) {
       var observed = freshObservedModel(Date.now(), item.time - 250);
-      var selectorInfo = hasPublicModelSelection(item.domModelInfo) ? Object.assign({}, item.domModelInfo) : null;
+      var selectorInfo = hasSubmittedPublicSelection(item.domModelInfo) ? Object.assign({}, item.domModelInfo) : null;
       var modelInfo = hasResolvedModel(item.domModelInfo) ? Object.assign({}, item.domModelInfo) : null;
       if (hasResolvedModel(observed)) {
         if (!modelInfo) {
@@ -1347,9 +1810,9 @@
           modelInfo.parameters = actualModelParameters(observed.parameters, observed.apiModel);
           modelInfo.observedSource = observed.observedSource || modelInfo.observedSource;
         }
-        if (observed.responseModel) {
-          modelInfo.responseModel = observed.responseModel;
-        }
+        // Never attach a previously rendered assistant slug to a new submit.
+        // Response reconciliation is a separate, submission-bound event.
+        delete modelInfo.responseModel;
       }
       if (hasResolvedModel(modelInfo) && selectorInfo) {
         var selectedPublicModel = normalizePromptText(
@@ -1363,6 +1826,10 @@
           ).slice(0, 80);
           modelInfo.selectedModelText = String(selectorInfo.selectedText || selectedPublicModel).slice(0, 160);
         }
+        var submittedMode = submittedPublicModeMetadata(selectorInfo);
+        modelInfo.selectedPublicMode = submittedMode.selectedPublicMode;
+        modelInfo.selectedPublicModeLabel = submittedMode.selectedPublicModeLabel;
+        modelInfo.selectedPublicModeSource = submittedMode.selectedPublicModeSource;
       }
       // Only exact request fields can prove a used feature. Visible composer
       // controls remain diagnostics and never become stored usage evidence.
@@ -1398,7 +1865,7 @@
     pendingSubmissionTimer = setTimeout(finishPendingSubmission, MODEL_OBSERVATION_WAIT_MS);
   }
 
-  function queueSubmission(source, promptText, domModelInfo, now, usageFeatures, sourceMode) {
+  function queueSubmission(source, promptText, domModelInfo, now, usageFeatures, sourceMode, requestMessageId) {
     var hash = hashText(promptText);
     if (source === "message-dom" && lastDirectSubmission && lastDirectSubmission.hash === hash && now - lastDirectSubmission.time < MESSAGE_MATCH_WINDOW_MS) {
       return;
@@ -1419,11 +1886,18 @@
       }
     }
 
+    var submissionId = createSubmissionId(now);
+    rememberPendingResponseObservation(
+      submissionId,
+      now,
+      location.href,
+      requestMessageId
+    );
     pendingSubmissions.push({
-      submissionId: createSubmissionId(now, hash),
+      submissionId: submissionId,
       source: source,
       promptText: promptText,
-      domModelInfo: hasResolvedModel(domModelInfo) || hasPublicModelSelection(domModelInfo) ? domModelInfo : null,
+      domModelInfo: hasResolvedModel(domModelInfo) || hasSubmittedPublicSelection(domModelInfo) ? domModelInfo : null,
       usageFeatures: normalizeUsageFeatures(usageFeatures),
       sourceMode: normalizeSourceMode(sourceMode),
       time: now,
@@ -1432,7 +1906,7 @@
     schedulePendingSubmissionFlush();
   }
 
-  function recordUsage(source, target, promptTextOverride, sourceModeOverride) {
+  function recordUsage(source, target, promptTextOverride, sourceModeOverride, requestMessageId) {
     var promptText = normalizePromptText(promptTextOverride || detector.getComposerText(document, target));
     if (!promptText) {
       return;
@@ -1445,7 +1919,21 @@
       readDomModel(),
       now,
       [],
-      sourceModeOverride || readSourceMode()
+      sourceModeOverride || readSourceMode(),
+      requestMessageId
+    );
+  }
+
+  function recordRegeneration(source) {
+    var now = Date.now();
+    queueSubmission(
+      source,
+      "__regenerate__:" + (conversationIdFromCurrentLocation() || "new"),
+      readDomModel(),
+      now,
+      [],
+      readSourceMode(),
+      ""
     );
   }
 
@@ -1479,6 +1967,68 @@
     }
 
     return "text:" + hashText(text) + ":" + text.slice(0, 32);
+  }
+
+  function messageIdFromTurn(turn, role) {
+    if (!turn) {
+      return "";
+    }
+    var selector = '[data-message-author-role="' + role + '"]';
+    var message = typeof turn.querySelector === "function"
+      ? turn.querySelector(selector)
+      : null;
+    return sanitizeMessageId(
+      (message && typeof message.getAttribute === "function" && message.getAttribute("data-message-id")) ||
+      (typeof turn.getAttribute === "function" && (
+        turn.getAttribute("data-message-id") ||
+        turn.getAttribute("data-turn-id") ||
+        turn.getAttribute("data-turn-id-container")
+      ))
+    );
+  }
+
+  function assistantTurnRequestMap() {
+    var map = typeof Map === "function" ? new Map() : null;
+    if (!map || !document || typeof document.querySelectorAll !== "function") {
+      return map;
+    }
+    var lastUserMessageId = "";
+    var turns = document.querySelectorAll('[data-turn="user"],[data-turn="assistant"]');
+    Array.prototype.forEach.call(turns, function inspectTurn(turn) {
+      var role = typeof turn.getAttribute === "function"
+        ? String(turn.getAttribute("data-turn") || "").toLowerCase()
+        : "";
+      if (role === "user") {
+        lastUserMessageId = messageIdFromTurn(turn, "user");
+        return;
+      }
+      if (role === "assistant") {
+        map.set(turn, lastUserMessageId);
+      }
+    });
+    return map;
+  }
+
+  function closestAssistantTurn(element) {
+    if (!element) {
+      return null;
+    }
+    if (typeof element.closest === "function") {
+      try {
+        return element.closest('[data-turn="assistant"]');
+      } catch (_) {}
+    }
+    var current = element;
+    for (var depth = 0; current && depth < 12; depth += 1) {
+      if (
+        typeof current.getAttribute === "function" &&
+        String(current.getAttribute("data-turn") || "").toLowerCase() === "assistant"
+      ) {
+        return current;
+      }
+      current = current.parentElement || current.parentNode;
+    }
+    return null;
   }
 
   function assistantModelKey(element, model) {
@@ -1520,6 +2070,11 @@
       found.push({
         element: element,
         key: userMessageKey(element, text),
+        messageId: sanitizeMessageId(
+          typeof element.getAttribute === "function"
+            ? element.getAttribute("data-message-id")
+            : ""
+        ),
         text: text
       });
     });
@@ -1530,6 +2085,7 @@
   function collectAssistantModelMessages() {
     var found = [];
     var elements = new Set();
+    var requestByTurn = assistantTurnRequestMap();
     [
       '[data-message-model-slug]',
       '[data-message-author-role="assistant"][data-message-model-slug]',
@@ -1551,12 +2107,50 @@
       if (!isActualRequestModelSlug(model)) {
         return;
       }
+      var assistantTurn = closestAssistantTurn(element);
+      var messageRole = typeof element.getAttribute === "function"
+        ? String(element.getAttribute("data-message-author-role") || "").toLowerCase()
+        : "";
+      var messageId = sanitizeMessageId(
+        (typeof element.getAttribute === "function" && element.getAttribute("data-message-id")) ||
+        messageIdFromTurn(assistantTurn, "assistant")
+      );
+      var pendingRequestNode = /^(?:request-web|request|tool|reasoning|research|progress)[-_:]/i.test(messageId);
+      var loadingState = typeof element.getAttribute === "function"
+        ? [
+            element.getAttribute("aria-busy"),
+            element.getAttribute("data-state"),
+            element.getAttribute("data-status")
+          ].join(" ").toLowerCase()
+        : "";
+      var hasRenderedMedia = false;
+      if (typeof element.querySelector === "function") {
+        try {
+          hasRenderedMedia = Boolean(element.querySelector(
+            'img[src],picture img,video[src],audio[src],canvas,[data-testid*="image" i],[data-generated-image]'
+          ));
+        } catch (_) {}
+      }
 
       found.push({
         element: element,
         key: assistantModelKey(element, model),
         model: normalizePromptText(model),
-        contentLength: getElementText(element).length
+        messageId: messageId,
+        requestMessageId: requestByTurn && assistantTurn
+          ? sanitizeMessageId(requestByTurn.get(assistantTurn))
+          : "",
+        assistantTurnId: messageIdFromTurn(assistantTurn, "assistant"),
+        contentLength: getElementText(element).length,
+        hasRenderedMedia: hasRenderedMedia,
+        finalEvidence: Boolean(
+          assistantTurn &&
+          messageRole === "assistant" &&
+          messageId &&
+          !pendingRequestNode &&
+          !/(?:^|\s)(?:true|loading|pending|streaming|in-progress)(?:\s|$)/i.test(loadingState) &&
+          (getElementText(element).length > 0 || hasRenderedMedia)
+        )
       });
     });
 
@@ -1570,6 +2164,19 @@
     collectAssistantModelMessages().forEach(function mark(message) {
       seenAssistantModelMessages.add(message.key);
     });
+    if (document && typeof document.querySelectorAll === "function") {
+      try {
+        Array.prototype.forEach.call(
+          document.querySelectorAll('[data-turn="assistant"]'),
+          function markOutcome(turn) {
+            var outcome = generatedImageOutcome(turn);
+            if (outcome) {
+              seenAssistantOutcomeTurns.add(outcome.turnId);
+            }
+          }
+        );
+      } catch (_) {}
+    }
   }
 
   function scanNewUserMessages() {
@@ -1589,7 +2196,31 @@
         return;
       }
 
-      recordUsage("message-dom", message.element, message.text, snapshot.sourceMode);
+      var bound = false;
+      for (var pendingIndex = pendingSubmissions.length - 1; pendingIndex >= 0; pendingIndex -= 1) {
+        var pending = pendingSubmissions[pendingIndex];
+        if (
+          pending.hash === snapshot.hash &&
+          now - Number(pending.time || 0) <= MESSAGE_MATCH_WINDOW_MS
+        ) {
+          pending.requestMessageId = message.messageId;
+          var pendingResponse = pendingResponseObservationById(pending.submissionId);
+          if (pendingResponse) {
+            pendingResponse.requestMessageId = message.messageId;
+          }
+          bound = true;
+          break;
+        }
+      }
+      if (!bound) {
+        recordUsage(
+          "message-dom",
+          message.element,
+          message.text,
+          snapshot.sourceMode,
+          message.messageId
+        );
+      }
       lastComposerSnapshot = null;
     });
   }
@@ -1598,11 +2229,6 @@
     if (!message || !message.model) {
       return false;
     }
-    if (pendingAssistantModelTimer) {
-      clearTimeout(pendingAssistantModelTimer);
-      pendingAssistantModelTimer = null;
-    }
-    pendingAssistantModelCandidate = null;
     var observedAt = Date.now();
     rememberObservedModel(
       message.model,
@@ -1612,20 +2238,19 @@
       { model: message.model },
       []
     );
-    return sendResponseObservation(message.model, "message-dom:model-slug", observedAt);
-  }
-
-  function scheduleAssistantModelCandidate(message) {
-    pendingAssistantModelCandidate = message;
-    if (pendingAssistantModelTimer || typeof setTimeout !== "function") {
-      return;
-    }
-    pendingAssistantModelTimer = setTimeout(function commitDelayedAssistantModel() {
-      pendingAssistantModelTimer = null;
-      var candidate = pendingAssistantModelCandidate;
-      pendingAssistantModelCandidate = null;
-      commitAssistantModelCandidate(candidate);
-    }, FINAL_RESPONSE_MODEL_WAIT_MS);
+    // Background tabs can throttle the delayed submission timer for minutes.
+    // A final assistant message proves that the request has already reached
+    // ChatGPT, so the background webRequest observation is available now.
+    // Flush the still-pending increment synchronously, then reconcile this
+    // exact response against the same submission without adding a second use.
+    flushPendingSubmission();
+    return sendResponseObservation(
+      message.model,
+      "message-dom:model-slug",
+      observedAt,
+      message.messageId,
+      message.requestMessageId
+    );
   }
 
   function scanNewAssistantModelMessages() {
@@ -1634,30 +2259,241 @@
       if (seenAssistantModelMessages.has(message.key)) {
         return;
       }
-
-      seenAssistantModelMessages.add(message.key);
       unseen.push(message);
     });
     if (!unseen.length) {
       return;
     }
 
-    // Reasoning and final assistant nodes can be rendered as separate elements.
-    // The reasoning node may arrive first and can even carry a different slug.
-    // Prefer the content-bearing final node; only use a metadata-only node after
-    // a short settlement window when no final node appears.
+    // Tool, reasoning and progress nodes can carry a model slug before the
+    // final assistant answer. Only a content-bearing assistant message with a
+    // stable message id is accepted. Metadata-only nodes remain unknown.
     var finalCandidate = null;
     for (var index = unseen.length - 1; index >= 0; index -= 1) {
-      if (Number(unseen[index].contentLength || 0) > 0) {
+      if (unseen[index].finalEvidence) {
         finalCandidate = unseen[index];
         break;
       }
     }
     if (finalCandidate) {
+      seenAssistantModelMessages.add(finalCandidate.key);
       commitAssistantModelCandidate(finalCandidate);
+    }
+  }
+
+  function generatedImageOutcome(turn) {
+    if (!turn || typeof turn.querySelector !== "function") {
+      return null;
+    }
+    var image = null;
+    try {
+      image = turn.querySelector(
+        'img[alt^="Generated image:" i],img[alt*="生成的图片"],img[alt*="已生成图像"],[data-generated-image]'
+      );
+    } catch (_) {}
+    if (!image) {
+      return null;
+    }
+    var turnId = sanitizeMessageId(
+      typeof turn.getAttribute === "function"
+        ? turn.getAttribute("data-turn-id") || turn.getAttribute("data-turn-id-container")
+        : ""
+    );
+    if (!turnId) {
+      return null;
+    }
+    return {
+      turnId: turnId,
+      responseMessageId: messageIdFromTurn(turn, "assistant") || turnId
+    };
+  }
+
+  function scanNewAssistantOutcomes() {
+    if (!document || typeof document.querySelectorAll !== "function") {
       return;
     }
-    scheduleAssistantModelCandidate(unseen[unseen.length - 1]);
+    var requestByTurn = assistantTurnRequestMap();
+    var turns = [];
+    try {
+      turns = document.querySelectorAll('[data-turn="assistant"]');
+    } catch (_) {
+      return;
+    }
+    Array.prototype.forEach.call(turns, function inspectOutcome(turn) {
+      var imageOutcome = generatedImageOutcome(turn);
+      if (!imageOutcome || seenAssistantOutcomeTurns.has(imageOutcome.turnId)) {
+        return;
+      }
+      var sent = sendAssistantOutcomeObservation(
+        "",
+        ["image_generation"],
+        "message-dom:feature:image-generation",
+        Date.now(),
+        imageOutcome.responseMessageId,
+        requestByTurn ? sanitizeMessageId(requestByTurn.get(turn)) : ""
+      );
+      if (sent) {
+        seenAssistantOutcomeTurns.add(imageOutcome.turnId);
+      }
+    });
+  }
+
+  function finalAssistantResponsePairs() {
+    var byTurn = {};
+    var order = [];
+    collectAssistantModelMessages().forEach(function group(message) {
+      var key = sanitizeMessageId(
+        message.assistantTurnId || message.messageId
+      );
+      if (!key) {
+        return;
+      }
+      if (!byTurn[key]) {
+        byTurn[key] = message;
+        order.push(key);
+        return;
+      }
+      if (
+        Number(message.contentLength || 0) > 0 &&
+        Number(byTurn[key].contentLength || 0) <= 0
+      ) {
+        byTurn[key] = message;
+      }
+    });
+    return order.map(function toPair(key) {
+      return byTurn[key];
+    }).filter(function finalContent(message) {
+      return message &&
+        message.requestMessageId &&
+        message.messageId &&
+        message.model &&
+        Number(message.contentLength || 0) > 0;
+    });
+  }
+
+  function sendRecoveredResponseObservation(event, candidate, conversationId) {
+    var submissionId = String((event && event.submissionId) || "").slice(0, 96);
+    if (
+      !submissionId ||
+      !candidate ||
+      !isActualRequestModelSlug(candidate.model) ||
+      pendingRecoverySentSubmissionIds.has(submissionId)
+    ) {
+      return Promise.resolve(false);
+    }
+    pendingRecoverySentSubmissionIds.add(submissionId);
+    rememberRuntimeModelSlug(candidate.model);
+    return runtimeMessage({
+      type: "usage.response",
+      payload: {
+        submissionId: submissionId,
+        conversationId: conversationId,
+        requestMessageId: sanitizeMessageId(candidate.requestMessageId),
+        responseModel: canonicalRequestModelSlug(candidate.model),
+        runtimeModelCatalog: runtimeModelCatalog,
+        pageUrl: String(location && location.href || ""),
+        pageTitle: String(document && document.title || ""),
+        responseMessageId: sanitizeMessageId(candidate.messageId),
+        observedSource: "message-dom:model-slug:recovered",
+        observedAt: new Date().toISOString()
+      }
+    }).then(function recovered(response) {
+      if (!response || !response.ok) {
+        pendingRecoverySentSubmissionIds.delete(submissionId);
+        return false;
+      }
+      setDiagnostic("last-response-status", response.updated ? "recovered" : "unchanged");
+      setDiagnostic("last-response-model", candidate.model);
+      return true;
+    });
+  }
+
+  function reconcileStoredPendingResponses(force) {
+    var conversationId = conversationIdFromCurrentLocation();
+    var now = Date.now();
+    if (
+      !conversationId ||
+      pendingRecoveryInFlight ||
+      (!force &&
+        pendingRecoveryConversationId === conversationId &&
+        now - pendingRecoveryLastAttemptAt < 1500)
+    ) {
+      return;
+    }
+    if (pendingRecoveryConversationId !== conversationId) {
+      pendingRecoverySentSubmissionIds.clear();
+    }
+    pendingRecoveryConversationId = conversationId;
+    pendingRecoveryLastAttemptAt = now;
+    pendingRecoveryInFlight = true;
+
+    runtimeMessage({
+      type: "usage.pending.get",
+      conversationId: conversationId
+    }).then(function reconcile(response) {
+      var events = response && Array.isArray(response.events)
+        ? response.events.slice().sort(function oldestFirst(left, right) {
+            return String(left.submittedAt || "").localeCompare(String(right.submittedAt || ""));
+          })
+        : [];
+      var pendingEvents = events.filter(function pending(event) {
+        return event && !event.responseModel;
+      });
+      if (!pendingEvents.length) {
+        return [];
+      }
+
+      var pairs = finalAssistantResponsePairs();
+      if (!pairs.length) {
+        return [];
+      }
+      var pairsByRequestMessageId = {};
+      pairs.forEach(function indexPair(pair) {
+        if (pair.requestMessageId && !pairsByRequestMessageId[pair.requestMessageId]) {
+          pairsByRequestMessageId[pair.requestMessageId] = pair;
+        }
+      });
+
+      var recoveries = [];
+      var recoveredSubmissions = {};
+      pendingEvents.forEach(function exactRequestMatch(event) {
+        var pair = pairsByRequestMessageId[sanitizeMessageId(event.requestMessageId)];
+        if (!pair) {
+          return;
+        }
+        recoveredSubmissions[event.submissionId] = true;
+        recoveries.push(sendRecoveredResponseObservation(event, pair, conversationId));
+      });
+
+      // Legacy events did not store the submitted user-message id. A passive
+      // recovery is still exact when the number and order of stored events
+      // equals the visible user→assistant turn pairs and every already-known
+      // response agrees with the model_slug at the same position.
+      var orderedAlignmentIsExact =
+        events.length === pairs.length &&
+        events.every(function knownResponsesAgree(event, index) {
+          return !event.responseModel ||
+            canonicalRequestModelSlug(event.responseModel) ===
+              canonicalRequestModelSlug(pairs[index] && pairs[index].model);
+        });
+      if (orderedAlignmentIsExact) {
+        events.forEach(function recoverLegacyEvent(event, index) {
+          if (
+            event.responseModel ||
+            recoveredSubmissions[event.submissionId] ||
+            !pairs[index]
+          ) {
+            return;
+          }
+          recoveries.push(
+            sendRecoveredResponseObservation(event, pairs[index], conversationId)
+          );
+        });
+      }
+      return Promise.all(recoveries);
+    }).finally(function recoveryFinished() {
+      pendingRecoveryInFlight = false;
+    });
   }
 
   function installUsagePanel() {
@@ -1672,17 +2508,24 @@
 
     var host = document.createElement("div");
     host.id = "chatgpt-model-usage-counter-panel-host";
-    host.innerHTML = [
-      '<button id="chatgpt-model-usage-counter-panel-toggle" type="button" title="模型统计" aria-haspopup="dialog" aria-expanded="false"><span class="chatgpt-model-usage-counter-panel-toggle-label">统计</span></button>',
-      '<aside id="chatgpt-model-usage-counter-panel" hidden>',
-      '<div id="chatgpt-model-usage-counter-panel-body"></div>',
-      "</aside>"
-    ].join("");
+    host.innerHTML =
+      '<button id="chatgpt-model-usage-counter-panel-toggle" type="button" title="模型统计" aria-haspopup="dialog" aria-expanded="false"><span class="chatgpt-model-usage-counter-panel-toggle-label">统计</span></button>';
+
+    // Keep the button in ChatGPT's header, but portal the actual panel to the
+    // document root. Header/action containers can establish a narrow fixed
+    // containing block, which previously compressed the 400px panel to the
+    // width of the Share/More button group and made it appear not to open.
+    var panel = document.createElement("aside");
+    panel.id = "chatgpt-model-usage-counter-panel";
+    panel.hidden = true;
+    panel.innerHTML = '<div id="chatgpt-model-usage-counter-panel-body"></div>';
 
     var style = document.createElement("style");
+    style.id = "chatgpt-model-usage-counter-panel-style";
     style.textContent = [
-      "#chatgpt-model-usage-counter-panel-host{z-index:2147483647;font:13px/1.35 system-ui,sans-serif;color:inherit;--usage-text-primary:#18201c;--usage-surface-panel:#fbfcfa;--usage-border-control:#ccd4ca;--usage-border-panel:#dde3dc;--usage-shadow-export:rgba(15,23,42,.14);--usage-panel-toggle-hover:rgba(0,0,0,.06)}",
-      "#chatgpt-model-usage-counter-panel-host[data-chatgpt-model-usage-theme=\"dark\"],html.dark #chatgpt-model-usage-counter-panel-host,html[data-theme*=\"dark\"] #chatgpt-model-usage-counter-panel-host{--usage-text-primary:#ececf1;--usage-surface-panel:#2a2b32;--usage-border-control:#565869;--usage-border-panel:#3e3f4b;--usage-shadow-export:rgba(0,0,0,.3);--usage-panel-toggle-hover:rgba(255,255,255,.08)}",
+      "#chatgpt-model-usage-counter-panel-host,#chatgpt-model-usage-counter-panel{font:13px/1.35 system-ui,sans-serif;--usage-text-primary:#18201c;--usage-surface-panel:#fbfcfa;--usage-border-control:#ccd4ca;--usage-border-panel:#dde3dc;--usage-shadow-export:rgba(15,23,42,.14);--usage-panel-toggle-hover:rgba(0,0,0,.06)}",
+      "#chatgpt-model-usage-counter-panel-host{z-index:2147483647;color:inherit}",
+      "#chatgpt-model-usage-counter-panel-host[data-chatgpt-model-usage-theme=\"dark\"],#chatgpt-model-usage-counter-panel[data-chatgpt-model-usage-theme=\"dark\"]{--usage-text-primary:#ececf1;--usage-surface-panel:#2a2b32;--usage-border-control:#565869;--usage-border-panel:#3e3f4b;--usage-shadow-export:rgba(0,0,0,.3);--usage-panel-toggle-hover:rgba(255,255,255,.08)}",
       "#chatgpt-model-usage-counter-panel-host.is-embedded{position:relative;display:inline-flex;align-items:center;align-self:center;flex:0 0 auto;margin-left:4px}",
       "#chatgpt-model-usage-counter-panel-host.is-main-top{margin-left:auto;margin-right:8px}",
       "#chatgpt-model-usage-counter-panel-host.is-fallback{position:fixed;right:12px;top:12px}",
@@ -1693,18 +2536,19 @@
       "#chatgpt-model-usage-counter-panel-host.is-fallback #chatgpt-model-usage-counter-panel-toggle{width:28px;height:28px;padding:0;border-color:var(--usage-border-control,#d1d5db);background:var(--usage-surface-panel,#fff);color:var(--usage-text-primary,#111827);box-shadow:0 6px 18px var(--usage-shadow-export,rgba(15,23,42,.16));font-size:0}",
       "#chatgpt-model-usage-counter-panel-host.is-fallback #chatgpt-model-usage-counter-panel-toggle::after{content:'U';font-size:12px;font-weight:700}",
       // 统计入口不再随 OpenAI 状态变色(用户:不要那个奶油色/警告样式);状态提示保留在面板状态页与工具栏角标。
-      "#chatgpt-model-usage-counter-panel{position:fixed;top:52px;right:12px;box-sizing:border-box;width:min(400px,calc(100vw - 24px));height:min(560px,calc(100vh - 76px));overflow:hidden;border:1px solid var(--usage-border-panel,rgba(24,32,28,.14));border-radius:8px;background:var(--usage-surface-panel,#fbfcfa);color:var(--usage-text-primary,#18201c);box-shadow:0 18px 42px var(--usage-shadow-export,rgba(24,32,28,.14))}",
+      "#chatgpt-model-usage-counter-panel{position:fixed;z-index:2147483647;top:52px;right:12px;box-sizing:border-box;width:min(400px,calc(100vw - 24px));height:min(560px,calc(100vh - 76px));overflow:hidden;border:1px solid var(--usage-border-panel,rgba(24,32,28,.14));border-radius:8px;background:var(--usage-surface-panel,#fbfcfa);color:var(--usage-text-primary,#18201c);box-shadow:0 18px 42px var(--usage-shadow-export,rgba(24,32,28,.14))}",
       "#chatgpt-model-usage-counter-panel-body{height:100%;padding:0;overflow:hidden}",
       "@media (max-width:720px){#chatgpt-model-usage-counter-panel{left:10px;right:10px;top:48px;width:auto;height:calc(100vh - 64px)}}"
     ].join("");
-    host.appendChild(style);
+    (document.head || document.documentElement).appendChild(style);
+    (document.body || document.documentElement).appendChild(panel);
 
-    var panel = host.querySelector("#chatgpt-model-usage-counter-panel");
-    var body = host.querySelector("#chatgpt-model-usage-counter-panel-body");
+    var body = panel.querySelector("#chatgpt-model-usage-counter-panel-body");
     var toggleButton = host.querySelector("#chatgpt-model-usage-counter-panel-toggle");
     var toggleLabel = host.querySelector(".chatgpt-model-usage-counter-panel-toggle-label");
     var dashboard = null;
-    var currentPanelLanguage = "zh";
+    var currentPanelLanguage = "en";
+    var currentPanelThemeMode = "system";
     var currentStatusRecord = null;
     var lastMountedLocation = "";
 
@@ -1817,61 +2661,47 @@
       return query && query.matches ? "dark" : "light";
     }
 
-    function detectPanelTheme() {
-      var documentElement = document.documentElement;
-      var bodyElement = document.body;
-      if (hasDarkClass(documentElement)) {
-        return "dark";
-      }
-      var htmlTheme = readDataTheme(documentElement);
-      if (htmlTheme.indexOf("dark") !== -1) {
-        return "dark";
-      }
-      if (htmlTheme.indexOf("light") !== -1) {
-        return "light";
-      }
-      if (hasDarkClass(bodyElement)) {
-        return "dark";
-      }
-      var bodyTheme = readDataTheme(bodyElement);
-      if (bodyTheme.indexOf("dark") !== -1) {
-        return "dark";
-      }
-      if (bodyTheme.indexOf("light") !== -1) {
-        return "light";
-      }
-      return detectComputedPageTheme() || preferredPanelTheme();
+    function normalizePanelThemeMode(value) {
+      var clean = String(value || "").trim().toLowerCase();
+      return clean === "light" || clean === "dark" ? clean : "system";
+    }
+
+    function resolvePanelTheme() {
+      return currentPanelThemeMode === "light" || currentPanelThemeMode === "dark"
+        ? currentPanelThemeMode
+        : preferredPanelTheme();
     }
 
     function applyPanelTheme() {
-      var theme = detectPanelTheme();
+      var theme = resolvePanelTheme();
       host.setAttribute("data-chatgpt-model-usage-theme", theme);
-      // 把 ChatGPT 实际主题存下来,供工具栏弹窗读取,保证两个面板颜色一致。
-      try {
-        if (window.chrome && chrome.storage && chrome.storage.local && (theme === "dark" || theme === "light")) {
-          chrome.storage.local.set({ chatgptUsagePanelTheme: theme });
-        }
-      } catch (_) {}
+      host.setAttribute("data-chatgpt-model-usage-theme-mode", currentPanelThemeMode);
+      panel.setAttribute("data-chatgpt-model-usage-theme", theme);
+      panel.setAttribute("data-chatgpt-model-usage-theme-mode", currentPanelThemeMode);
+    }
+
+    function applyPanelThemeMode(value) {
+      currentPanelThemeMode = normalizePanelThemeMode(value);
+      applyPanelTheme();
     }
 
     function observePanelTheme() {
       applyPanelTheme();
       var mediaQuery = window && typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
       if (mediaQuery && typeof mediaQuery.addEventListener === "function") {
-        mediaQuery.addEventListener("change", applyPanelTheme);
+        mediaQuery.addEventListener("change", function systemThemeChanged() {
+          if (currentPanelThemeMode === "system") {
+            applyPanelTheme();
+          }
+        });
       }
       if (mediaQuery && typeof mediaQuery.addListener === "function") {
-        mediaQuery.addListener(applyPanelTheme);
+        mediaQuery.addListener(function legacySystemThemeChanged() {
+          if (currentPanelThemeMode === "system") {
+            applyPanelTheme();
+          }
+        });
       }
-      if (typeof MutationObserver !== "function") {
-        return;
-      }
-      var observer = new MutationObserver(applyPanelTheme);
-      [document.documentElement, document.body].forEach(function observeThemeTarget(target) {
-        if (target) {
-          observer.observe(target, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
-        }
-      });
     }
 
     function normalizeStatusState(value) {
@@ -1943,22 +2773,25 @@
     }
 
     function readPanelToggleLanguage() {
-      applyPanelToggleLanguage("zh");
+      applyPanelToggleLanguage("en");
       if (!window.chrome || !chrome.storage || !chrome.storage.local || typeof chrome.storage.local.get !== "function") {
         return;
       }
       try {
         chrome.storage.local.get([SETTINGS_KEY, STATUS_KEY], function applyStoredLanguage(items) {
           if (chrome.runtime && chrome.runtime.lastError) {
-            applyPanelToggleLanguage("zh");
+            applyPanelToggleLanguage("en");
+            applyPanelThemeMode("system");
             return;
           }
           var settings = items && items[SETTINGS_KEY];
-          applyPanelToggleLanguage(settings && settings.language === "en" ? "en" : "zh");
+          applyPanelToggleLanguage(settings && settings.language === "zh" ? "zh" : "en");
+          applyPanelThemeMode(settings && settings.themeMode);
           applyPanelToggleStatus(items && items[STATUS_KEY]);
         });
       } catch (_) {
-        applyPanelToggleLanguage("zh");
+        applyPanelToggleLanguage("en");
+        applyPanelThemeMode("system");
       }
     }
 
@@ -1973,7 +2806,8 @@
         var settingsChange = changes && changes[SETTINGS_KEY];
         if (settingsChange) {
           var settings = settingsChange.newValue;
-          applyPanelToggleLanguage(settings && settings.language === "en" ? "en" : "zh");
+          applyPanelToggleLanguage(settings && settings.language === "zh" ? "zh" : "en");
+          applyPanelThemeMode(settings && settings.themeMode);
         }
         var statusChange = changes && changes[STATUS_KEY];
         if (statusChange) {
@@ -2020,7 +2854,9 @@
     }
 
     function isOwnPanelElement(element) {
-      return element === host || Boolean(closest(element, "#chatgpt-model-usage-counter-panel-host"));
+      return element === host ||
+        element === panel ||
+        Boolean(closest(element, "#chatgpt-model-usage-counter-panel-host,#chatgpt-model-usage-counter-panel"));
     }
 
     function isSyntheticMainMount(element) {
@@ -2233,6 +3069,9 @@
       if (!hostIsConnected() || currentLocation !== lastMountedLocation) {
         attachHost();
       }
+      if (!panel.isConnected) {
+        (document.body || document.documentElement).appendChild(panel);
+      }
     }
 
     function observePanelMount() {
@@ -2252,6 +3091,9 @@
       var observer = new MutationObserver(function retryAttach() {
         if (!hostIsConnected()) {
           attachHost();
+        }
+        if (!panel.isConnected) {
+          (document.body || document.documentElement).appendChild(panel);
         }
       });
       observer.observe(root, { childList: true, subtree: true });
@@ -2279,17 +3121,22 @@
     function openPanel() {
       panel.hidden = false;
       toggleButton.setAttribute("aria-expanded", "true");
+      reconcileStoredPendingResponses(true);
       // The account model catalog is optional account data. Load it only after
       // the user opens the statistics panel, and reuse the session snapshot.
-      ensureRuntimeModelCatalog("panel-open").then(function refreshMappedStats() {
+      ensureRuntimeModelCatalog("panel-open", nextUnknownRuntimeModelSlug()).then(function refreshMappedStats() {
         if (dashboard && typeof dashboard.reload === "function") {
-          dashboard.reload();
+          // The model catalog can finish after the user has already opened
+          // Export. Refresh only the stored statistics here: starting a second
+          // account-index read would supersede the first operation and could
+          // leave the visible list replaced by the sidebar fallback.
+          dashboard.reload({ skipExportList: true });
         }
       });
       if (!dashboard) {
         dashboard = window.ChatGPTUsageDashboard.init(body, { surface: "page", onClose: closePanel, onLanguageChange: applyPanelLanguage });
       } else {
-        dashboard.reload();
+        dashboard.reload({ restoreActiveView: true });
       }
     }
 
@@ -2324,6 +3171,19 @@
   function startMessageObserver() {
     seedExistingUserMessages();
     refreshComposerSnapshot();
+    reconcileStoredPendingResponses(true);
+    if (document && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", function recoverWhenVisible() {
+        if (document.hidden !== true) {
+          reconcileStoredPendingResponses(true);
+        }
+      });
+    }
+    if (window && typeof window.addEventListener === "function") {
+      window.addEventListener("focus", function recoverWhenFocused() {
+        reconcileStoredPendingResponses(true);
+      });
+    }
 
     if (typeof MutationObserver === "function") {
       var root = document.body || document.documentElement;
@@ -2332,6 +3192,8 @@
           refreshComposerSnapshot();
           scanNewUserMessages();
           scanNewAssistantModelMessages();
+          scanNewAssistantOutcomes();
+          reconcileStoredPendingResponses(false);
         }).observe(root, {
           childList: true,
           characterData: true,
@@ -2352,6 +3214,8 @@
         }
         refreshComposerSnapshot();
         scanNewAssistantModelMessages();
+        scanNewAssistantOutcomes();
+        reconcileStoredPendingResponses(false);
         readDomModel();
       }, COMPOSER_POLL_MS);
     }
@@ -2364,6 +3228,10 @@
       var button = findSendButtonTarget(event);
       if (button) {
         recordUsage("send-button", button);
+        return;
+      }
+      if (findRegenerateTarget(event)) {
+        recordRegeneration("regenerate");
       }
     },
     true
@@ -2376,6 +3244,10 @@
       var button = findSendButtonTarget(event);
       if (button) {
         recordUsage("send-button", button);
+        return;
+      }
+      if (findRegenerateTarget(event)) {
+        recordRegeneration("regenerate");
       }
     },
     true
@@ -2388,6 +3260,10 @@
       var button = findSendButtonTarget(event);
       if (button) {
         recordUsage("send-button", button);
+        return;
+      }
+      if (findRegenerateTarget(event)) {
+        recordRegeneration("regenerate");
       }
     },
     true
@@ -2448,13 +3324,301 @@
   }
 
   // 导出对话的内容脚本接口。优先使用当前 ChatGPT 页面的同源账号历史请求；
-  // 不读取 cookie/token/header。接口不可用时才通过侧边栏 SPA 导航读取已渲染 DOM。
+  // 用户主动触发后才从同源会话接口临时取得账号令牌并仅保存在运行内存中。
+  // 接口不可用时才通过侧边栏 SPA 导航读取已渲染 DOM。
   if (chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === "function") {
     var waitMs = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
-    var listSidebarConversations = function () {
+    var cleanSidebarText = function (value, limit) {
+      return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit || 200);
+    };
+    var safeProjectId = function (value) {
+      var match = cleanSidebarText(value, 500).match(/\bg-p-[0-9a-f]{32}\b/i);
+      return match ? String(match[0]).toLowerCase() : "";
+    };
+    var projectRouteSlugFromValue = function (value) {
+      var raw = cleanSidebarText(value, 500);
+      var idMatch = raw.match(/\bg-p-[0-9a-f]{32}\b/i);
+      if (!idMatch) {
+        return "";
+      }
+      var suffix = raw.slice(Number(idMatch.index || 0) + idMatch[0].length);
+      if (suffix.charAt(0) !== "-") {
+        return "";
+      }
+      suffix = suffix.slice(1).split(/[/?\s]/, 1)[0] || "";
+      try {
+        suffix = decodeURIComponent(suffix);
+      } catch (_) {}
+      return cleanSidebarText(suffix, 160);
+    };
+    var projectSlugKey = function (value) {
+      var slug = cleanSidebarText(value, 200);
+      try {
+        slug = decodeURIComponent(slug);
+      } catch (_) {}
+      return cleanSidebarText(slug, 200).toLowerCase().replace(/\s+/g, "-");
+    };
+    var cleanProjectDirectoryName = function (value) {
+      var name = cleanSidebarText(value, 200);
+      var optionsMatch = name.match(/^(?:open project options for|打开项目选项[:：]?)\s*(.+)$/i);
+      var openMatch = name.match(/^(?:open|打开)\s+(.+?)\s+(?:project|项目)$/i);
+      if (optionsMatch) {
+        name = cleanSidebarText(optionsMatch[1], 200);
+      } else if (openMatch) {
+        name = cleanSidebarText(openMatch[1], 200);
+      }
+      if (
+        !name ||
+        safeProjectId(name) ||
+        /^(?:unnamed project|未命名项目|project|项目)$/i.test(name) ||
+        /^(?:project|项目)\s+g-p-/i.test(name)
+      ) {
+        return "";
+      }
+      return name;
+    };
+    var emptyProjectDirectories = function () {
+      return { names: {}, orders: {}, entries: [], rows: [] };
+    };
+    var normalizeProjectDirectories = function (response) {
+      var source = response && typeof response === "object" ? response : {};
+      var rawEntries = Array.isArray(source.entries)
+        ? source.entries
+        : Array.isArray(source.projects) ? source.projects : [];
+      var entriesById = {};
+      var insertionOrder = [];
+
+      rawEntries.slice(0, 500).forEach(function rememberEntry(entry) {
+        var item = entry && typeof entry === "object" ? entry : {};
+        var projectId = safeProjectId(item.gizmoId || item.projectId);
+        var projectName = cleanProjectDirectoryName(item.projectName || item.name);
+        if (!projectId || !projectName || entriesById[projectId]) {
+          return;
+        }
+        entriesById[projectId] = {
+          gizmoId: projectId,
+          projectName: projectName
+        };
+        insertionOrder.push(projectId);
+      });
+
+      var objectNames = source.projectNames && typeof source.projectNames === "object"
+        ? source.projectNames
+        : (!Array.isArray(source.projects) && source.projects && typeof source.projects === "object"
+          ? source.projects
+          : null);
+      if (objectNames) {
+        Object.keys(objectNames).slice(0, 500).forEach(function rememberObjectEntry(id) {
+          var projectId = safeProjectId(id);
+          var projectName = cleanProjectDirectoryName(objectNames[id]);
+          if (!projectId || !projectName || entriesById[projectId]) {
+            return;
+          }
+          entriesById[projectId] = {
+            gizmoId: projectId,
+            projectName: projectName
+          };
+          insertionOrder.push(projectId);
+        });
+      }
+
+      var orderedIds = [];
+      var orderedSeen = {};
+      (Array.isArray(source.projectOrder) ? source.projectOrder : []).slice(0, 500)
+        .forEach(function rememberExplicitOrder(value) {
+          var projectId = safeProjectId(value);
+          if (projectId && entriesById[projectId] && !orderedSeen[projectId]) {
+            orderedSeen[projectId] = true;
+            orderedIds.push(projectId);
+          }
+        });
+      rawEntries.slice(0, 500)
+        .map(function entryWithDeclaredOrder(entry, index) {
+          var item = entry && typeof entry === "object" ? entry : {};
+          var declaredOrder = Number(item.projectOrder);
+          var hasDeclaredOrder = item.projectOrder !== null &&
+            item.projectOrder !== "" &&
+            Number.isFinite(declaredOrder) &&
+            declaredOrder >= 0;
+          return {
+            projectId: safeProjectId(item.gizmoId || item.projectId),
+            projectOrder: hasDeclaredOrder ? declaredOrder : index,
+            index: index
+          };
+        })
+        .sort(function declaredOrder(left, right) {
+          return left.projectOrder - right.projectOrder || left.index - right.index;
+        })
+        .forEach(function rememberDeclaredOrder(item) {
+          if (item.projectId && entriesById[item.projectId] && !orderedSeen[item.projectId]) {
+            orderedSeen[item.projectId] = true;
+            orderedIds.push(item.projectId);
+          }
+        });
+      insertionOrder.forEach(function rememberInsertionOrder(projectId) {
+        if (!orderedSeen[projectId]) {
+          orderedSeen[projectId] = true;
+          orderedIds.push(projectId);
+        }
+      });
+
+      var normalized = emptyProjectDirectories();
+      orderedIds.forEach(function finalizeEntry(projectId, index) {
+        var entry = entriesById[projectId];
+        normalized.names[projectId] = entry.projectName;
+        normalized.orders[projectId] = index;
+        normalized.entries.push({
+          gizmoId: projectId,
+          projectName: entry.projectName,
+          projectOrder: index
+        });
+      });
+      return normalized;
+    };
+    var requestMainWorldProjectDirectories = function () {
+      return runtimeMessage({ type: "conversation.projectDirectories.get" })
+        .then(function normalizeResponse(response) {
+          return response && response.ok
+            ? normalizeProjectDirectories(response)
+            : emptyProjectDirectories();
+        }, function ignoreUnavailableMapping() {
+          return emptyProjectDirectories();
+        });
+    };
+    var projectIdFromConversationHref = function (href) {
+      var match = String(href || "").match(/\/g\/([^/?#]+)\/c\/[0-9a-zA-Z-]{6,}/i);
+      return safeProjectId(match && match[1]);
+    };
+    var projectRouteSlugFromConversationHref = function (href) {
+      var match = String(href || "").match(/\/g\/([^/?#]+)\/c\/[0-9a-zA-Z-]{6,}/i);
+      return projectRouteSlugFromValue(match && match[1]);
+    };
+    var projectNameFromSidebarRow = function (row) {
+      if (!row) {
+        return "";
+      }
+      var nameNode = null;
+      try {
+        nameNode = typeof row.querySelector === "function"
+          ? row.querySelector("[data-marquee-text]")
+          : null;
+      } catch (_) {}
+      var name = cleanProjectDirectoryName(
+        nameNode && (nameNode.innerText || nameNode.textContent)
+      );
+      if (name) {
+        return name;
+      }
+      var optionButton = null;
+      try {
+        optionButton = typeof row.querySelector === "function"
+          ? row.querySelector('[aria-label^="Open project options for"],[aria-label^="打开项目选项"]')
+          : null;
+      } catch (_) {}
+      name = cleanProjectDirectoryName(
+        optionButton && optionButton.getAttribute && optionButton.getAttribute("aria-label")
+      );
+      if (name) {
+        return name;
+      }
+      return cleanProjectDirectoryName(row.innerText || row.textContent);
+    };
+    var sidebarProjectDirectories = function () {
+      var conversationProjectIds = {};
+      Array.prototype.forEach.call(document.querySelectorAll('a[href*="/c/"]'), function rememberConversationProject(link) {
+        var projectId = projectIdFromConversationHref(link.getAttribute("href") || "");
+        if (projectId) {
+          conversationProjectIds[projectId] = true;
+        }
+      });
+      var knownIds = Object.keys(conversationProjectIds).sort(function longestFirst(left, right) {
+        return right.length - left.length;
+      });
+      var names = {};
+      var orders = {};
+      var entries = [];
+      var entryIndexById = {};
+      var rows = [];
+      Array.prototype.forEach.call(
+        document.querySelectorAll("[class~='group/project-unfurl-row']"),
+        function rememberRenderedProjectRow(row, rowIndex) {
+          var projectName = projectNameFromSidebarRow(row);
+          if (!projectName) {
+            return;
+          }
+          var projectHref = "";
+          try {
+            var projectLink = typeof row.querySelector === "function"
+              ? row.querySelector('a[href*="/g/"]')
+              : null;
+            projectHref = projectLink && projectLink.getAttribute
+              ? String(projectLink.getAttribute("href") || "")
+              : "";
+          } catch (_) {}
+          var projectId = safeProjectId(projectHref);
+          if (!projectId) {
+            rows.push({
+              projectName: projectName,
+              projectOrder: rowIndex
+            });
+            return;
+          }
+          names[projectId] = projectName;
+          orders[projectId] = rowIndex;
+          if (!Object.prototype.hasOwnProperty.call(entryIndexById, projectId)) {
+            entryIndexById[projectId] = entries.length;
+            entries.push({
+              gizmoId: projectId,
+              projectName: projectName,
+              projectOrder: rowIndex
+            });
+          }
+        }
+      );
+      Array.prototype.forEach.call(document.querySelectorAll('a[href*="/g/"][href*="/project"]'), function rememberProject(link) {
+        var href = String(link.getAttribute("href") || "");
+        var segment = decodeURIComponent((href.match(/\/g\/([^/?#]+)\/project(?:[/?#]|$)/i) || [])[1] || "");
+        var projectId = knownIds.filter(function matchesKnown(id) {
+          return segment === id || segment.indexOf(id + "-") === 0;
+        })[0] || safeProjectId((segment.match(/^(g-p-[0-9a-f]{32})(?:-|$)/i) || [])[1]);
+        if (!projectId) {
+          return;
+        }
+        if (!Object.prototype.hasOwnProperty.call(entryIndexById, projectId)) {
+          orders[projectId] = entries.length + rows.length;
+          entryIndexById[projectId] = entries.length;
+          entries.push({
+            gizmoId: projectId,
+            projectName: "",
+            projectOrder: orders[projectId]
+          });
+        }
+        var name = cleanProjectDirectoryName(link.innerText || link.textContent);
+        if (!name) {
+          name = cleanProjectDirectoryName(link.getAttribute("aria-label"));
+        }
+        if (name) {
+          names[projectId] = name;
+          entries[entryIndexById[projectId]].projectName = name;
+        }
+      });
+      return {
+        names: names,
+        orders: orders,
+        entries: entries,
+        rows: rows
+      };
+    };
+    var listSidebarConversations = function (sidebarDirectories) {
       var seen = {};
       var out = [];
+      var projectDirectories = sidebarDirectories || sidebarProjectDirectories();
+      var projectNames = projectDirectories.names || {};
+      var projectOrders = projectDirectories.orders || {};
+      var titleKey = function (value) {
+        return cleanSidebarText(value, 200).toLowerCase();
+      };
       Array.prototype.forEach.call(document.querySelectorAll('a[href*="/c/"]'), function (a) {
         var href = a.getAttribute("href") || "";
         var m = href.match(/\/c\/([0-9a-zA-Z-]{6,})/);
@@ -2462,31 +3626,60 @@
           return;
         }
         seen[m[1]] = true;
-        var title = (a.innerText || a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
-        out.push({ id: m[1], title: title || ("对话 " + m[1].slice(0, 6)) });
+        var projectId = projectIdFromConversationHref(href);
+        var projectRouteSlug = projectRouteSlugFromConversationHref(href);
+        var aria = cleanSidebarText(a.getAttribute("aria-label"), 240);
+        var ariaProject = cleanSidebarText(
+          (aria.match(/(?:chat in project|项目中的对话)\s+(.+)$/i) || [])[1],
+          200
+        );
+        var projectName = projectId ? (projectNames[projectId] || ariaProject) : "";
+        var explicitTitleNode = typeof a.querySelector === "function"
+          ? a.querySelector('[data-conversation-title],[data-testid*="conversation-title" i]')
+          : null;
+        var titleCandidates = [
+          a.getAttribute("title"),
+          explicitTitleNode && (explicitTitleNode.innerText || explicitTitleNode.textContent)
+        ].concat(
+          String(a.innerText || a.textContent || "").split(/\r?\n/)
+        ).map(function cleanTitleCandidate(value) {
+          return cleanSidebarText(value, 200);
+        }).filter(function usableTitleCandidate(value) {
+          var key = titleKey(value);
+          return Boolean(
+            key &&
+            key !== titleKey(projectName) &&
+            key !== titleKey(ariaProject) &&
+            !/^(?:open|打开|more|更多|options|选项)$/.test(key)
+          );
+        });
+        var title = titleCandidates[0] || "";
+        out.push({
+          id: m[1],
+          title: title || ("对话 " + m[1].slice(0, 6)),
+          projectId: projectId,
+          projectRouteSlug: projectRouteSlug,
+          projectName: projectName,
+          projectOrder: projectId && Object.prototype.hasOwnProperty.call(projectOrders, projectId)
+            ? projectOrders[projectId]
+            : null,
+          groupType: projectId ? "project" : ""
+        });
       });
       return out;
     };
 
-    // 展开侧边栏里折叠的项目/文件夹,让里面的对话也出现在列表里(用户:文件夹内对话看不到)。
-    var expandSidebarFolders = function () {
-      var folders = Array.prototype.slice.call(document.querySelectorAll('nav [aria-expanded="false"]')).filter(function (el) {
-        if (el.tagName !== "DIV") {
-          return false;
-        }
-        var label = (el.innerText || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
-        // 排除边栏开关 / 个人资料 / 项目选项菜单等非文件夹的可展开元素
-        return label && !/边栏|sidebar|个人资料|profile|选项|option|菜单|menu/i.test(label);
-      });
-      folders.forEach(function (f) { try { f.click(); } catch (_) {} });
-      return folders.length;
-    };
-
-    var listAllDomConversations = function () {
-      var expanded = expandSidebarFolders();
-      return waitMs(expanded ? 1300 : 0).then(function () {
-        return listSidebarConversations();
-      });
+    var listAllDomConversations = function (mainWorldDirectories) {
+      // Reading the export index must not mutate the user's ChatGPT sidebar.
+      // The complete account index supplies project chats even when their
+      // sidebar directory is collapsed; DOM fallback uses only already loaded
+      // links instead of clicking folders open.
+      return Promise.resolve(
+        enrichConversationProjectDirectories(
+          listSidebarConversations(),
+          mainWorldDirectories
+        )
+      );
     };
 
     var conversationIdFromPath = function () {
@@ -2501,12 +3694,31 @@
         return null;
       }
       var link = findConversationLink(id);
-      var linkTitle = link && (link.innerText || link.textContent || "");
+      var linkHref = link && (link.getAttribute("href") || "");
+      var linkProjectId = projectIdFromConversationHref(linkHref);
+      var linkDirectories = sidebarProjectDirectories();
+      var linkProjectName = cleanProjectDirectoryName(
+        linkProjectId && linkDirectories.names && linkDirectories.names[linkProjectId]
+      );
+      var explicitTitleNode = link && typeof link.querySelector === "function"
+        ? link.querySelector('[data-conversation-title],[data-testid*="conversation-title" i]')
+        : null;
       var pageTitle = String(document.title || "").replace(/\s*[-|]\s*ChatGPT\s*$/i, "");
-      var title = normalizePromptText(linkTitle || pageTitle);
-      if (!title || /^chatgpt$/i.test(title)) {
-        title = "Conversation " + id.slice(0, 8);
-      }
+      var projectNameKey = normalizePromptText(linkProjectName).toLowerCase();
+      var title = [
+        explicitTitleNode && (explicitTitleNode.innerText || explicitTitleNode.textContent),
+        pageTitle
+      ].concat(
+        String(link && (link.innerText || link.textContent) || "").split(/\r?\n/)
+      ).map(normalizePromptText).filter(function usableCurrentTitle(candidate) {
+        var key = candidate.toLowerCase();
+        return Boolean(
+          candidate &&
+          !/^chatgpt$/i.test(candidate) &&
+          (!projectNameKey || key !== projectNameKey) &&
+          !/^(?:open|打开|more|更多|options|选项)$/.test(key)
+        );
+      })[0] || ("Conversation " + id.slice(0, 8));
       return {
         id: id,
         title: title.slice(0, 200),
@@ -2525,7 +3737,31 @@
         }
       });
       if (current) {
-        byId[current.id] = Object.assign({}, byId[current.id] || {}, current, { current: true });
+        var existing = byId[current.id] || {};
+        var existingTitle = normalizePromptText(existing.title);
+        var currentTitle = normalizePromptText(current.title);
+        var genericTitle = function (value) {
+          return /^(?:conversation|对话)\s+[0-9a-z-]{4,}$/i.test(String(value || ""));
+        };
+        var projectTitle = normalizePromptText(existing.projectName || existing.folderName);
+        var projectTitleKey = projectTitle.toLowerCase();
+        var usableTitle = function (value) {
+          var clean = normalizePromptText(value);
+          return Boolean(
+            clean &&
+            !genericTitle(clean) &&
+            (!projectTitleKey || clean.toLowerCase() !== projectTitleKey)
+          );
+        };
+        var title = usableTitle(existingTitle)
+          ? existingTitle
+          : usableTitle(currentTitle)
+            ? currentTitle
+            : ("Conversation " + current.id.slice(0, 8));
+        byId[current.id] = Object.assign({}, current, existing, {
+          title: title,
+          current: true
+        });
       }
       var ordered = Object.keys(byId).map(function toItem(id) { return byId[id]; });
       ordered.sort(function currentFirst(left, right) {
@@ -2542,142 +3778,414 @@
         currentConversationId: current ? current.id : ""
       };
     };
-    // 点开侧边栏链接后,轮询等地址真正切到目标对话(SPA 切换有延迟);
-    // 超时返回 false,让调用方跳过收集,避免抓到上一段对话。
-    var waitForConversationSwitch = function (id, maxMs) {
-      var deadline = Date.now() + maxMs;
-      return new Promise(function (resolve) {
-        var poll = function () {
-          if (conversationIdFromPath() === id) { resolve(true); return; }
-          if (Date.now() >= deadline) { resolve(false); return; }
-          setTimeout(poll, 120);
+    var resolveRenderedProjectDirectories = function (
+      conversations,
+      mainWorldDirectories,
+      sidebarDirectories,
+      sidebarItems
+    ) {
+      var names = {};
+      var sources = {};
+      var orders = {};
+      var metadataById = {};
+      var usedRows = {};
+      var rows = (Array.isArray(sidebarDirectories && sidebarDirectories.rows)
+        ? sidebarDirectories.rows
+        : []).map(function normalizeRow(row, index) {
+        var item = row && typeof row === "object" ? row : {};
+        var declaredOrder = Number(item.projectOrder);
+        return {
+          projectName: cleanProjectDirectoryName(item.projectName || item.name),
+          projectOrder: Number.isFinite(declaredOrder) && declaredOrder >= 0 ? declaredOrder : index,
+          index: index
         };
-        poll();
+      }).filter(function validRow(row) {
+        return Boolean(row.projectName);
       });
-    };
 
-    // 切换对话后,正文是异步渲染的;固定等几百毫秒就收会拿到 0 条消息 → 导出“未检测到对话”。
-    // 这里轮询等 [data-message-author-role] 真正出现且数量连续稳定再收,最长等 maxMs。
-    var waitForMessages = function (maxMs) {
-      var deadline = Date.now() + maxMs;
-      return new Promise(function (resolve) {
-        var last = -1;
-        var stable = 0;
-        var poll = function () {
-          var n = 0;
-          try { n = document.querySelectorAll("[data-message-author-role]").length; } catch (_) {}
-          if (n > 0 && n === last) { stable += 1; } else { stable = 0; }
-          last = n;
-          if ((n > 0 && stable >= 2) || Date.now() >= deadline) { resolve(n); return; }
-          setTimeout(poll, 250);
-        };
-        poll();
-      });
-    };
+      var rememberResolved = function (projectId, projectName, projectOrder, source) {
+        var id = safeProjectId(projectId);
+        var name = cleanProjectDirectoryName(projectName);
+        if (!id || !name || names[id]) {
+          return;
+        }
+        names[id] = name;
+        sources[id] = source;
+        if (Number.isFinite(Number(projectOrder)) && Number(projectOrder) >= 0) {
+          orders[id] = Number(projectOrder);
+        }
+      };
+      var rememberDirectoryEntries = function (directories, source) {
+        var sourceDirectories = directories && typeof directories === "object" ? directories : {};
+        var sourceNames = sourceDirectories.names && typeof sourceDirectories.names === "object"
+          ? sourceDirectories.names
+          : {};
+        var sourceOrders = sourceDirectories.orders && typeof sourceDirectories.orders === "object"
+          ? sourceDirectories.orders
+          : {};
+        Object.keys(sourceNames).forEach(function rememberName(projectId) {
+          rememberResolved(projectId, sourceNames[projectId], sourceOrders[projectId], source);
+        });
+      };
+      rememberDirectoryEntries(mainWorldDirectories, "main-world-react");
+      rememberDirectoryEntries(sidebarDirectories, "sidebar-project");
 
-    var collectManyFromDom = function (ids, perDelayMs) {
-      var exporter = window.ChatGPTUsageExporter;
-      if (!exporter || typeof exporter.collectConversationFromDom !== "function") {
-        return Promise.reject(new Error("exporter-unavailable"));
-      }
-      var startId = conversationIdFromPath();
-      var list = listSidebarConversations();
-      var byId = {};
-      list.forEach(function (c) { byId[c.id] = c; });
-      var targets = (Array.isArray(ids) && ids.length) ? ids : list.map(function (c) { return c.id; });
-      var results = [];
-      var step = function (i) {
-        if (i >= targets.length) {
-          return Promise.resolve(results);
+      var rememberMetadata = function (item) {
+        var source = item && typeof item === "object" ? item : {};
+        var projectId = [
+          source.projectId,
+          source.gizmoId,
+          source.gizmo_id
+        ].map(safeProjectId).filter(Boolean)[0] || "";
+        if (!projectId) {
+          return;
         }
-        var id = targets[i];
-        var link = findConversationLink(id);
-        if (!link || typeof link.click !== "function") {
-          // 侧边栏没有这条对话的链接 —— 跳过,绝不把当前显示的那段误当成它收集。
-          return step(i + 1);
+        if (!metadataById[projectId]) {
+          metadataById[projectId] = { routeKeys: Object.create(null) };
         }
-        link.click();
-        return waitForConversationSwitch(id, Math.max(perDelayMs || 2500, 2500)).then(function (switched) {
-          // 切过去就少等一下;没检测到切换(加载慢/链接特殊)多给点时间,随后都靠 waitForMessages 兜底。
-          return waitMs(switched ? 250 : 900);
-        }).then(function () {
-          try { window.scrollTo(0, document.body.scrollHeight); } catch (_) {}
-          // 关键修复:轮询等正文真正渲染出来再收,而不是固定短等待就收(收太早 → 0 条 → 导出不可用)。
-          return waitForMessages(8000);
-        }).then(function () {
-          try { window.scrollTo(0, document.body.scrollHeight); } catch (_) {}
-          return waitMs(250);
-        }).then(function () {
-          var conv = exporter.collectConversationFromDom(document);
-          if (conv && conv.id === id && conv.messages && conv.messages.length) {
-            // 标题一律以侧边栏里这条对话(按目标 id 取)的真实标题为准:即使切换太快、DOM 里
-            // 还残留上一段对话的 document.title,也不会张冠李戴。侧边栏没标题时才退回 DOM 采到的。
-            if (byId[id] && byId[id].title) {
-              conv.title = byId[id].title;
-            }
-            results.push(conv);
+        [
+          source.projectRouteSlug,
+          projectRouteSlugFromValue(source.projectId),
+          projectRouteSlugFromValue(source.gizmoId),
+          projectRouteSlugFromValue(source.gizmo_id)
+        ].forEach(function rememberRouteSlug(value) {
+          var key = projectSlugKey(value);
+          if (key) {
+            metadataById[projectId].routeKeys[key] = true;
           }
-        }).catch(function skipFailedDomConversation() {
-          // One DOM-rendering failure must not abort the remaining selected
-          // conversations. The caller reports any still-missing ids.
-        }).then(function nextTarget() { return step(i + 1); });
+        });
       };
-      // 采集会沿侧边栏切换对话；结束后用 SPA 点击切回用户原来那段（仅点同源链接，不整页刷新，
-      // 以免打断随后的导出）。原本在新对话/根路径（无对话链接）则不强行还原。
-      var restore = function () {
-        if (!startId || conversationIdFromPath() === startId) { return Promise.resolve(); }
-        var back = findConversationLink(startId);
-        if (back && typeof back.click === "function") {
-          back.click();
-          return waitForConversationSwitch(startId, 2500);
+      (Array.isArray(conversations) ? conversations : []).forEach(rememberMetadata);
+      (Array.isArray(sidebarItems) ? sidebarItems : []).forEach(rememberMetadata);
+
+      Object.keys(names).forEach(function reserveNamedRow(projectId) {
+        var nameKey = projectSlugKey(names[projectId]);
+        var matches = rows.filter(function sameName(row) {
+          return !usedRows[row.index] && projectSlugKey(row.projectName) === nameKey;
+        });
+        if (nameKey && matches.length === 1) {
+          usedRows[matches[0].index] = true;
+          if (!Object.prototype.hasOwnProperty.call(orders, projectId)) {
+            orders[projectId] = matches[0].projectOrder;
+          }
         }
-        return Promise.resolve();
+      });
+
+      Object.keys(metadataById).forEach(function matchRouteSlug(projectId) {
+        if (names[projectId]) {
+          return;
+        }
+        var routeKeys = metadataById[projectId].routeKeys;
+        var matches = rows.filter(function matchesRoute(row) {
+          return !usedRows[row.index] &&
+            Object.prototype.hasOwnProperty.call(routeKeys, projectSlugKey(row.projectName));
+        });
+        if (matches.length === 1) {
+          usedRows[matches[0].index] = true;
+          rememberResolved(
+            projectId,
+            matches[0].projectName,
+            matches[0].projectOrder,
+            "sidebar-project-row"
+          );
+        }
+      });
+
+      return {
+        names: names,
+        sources: sources,
+        orders: orders
       };
-      return step(0).then(function (res) {
-        return restore().then(function () { return res; });
-      }, function failed(error) {
-        return restore().then(function rethrow() { throw error; });
+    };
+    var enrichConversationProjectDirectories = function (conversations, mainWorldDirectories) {
+      var mainWorld = mainWorldDirectories && typeof mainWorldDirectories === "object"
+        ? mainWorldDirectories
+        : emptyProjectDirectories();
+      var sidebarDirectories = sidebarProjectDirectories();
+      var sidebarItems = listSidebarConversations(sidebarDirectories);
+      var sidebarById = {};
+      sidebarItems.forEach(function rememberSidebarItem(item) {
+        if (item && item.id) {
+          sidebarById[item.id] = item;
+        }
+      });
+      var resolvedDirectories = resolveRenderedProjectDirectories(
+        conversations,
+        mainWorld,
+        sidebarDirectories,
+        sidebarItems
+      );
+      var projectNames = resolvedDirectories.names || {};
+      var projectNameSources = resolvedDirectories.sources || {};
+      var projectOrders = resolvedDirectories.orders || {};
+      var knownOrders = Object.keys(projectOrders).map(function projectOrder(id) {
+        return Number(projectOrders[id]);
+      }).filter(function validOrder(value) {
+        return Number.isFinite(value) && value >= 0;
+      });
+      var nextFallbackOrder = knownOrders.length ? Math.max.apply(Math, knownOrders) + 1 : 0;
+      var fallbackOrders = {};
+      return (Array.isArray(conversations) ? conversations : []).map(function enrich(item) {
+        var source = item && typeof item === "object" ? item : {};
+        var sidebar = sidebarById[source.id] || {};
+        var projectId = [
+          source.projectId,
+          source.gizmoId,
+          source.gizmo_id,
+          sidebar.projectId
+        ].map(safeProjectId).filter(Boolean)[0] || "";
+        var projectName = "";
+        var projectNameSource = "unknown";
+        if (projectId && cleanProjectDirectoryName(projectNames[projectId])) {
+          projectName = cleanProjectDirectoryName(projectNames[projectId]);
+          projectNameSource = projectNameSources[projectId] || "sidebar-project";
+        } else if (projectId && cleanProjectDirectoryName(source.projectName)) {
+          projectName = cleanProjectDirectoryName(source.projectName);
+          projectNameSource = "account-index";
+        } else if (projectId && cleanProjectDirectoryName(sidebar.projectName)) {
+          projectName = cleanProjectDirectoryName(sidebar.projectName);
+          projectNameSource = "sidebar-conversation";
+        }
+        var projectOrder = null;
+        if (projectId && Object.prototype.hasOwnProperty.call(projectOrders, projectId)) {
+          projectOrder = Number(projectOrders[projectId]);
+        } else if (
+          projectId &&
+          source.projectOrder !== null &&
+          source.projectOrder !== "" &&
+          Number.isFinite(Number(source.projectOrder)) &&
+          Number(source.projectOrder) >= 0
+        ) {
+          projectOrder = Number(source.projectOrder);
+        } else if (projectId) {
+          if (!Object.prototype.hasOwnProperty.call(fallbackOrders, projectId)) {
+            fallbackOrders[projectId] = nextFallbackOrder;
+            nextFallbackOrder += 1;
+          }
+          projectOrder = fallbackOrders[projectId];
+        }
+        var projectNameKey = normalizePromptText(projectName).toLowerCase();
+        var title = [
+          source.title,
+          sidebar.title
+        ].map(normalizePromptText).filter(function usableConversationTitle(candidate) {
+          return Boolean(
+            candidate &&
+            (!projectNameKey || candidate.toLowerCase() !== projectNameKey)
+          );
+        })[0] || ("Conversation " + String(source.id || "").slice(0, 8));
+        return Object.assign({}, source, {
+          title: title,
+          projectId: projectId,
+          projectName: projectName,
+          projectNameSource: projectNameSource,
+          projectRouteSlug: cleanSidebarText(
+            source.projectRouteSlug || sidebar.projectRouteSlug,
+            160
+          ),
+          projectOrder: projectOrder,
+          groupType: projectId ? "project" : ""
+        });
       });
     };
-
     var accountHistoryAuthPromise = null;
+    var accountHistoryAuthGeneration = -1;
     var accountHistoryAuthClearTimer = null;
+    var accountHistoryCancelled = false;
+    var accountHistoryOperationGeneration = 0;
+    var accountHistoryOperationBudget = null;
     var ACCOUNT_HISTORY_AUTH_IDLE_MS = 30 * 1000;
 
-    function clearAccountHistoryAuth() {
+    function clearAccountHistoryAuth(expectedGeneration) {
+      if (
+        expectedGeneration != null &&
+        accountHistoryAuthGeneration !== expectedGeneration
+      ) {
+        return;
+      }
       accountHistoryAuthPromise = null;
+      accountHistoryAuthGeneration = -1;
       if (accountHistoryAuthClearTimer && typeof clearTimeout === "function") {
         clearTimeout(accountHistoryAuthClearTimer);
       }
       accountHistoryAuthClearTimer = null;
     }
 
-    function scheduleAccountHistoryAuthClear() {
+    function scheduleAccountHistoryAuthClear(generation) {
       if (accountHistoryAuthClearTimer && typeof clearTimeout === "function") {
         clearTimeout(accountHistoryAuthClearTimer);
       }
       accountHistoryAuthClearTimer = typeof setTimeout === "function"
         ? setTimeout(function clearIdleAccountHistoryAuth() {
-            clearAccountHistoryAuth();
+            clearAccountHistoryAuth(generation);
           }, ACCOUNT_HISTORY_AUTH_IDLE_MS)
-        : null;
+          : null;
     }
 
-    function loadAccountHistoryAuth() {
-      if (accountHistoryAuthPromise) {
+    function accountHistoryCancelledError() {
+      var error = new Error("ChatGPT account read was cancelled.");
+      error.stopOperation = true;
+      error.cancelled = true;
+      return error;
+    }
+
+    function accountHistoryLimitError(code, message, generation) {
+      var error = new Error(message);
+      error.code = String(code || "account-operation-limit");
+      error.stopOperation = true;
+      error.incomplete = true;
+      if (
+        accountHistoryOperationBudget &&
+        Number(accountHistoryOperationBudget.generation) === Number(generation)
+      ) {
+        accountHistoryOperationBudget.stopError = error;
+      }
+      accountHistoryCancelled = true;
+      clearAccountHistoryAuth(generation);
+      return error;
+    }
+
+    function accountHistoryOperationError(generation) {
+      if (
+        accountHistoryOperationBudget &&
+        Number(accountHistoryOperationBudget.generation) === Number(generation) &&
+        accountHistoryOperationBudget.stopError
+      ) {
+        return accountHistoryOperationBudget.stopError;
+      }
+      return accountHistoryCancelledError();
+    }
+
+    function ensureAccountHistoryBudget(generation) {
+      if (
+        Number(generation) !== accountHistoryOperationGeneration ||
+        accountHistoryCancelled
+      ) {
+        throw accountHistoryOperationError(generation);
+      }
+      if (
+        !accountHistoryOperationBudget ||
+        Number(accountHistoryOperationBudget.generation) !== Number(generation)
+      ) {
+        accountHistoryOperationBudget = {
+          generation: Number(generation),
+          startedAt: Date.now(),
+          requestCount: 0,
+          stopError: null
+        };
+      }
+      if (accountHistoryOperationBudget.stopError) {
+        throw accountHistoryOperationBudget.stopError;
+      }
+      if (Date.now() - accountHistoryOperationBudget.startedAt >= ACCOUNT_HISTORY_MAX_OPERATION_MS) {
+        throw accountHistoryLimitError(
+          "account-operation-time-limit",
+          "ChatGPT account reading stopped after 10 minutes; remaining account data was not read.",
+          generation
+        );
+      }
+      return accountHistoryOperationBudget;
+    }
+
+    function reserveAccountHistoryRequest(generation) {
+      var budget = ensureAccountHistoryBudget(generation);
+      if (budget.requestCount >= ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION) {
+        throw accountHistoryLimitError(
+          "account-request-limit",
+          "ChatGPT account reading stopped after " +
+            ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION +
+            " requests; remaining account data was not read.",
+          generation
+        );
+      }
+      budget.requestCount += 1;
+      return budget.requestCount;
+    }
+
+    function beginAccountHistoryOperation() {
+      accountHistoryOperationGeneration += 1;
+      accountHistoryCancelled = false;
+      clearAccountHistoryAuth();
+      accountHistoryOperationBudget = {
+        generation: accountHistoryOperationGeneration,
+        startedAt: Date.now(),
+        requestCount: 0,
+        stopError: null
+      };
+      return true;
+    }
+
+    function cancelAccountHistoryOperation() {
+      accountHistoryOperationGeneration += 1;
+      accountHistoryCancelled = true;
+      clearAccountHistoryAuth();
+      accountHistoryOperationBudget = null;
+      return true;
+    }
+
+    function releaseAccountHistoryAuth() {
+      // Advancing the generation invalidates any delayed retry or reserved
+      // request slot from the operation that just finished. A later explicit
+      // operation can start normally without letting stale callbacks send.
+      accountHistoryOperationGeneration += 1;
+      accountHistoryCancelled = false;
+      clearAccountHistoryAuth();
+      accountHistoryOperationBudget = null;
+      return true;
+    }
+
+    function accountHistoryOperationIsActive(generation) {
+      return !accountHistoryCancelled &&
+        Number(generation) === accountHistoryOperationGeneration;
+    }
+
+    function loadAccountHistoryAuth(generation) {
+      if (!accountHistoryOperationIsActive(generation)) {
+        return Promise.reject(accountHistoryOperationError(generation));
+      }
+      if (
+        accountHistoryAuthPromise &&
+        accountHistoryAuthGeneration === generation
+      ) {
         return accountHistoryAuthPromise;
       }
-      accountHistoryAuthPromise = window.fetch("/api/auth/session", {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: { accept: "application/json" }
-      }).then(function parseSession(response) {
-        if (!response || !response.ok || typeof response.json !== "function") {
-          throw new Error("ChatGPT account session is unavailable.");
-        }
-        return response.json();
-      }).then(function validateSession(session) {
+      accountHistoryAuthGeneration = generation;
+      var source = window.ChatGPTConversationSource;
+      var scheduledSessionFetch = function scheduledSessionFetch(url, options) {
+        return scheduleAccountRequest(function startSessionFetch() {
+          if (!accountHistoryOperationIsActive(generation)) {
+            throw accountHistoryOperationError(generation);
+          }
+          reserveAccountHistoryRequest(generation);
+          return window.fetch(url, options);
+        });
+      };
+      var sessionRequest = source && typeof source.requestJson === "function"
+        ? source.requestJson(
+            scheduledSessionFetch,
+            "/api/auth/session",
+            { maxAttempts: 2, requestGapMs: 0 }
+          )
+        : scheduledSessionFetch("/api/auth/session", {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { accept: "application/json" }
+          }).then(function parseFallbackSession(response) {
+            if (!response || !response.ok || typeof response.json !== "function") {
+              var status = Number(response && response.status) || 0;
+              var error = new Error("ChatGPT account session is unavailable" + (status ? " (" + status + ")" : "") + ".");
+              error.status = status;
+              if (status === 429 || status === 401 || status === 403) {
+                error.stopOperation = true;
+                error.incomplete = true;
+                error.retryAfterMs = status === 429 ? retryAfterDelayMs(response) : 0;
+              }
+              throw error;
+            }
+            return response.json();
+          });
+      accountHistoryAuthPromise = sessionRequest.then(function validateSession(session) {
         var token = String(session && (session.accessToken || session.access_token) || "");
         var accountId = String(
           session && session.account && session.account.id ||
@@ -2691,13 +4199,17 @@
         // They are never persisted, logged, exported, or sent off ChatGPT.
         return { token: token, accountId: accountId };
       }).catch(function allowFutureAuthRetry(error) {
-        clearAccountHistoryAuth();
+        clearAccountHistoryAuth(generation);
         throw error;
       });
       return accountHistoryAuthPromise;
     }
 
     function accountHistoryFetch(url, init) {
+      var operationGeneration = accountHistoryOperationGeneration;
+      if (!accountHistoryOperationIsActive(operationGeneration)) {
+        return Promise.reject(accountHistoryOperationError(operationGeneration));
+      }
       var parsedUrl;
       try {
         if (typeof URL === "function") {
@@ -2724,30 +4236,42 @@
       if (requestedMethod !== "GET") {
         return Promise.reject(new Error("ChatGPT account history access is read-only."));
       }
-      return loadAccountHistoryAuth().then(function authorizedFetch(auth) {
-        scheduleAccountHistoryAuthClear();
-        var options = Object.assign({}, init || {});
-        var headers;
-        if (typeof Headers === "function") {
-          headers = new Headers(options.headers || {});
-          headers.set("accept", "application/json");
-          headers.set("authorization", "Bearer " + auth.token);
-          headers.set("chatgpt-account-id", auth.accountId);
-        } else {
-          headers = Object.assign({}, options.headers || {}, {
-            accept: "application/json",
-            authorization: "Bearer " + auth.token,
-            "chatgpt-account-id": auth.accountId
-          });
+      return loadAccountHistoryAuth(operationGeneration).then(function authorizedFetch(auth) {
+        if (!accountHistoryOperationIsActive(operationGeneration)) {
+          throw accountHistoryOperationError(operationGeneration);
         }
-        options.headers = headers;
-        options.method = "GET";
-        options.credentials = "include";
-        options.cache = "no-store";
-        return window.fetch(parsedUrl.href, options);
+        return scheduleAccountRequest(function startAuthorizedFetch() {
+          if (!accountHistoryOperationIsActive(operationGeneration)) {
+            throw accountHistoryOperationError(operationGeneration);
+          }
+          reserveAccountHistoryRequest(operationGeneration);
+          scheduleAccountHistoryAuthClear(operationGeneration);
+          var options = Object.assign({}, init || {});
+          var headers;
+          if (typeof Headers === "function") {
+            headers = new Headers(options.headers || {});
+            headers.set("accept", "application/json");
+            headers.set("authorization", "Bearer " + auth.token);
+            headers.set("chatgpt-account-id", auth.accountId);
+          } else {
+            headers = Object.assign({}, options.headers || {}, {
+              accept: "application/json",
+              authorization: "Bearer " + auth.token,
+              "chatgpt-account-id": auth.accountId
+            });
+          }
+          options.headers = headers;
+          options.method = "GET";
+          options.credentials = "include";
+          options.cache = "no-store";
+          return window.fetch(parsedUrl.href, options);
+        });
       }).then(function refreshExpiredSession(response) {
+        if (!accountHistoryOperationIsActive(operationGeneration)) {
+          throw accountHistoryOperationError(operationGeneration);
+        }
         if (response && (response.status === 401 || response.status === 403)) {
-          clearAccountHistoryAuth();
+          clearAccountHistoryAuth(operationGeneration);
         }
         return response;
       });
@@ -2767,14 +4291,33 @@
           origin: location.origin,
           includeArchived: true,
           pageSize: 100,
-          concurrency: 2,
-          requestGapMs: 150
+          concurrency: 1,
+          maxIndexPagesPerScope: 6,
+          maxConversationsPerOperation: 500,
+          maxMessagePagesPerConversation: 50,
+          maxMessagesPerConversation: 10000,
+          // The shared content-script scheduler owns the actual network start
+          // gap and the cross-feature concurrency cap. The source keeps the
+          // same value as an additional conservative reservation.
+          requestGapMs: ACCOUNT_REQUEST_MIN_GAP_MS
         }
       };
     }
 
     function safeCollectionError(error) {
       return String((error && error.message) || error || "conversation-unavailable").replace(/\s+/g, " ").trim().slice(0, 240);
+    }
+
+    function collectionFailureResponse(error) {
+      return {
+        ok: false,
+        error: safeCollectionError(error),
+        status: Number(error && error.status) || 0,
+        stopOperation: Boolean(error && error.stopOperation),
+        incomplete: Boolean(error && (error.incomplete || error.stopOperation)),
+        retryAfterMs: Math.max(0, Number(error && error.retryAfterMs) || 0),
+        code: String(error && error.code || "")
+      };
     }
 
     function uniqueIds(ids) {
@@ -2839,6 +4382,9 @@
     function collectWithDomFallback(ids, primaryPromise, perDelayMs) {
       var targets = uniqueIds(ids);
       return Promise.resolve(primaryPromise).catch(function accountFailed(error) {
+        if (error && (error.cancelled || error.stopOperation)) {
+          throw error;
+        }
         return {
           conversations: [],
           failures: targets.map(function failure(id) { return { id: id, error: safeCollectionError(error) }; }),
@@ -2847,6 +4393,15 @@
           complete: false
         };
       }).then(function fallbackMissing(primary) {
+        if (accountHistoryCancelled) {
+          throw accountHistoryCancelledError();
+        }
+        if (primary && primary.stopOperation) {
+          throw accountHistoryLimitError(
+            primary.code || "account-operation-limit",
+            safeCollectionError(primary.error || "ChatGPT account reading reached an operation limit; remaining conversations were not read.")
+          );
+        }
         var completed = {};
         (primary.conversations || []).forEach(function mark(conversation) {
           if (conversation && conversation.id) { completed[conversation.id] = true; }
@@ -2872,72 +4427,107 @@
             }
           } catch (_) {}
         }
-        if (!missing.length) {
-          return mergeCollectionResults(targets, primary, directFallback, true);
-        }
-        return collectManyFromDom(missing, perDelayMs).catch(function () { return []; }).then(function merge(fallback) {
-          return mergeCollectionResults(targets, primary, directFallback.concat(fallback), true);
-        });
+        // Do not navigate to other conversations as an automatic fallback.
+        // Such navigation creates additional normal ChatGPT page loads. Only
+        // the conversation the user already has open may be read from the DOM;
+        // every other failure remains explicit in the export report.
+        return mergeCollectionResults(targets, primary, directFallback, directFallback.length > 0);
       });
     }
 
     function listConversationsForExport() {
+      beginAccountHistoryOperation();
       var account = accountSourceOptions();
+      var projectDirectoryPromise = requestMainWorldProjectDirectories();
       var listPromise;
       if (!account) {
-        listPromise = listAllDomConversations().then(function domOnly(conversations) {
-          return {
-            conversations: conversations,
-            total: conversations.length,
-            complete: false,
-            source: "sidebar",
-            warnings: [{ scope: "account", error: "Account history access is unavailable; showing loaded sidebar chats only." }]
-          };
+        listPromise = projectDirectoryPromise.then(function domDirectories(projectDirectories) {
+          return listAllDomConversations(projectDirectories).then(function domOnly(conversations) {
+            return {
+              conversations: conversations,
+              total: conversations.length,
+              complete: false,
+              source: "sidebar",
+              warnings: [{ scope: "account", error: "Account history access is unavailable; showing loaded sidebar chats only." }]
+            };
+          });
         });
       } else {
-        listPromise = account.source.listAccountConversations(account.options).then(function accountList(result) {
-        var accountConversations = result.conversations || [];
-        if (!accountConversations.length) {
-          return listAllDomConversations().then(function useVisibleSidebarWhenAccountIndexIsEmpty(sidebarConversations) {
-            if (!sidebarConversations.length) {
+        var accountListPromise;
+        try {
+          accountListPromise = Promise.resolve(account.source.listAccountConversations(account.options));
+        } catch (accountListError) {
+          accountListPromise = Promise.reject(accountListError);
+        }
+        listPromise = Promise.all([accountListPromise, projectDirectoryPromise])
+          .then(function accountList(results) {
+            var result = results[0] || {};
+            var projectDirectories = results[1];
+            var accountConversations = enrichConversationProjectDirectories(
+              result.conversations || [],
+              projectDirectories
+            );
+            if (!accountConversations.length && result.stopped) {
               return {
                 conversations: [],
                 total: 0,
-                complete: Boolean(result.complete),
+                complete: false,
                 source: "account",
-                warnings: result.warnings || []
+                warnings: result.warnings || [],
+                stopped: true,
+                code: String(result.code || "account-operation-limit")
               };
             }
+            if (!accountConversations.length) {
+              return listAllDomConversations(projectDirectories)
+                .then(function useVisibleSidebarWhenAccountIndexIsEmpty(sidebarConversations) {
+                  if (!sidebarConversations.length) {
+                    return {
+                      conversations: [],
+                      total: 0,
+                      complete: Boolean(result.complete),
+                      source: "account",
+                      warnings: result.warnings || []
+                    };
+                  }
+                  return {
+                    conversations: sidebarConversations,
+                    total: sidebarConversations.length,
+                    complete: false,
+                    source: "sidebar",
+                    warnings: (result.warnings || []).concat([{
+                      scope: "account",
+                      error: "The account history endpoint returned an empty index; showing the loaded sidebar conversations instead."
+                    }])
+                  };
+                });
+            }
             return {
-              conversations: sidebarConversations,
-              total: sidebarConversations.length,
-              complete: false,
-              source: "sidebar",
-              warnings: (result.warnings || []).concat([{
-                scope: "account",
-                error: "The account history endpoint returned an empty index; showing the loaded sidebar conversations instead."
-              }])
+              conversations: accountConversations,
+              total: accountConversations.length,
+              complete: Boolean(result.complete),
+              source: "account",
+              warnings: result.warnings || [],
+              stopped: Boolean(result.stopped || result.stopOperation),
+              code: String(result.code || "")
             };
+          })
+          .catch(function accountListFailed(error) {
+            if (error && (error.cancelled || error.stopOperation)) {
+              throw error;
+            }
+            return projectDirectoryPromise.then(function fallbackDirectories(projectDirectories) {
+              return listAllDomConversations(projectDirectories).then(function fallbackList(conversations) {
+                return {
+                  conversations: conversations,
+                  total: conversations.length,
+                  complete: false,
+                  source: "sidebar",
+                  warnings: [{ scope: "account", error: safeCollectionError(error) }]
+                };
+              });
+            });
           });
-        }
-        return {
-          conversations: accountConversations,
-          total: accountConversations.length,
-          complete: Boolean(result.complete),
-          source: "account",
-          warnings: result.warnings || []
-        };
-      }).catch(function accountListFailed(error) {
-        return listAllDomConversations().then(function fallbackList(conversations) {
-          return {
-            conversations: conversations,
-            total: conversations.length,
-            complete: false,
-            source: "sidebar",
-            warnings: [{ scope: "account", error: safeCollectionError(error) }]
-          };
-        });
-        });
       }
       return listPromise.then(function putCurrentFirst(result) {
         var prioritized = prioritizeCurrentConversation(result && result.conversations);
@@ -2946,29 +4536,12 @@
           total: prioritized.conversations.length,
           currentConversationId: prioritized.currentConversationId
         });
-      });
-    }
-
-    function collectCurrentConversation() {
-      var id = conversationIdFromPath();
-      var account = accountSourceOptions();
-      if (id && account) {
-        return collectWithDomFallback([id], account.source.collectConversations([id], account.options));
-      }
-      var exporter = window.ChatGPTUsageExporter;
-      var conversation = exporter && typeof exporter.collectConversationFromDom === "function"
-        ? exporter.collectConversationFromDom(document)
-        : null;
-      var hasConversation = Boolean(conversation && conversation.messages && conversation.messages.length);
-      return Promise.resolve({
-        conversations: hasConversation ? [conversation] : [],
-        failures: hasConversation ? [] : [{ id: id, error: "No exportable conversation is open." }],
-        warnings: hasConversation ? [{
-          scope: "rendered-page-fallback",
-          error: "The current conversation was read from the rendered ChatGPT page; account-history completeness could not be verified."
-        }] : [],
-        requestedCount: 1,
-        complete: false
+      }).then(function releaseAfterList(result) {
+        releaseAccountHistoryAuth();
+        return result;
+      }, function releaseAfterListFailure(error) {
+        releaseAccountHistoryAuth();
+        throw error;
       });
     }
 
@@ -2981,52 +4554,12 @@
       return collectWithDomFallback(targets, primary, perDelayMs);
     }
 
-    function collectAllConversations() {
-      var account = accountSourceOptions();
-      if (!account) {
-        return listAllDomConversations().then(function collectLoaded(list) {
-          return collectSelectedConversations(list.map(function id(item) { return item.id; })).then(function markSidebarOnly(result) {
-            result.warnings = (result.warnings || []).concat([{
-              scope: "account",
-              error: "Account history access is unavailable; only loaded sidebar chats were collected."
-            }]);
-            result.complete = false;
-            return result;
-          });
-        });
-      }
-      return account.source.collectAllConversations(account.options).then(function fallbackFailedDetails(primary) {
-        var ids = (primary.index || []).map(function id(item) { return item.id; });
-        return collectWithDomFallback(ids, Promise.resolve(primary)).then(function attachWarnings(result) {
-          // collectWithDomFallback already carries account-index warnings and
-          // adds an explicit rendered-page warning when any detail request
-          // required DOM fallback. Preserve both; fallback must never be
-          // reported as a verified complete account export.
-          result.complete = primary.indexComplete !== false &&
-            result.complete !== false &&
-            result.failures.length === 0 &&
-            (result.warnings || []).length === 0;
-          return result;
-        });
-      }).catch(function accountAllFailed(error) {
-        return listAllDomConversations().then(function collectLoaded(list) {
-          return collectSelectedConversations(list.map(function id(item) { return item.id; })).then(function markFallback(result) {
-            result.warnings = (result.warnings || []).concat([{
-              scope: "account",
-              error: safeCollectionError(error)
-            }]);
-            result.complete = false;
-            return result;
-          });
-        });
-      });
-    }
-
     // 暴露给同一隔离世界里的页面内面板直接调用；弹窗面板走 chrome.tabs 消息。
     window.__chatgptUsageListConversations = listConversationsForExport;
-    window.__chatgptUsageCollectCurrent = collectCurrentConversation;
     window.__chatgptUsageCollectMany = collectSelectedConversations;
-    window.__chatgptUsageCollectAll = collectAllConversations;
+    window.__chatgptUsageBeginAccountOperation = beginAccountHistoryOperation;
+    window.__chatgptUsageCancelAccountOperation = cancelAccountHistoryOperation;
+    window.__chatgptUsageReleaseAccountAuth = releaseAccountHistoryAuth;
 
     chrome.runtime.onMessage.addListener(function handleConversationMessage(message, sender, sendResponse) {
       if (!message) {
@@ -3034,22 +4567,17 @@
       }
       var exporter = window.ChatGPTUsageExporter;
       var exporterReady = exporter && typeof exporter.collectConversationFromDom === "function";
-      if (message.type === "conversation.collect") {
-        if (!exporterReady) { sendResponse({ ok: false, error: "exporter-unavailable" }); return true; }
-        collectCurrentConversation()
-          .then(function (result) {
-            sendResponse({
-              ok: true,
-              conversation: result.conversations[0] || null,
-              conversations: result.conversations,
-              failures: result.failures,
-              warnings: result.warnings || [],
-              requestedCount: result.requestedCount,
-              complete: result.complete
-            });
-          })
-          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
-        return true;
+      if (message.type === "conversation.operation.begin") {
+        sendResponse({ ok: beginAccountHistoryOperation() });
+        return false;
+      }
+      if (message.type === "conversation.operation.cancel") {
+        sendResponse({ ok: cancelAccountHistoryOperation() });
+        return false;
+      }
+      if (message.type === "conversation.operation.release") {
+        sendResponse({ ok: releaseAccountHistoryAuth() });
+        return false;
       }
       if (message.type === "conversation.list") {
         listConversationsForExport()
@@ -3061,10 +4589,12 @@
               complete: result.complete,
               source: result.source,
               warnings: result.warnings,
+              stopped: Boolean(result.stopped),
+              code: String(result.code || ""),
               currentConversationId: result.currentConversationId || ""
             });
           })
-          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
+          .catch(function (e) { sendResponse(collectionFailureResponse(e)); });
         return true;
       }
       if (message.type === "conversation.collectMany") {
@@ -3077,26 +4607,12 @@
               failures: result.failures,
               warnings: result.warnings || [],
               requestedCount: result.requestedCount,
-              complete: result.complete
+              complete: result.complete,
+              stopped: Boolean(result.stopped || result.stopOperation),
+              code: String(result.code || "")
             });
           })
-          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
-        return true;
-      }
-      if (message.type === "conversation.collectAll") {
-        if (!exporterReady) { sendResponse({ ok: false, error: "exporter-unavailable" }); return true; }
-        collectAllConversations()
-          .then(function (result) {
-            sendResponse({
-              ok: true,
-              conversations: result.conversations,
-              failures: result.failures,
-              warnings: result.warnings || [],
-              requestedCount: result.requestedCount,
-              complete: result.complete
-            });
-          })
-          .catch(function (e) { sendResponse({ ok: false, error: safeCollectionError(e) }); });
+          .catch(function (e) { sendResponse(collectionFailureResponse(e)); });
         return true;
       }
       return undefined;

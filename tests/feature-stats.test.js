@@ -4,6 +4,7 @@ const detector = require("../src/detector");
 const catalog = require("../src/model-catalog");
 const background = require("../src/background");
 const dashboard = require("../src/dashboard");
+const pageModelHook = require("../src/page-model-hook");
 
 const ALL_FEATURE_IDS = ["agent_mode", "audio", "canvas", "deep_research", "image_generation", "realtime", "web_search"];
 
@@ -57,7 +58,8 @@ test("background does not count disabled or excluded feature signals", () => {
   const observed = background.observeNetworkRequest(
     {
       tabId: 9,
-      url: "https://chatgpt.com/local-model-probe",
+      method: "POST",
+      url: "https://chatgpt.com/backend-api/f/conversation",
       requestBody: {
         raw: [
           {
@@ -91,22 +93,57 @@ test("background does not count disabled or excluded feature signals", () => {
   assert.deepEqual(observed.usageFeatures, ["agent_mode"]);
 });
 
+test("versioned feature names never become future model slugs", () => {
+  [
+    "file-upload-v2",
+    "code-interpreter-v2",
+    "connectors-v2",
+    "gpts-v2",
+    "tasks-v2"
+  ].forEach((value) => {
+    assert.equal(catalog.isRequestModelSlug(value), false, value);
+    assert.equal(pageModelHook.isModelSlug(value), false, value);
+    assert.equal(detector.resolveModelInfo(value), null, value);
+  });
+
+  assert.equal(catalog.isRequestModelSlug("aurora-7"), true);
+  assert.equal(pageModelHook.isModelSlug("aurora-7"), true);
+});
+
 test("dashboard feature rows hide zero-count entries and label canonical features", () => {
-  const stats = background.createEmptyStats();
-  stats.totals["future-family-2026-thinking"] = 2;
-  stats.byDate["2026-06-04"] = { "future-family-2026-thinking": 2 };
-  stats.models["future-family-2026-thinking"] = {
-    label: "future-family-2026-thinking",
-    apiModel: "future-family-2026-thinking",
-    chatgptModel: "future-family-2026-thinking",
-    parameters: { model: "future-family-2026-thinking" }
-  };
-  stats.featuresByModel["future-family-2026-thinking"] = {
-    total: 2,
-    features: {
-      web_search: { id: "web_search", count: 0 },
-      deep_research: { id: "deep_research", count: 2, lastSubmittedAt: "2026-06-04T12:00:00.000Z" }
-    }
+  const model = "future-family-2026-thinking";
+  const first = new Date("2026-08-23T12:00:00.000Z");
+  let stats = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "feature-row-1",
+      requestModel: model,
+      apiModel: model,
+      modelObservedSource: "webRequest",
+      modelParameters: { model },
+      usageFeatures: ["deep_research"],
+      submittedAt: first.toISOString(),
+      pageUrl: "https://chatgpt.com/c/feature-row"
+    },
+    first
+  );
+  stats = background.applyIncrement(
+    stats,
+    {
+      submissionId: "feature-row-2",
+      requestModel: model,
+      apiModel: model,
+      modelObservedSource: "webRequest",
+      modelParameters: { model },
+      usageFeatures: ["deep_research"],
+      submittedAt: new Date(first.getTime() + 1000).toISOString(),
+      pageUrl: "https://chatgpt.com/c/feature-row"
+    },
+    new Date(first.getTime() + 1000)
+  );
+  stats.featuresByModel[model].features.web_search = {
+    id: "web_search",
+    count: 0
   };
 
   const html = dashboard.renderModelTextList(stats, { language: "en", startDate: "", endDate: "" });
@@ -171,7 +208,8 @@ test("dashboard keeps instant records whose apiModel is the bare gpt-5-x slug (n
   stats.models["gpt-5-5-instant"] = { label: "gpt-5-5-instant", apiModel: "gpt-5-5", chatgptModel: "gpt-5-5", mode: "instant", parameters: { model: "gpt-5-5" } };
   const html = dashboard.renderModelTextList(stats, { language: "zh", startDate: "2026-06-26", endDate: "2026-06-26" });
   assert.match(html, /gpt-5-5-instant/);
-  assert.match(html, /范围内 6/);
+  assert.match(html, /gpt-5-5-instant[\s\S]*<b>6 次<\/b>/);
+  assert.doesNotMatch(html, /范围内|全部|今日/);
   assert.doesNotMatch(html, /暂无模型记录/);
   // 趋势图也应取到 6,而不是 0
   const series = dashboard.chartSeries(stats, ["gpt-5-5-instant"], "2026-06-26", "2026-06-26");

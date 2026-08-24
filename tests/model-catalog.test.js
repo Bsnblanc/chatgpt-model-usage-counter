@@ -285,6 +285,20 @@ test("live version bindings prevent stale selector or fallback titles from movin
   assert.equal(instant.source, "selector+account-catalog");
 });
 
+test("submit-time public mode remains separate from a different internal response mode", () => {
+  const info = catalog.resolveRuntimePublicModelInfo(runtimeCatalog(), "gpt-5-6-pro", {
+    selectedPublicModel: "GPT-5.6 Sol",
+    selectedPublicMode: "instant",
+    selectedPublicModeLabel: "Instant",
+    selectedPublicModeSource: "selector-dom:model-control"
+  });
+
+  assert.equal(info.mode, "pro");
+  assert.equal(info.selectedPublicMode, "instant");
+  assert.equal(info.selectedPublicModeLabel, "Instant");
+  assert.equal(info.selectedPublicModeSource, "selector-dom:model-control");
+});
+
 test("accounts without an intelligence version still map the base slug to the account model title", () => {
   const freeCatalog = runtimeCatalog();
   freeCatalog.versions = freeCatalog.versions.filter((version) => version.id === "auto");

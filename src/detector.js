@@ -35,11 +35,7 @@
     '[data-model-id]',
     '[data-testid*="model" i]',
     '[data-value*="gpt" i]',
-    '[data-value*="o" i]',
-    '[aria-selected="true"]',
-    '[aria-current="true"]',
-    'button[aria-haspopup="menu"]',
-    '[role="button"][aria-haspopup="menu"]'
+    '[data-value^="o" i]'
   ];
 
   function normalizeWhitespace(value) {
@@ -240,6 +236,13 @@
       };
     }
 
+    var visiblePublicModel = [
+      element.innerText || "",
+      element.textContent || "",
+      getAttributeText(element, "aria-label"),
+      getAttributeText(element, "title")
+    ].map(publicModelLabelFromVisibleText).filter(Boolean)[0] || "";
+
     // Resolve each semantic source independently. Combining visible text with
     // data-testid/id values can turn UI implementation names such as
     // "model-switcher-dropdown-button" into a fake model suffix.
@@ -268,7 +271,11 @@
       }
       if (info && info.label) {
         info.selectedText = candidate.slice(0, 160);
-        info.publicModel = publicModelLabelFromVisibleText(candidate);
+        info.publicModel = visiblePublicModel || publicModelLabelFromVisibleText(candidate);
+        if (info.publicModel) {
+          info.selectedPublicModel = info.publicModel;
+          info.selectedPublicModelSource = "selector-dom";
+        }
         return info;
       }
     }
@@ -281,15 +288,28 @@
       return "";
     }
 
-    var value = "";
     if (typeof element.value === "string") {
-      value = element.value;
+      var value = normalizeWhitespace(
+        element.value.replace(/[\u200b-\u200f\u2060]/g, "")
+      );
+      if (value) {
+        return value;
+      }
     }
 
+    // Contenteditable elements usually expose the same prompt through both
+    // innerText and textContent. Concatenating them duplicated every prompt
+    // before hashing (for example "hello hello"), which broke export-event
+    // matching and made prompt lengths inaccurate. Use one authoritative
+    // representation and keep textContent only as the fallback.
+    var innerText = normalizeWhitespace(
+      String(element.innerText || "").replace(/[\u200b-\u200f\u2060]/g, "")
+    );
+    if (innerText) {
+      return innerText;
+    }
     return normalizeWhitespace(
-      [value, element.innerText || "", element.textContent || ""]
-        .join(" ")
-        .replace(/[\u200b-\u200f\u2060]/g, "")
+      String(element.textContent || "").replace(/[\u200b-\u200f\u2060]/g, "")
     );
   }
 
@@ -368,10 +388,17 @@
   }
 
   function hasExplicitModelSemantics(element) {
+    var dataValue = getAttributeText(element, "data-value");
     return /SliderTriggerModelLabel/i.test(String(element && element.className || "")) ||
       /model-switcher/i.test(getAttributeText(element, "data-testid")) ||
       /(?:model|模型)/i.test(getAttributeText(element, "aria-label")) ||
-      Boolean(getAttributeText(element, "data-model") || getAttributeText(element, "data-model-id"));
+      Boolean(getAttributeText(element, "data-model") || getAttributeText(element, "data-model-id")) ||
+      Boolean(
+        dataValue &&
+        modelCatalog &&
+        typeof modelCatalog.isRequestModelSlug === "function" &&
+        modelCatalog.isRequestModelSlug(dataValue)
+      );
   }
 
   function isConversationNavigationCandidate(element) {
@@ -459,14 +486,16 @@
       addUnique(candidates, seen, queryAll(documentLike, MODEL_SELECTOR_HINTS[i]));
     }
 
-    if (candidates.length === 0) {
-      addUnique(candidates, seen, queryAll(documentLike, "button,[role='button'],[aria-haspopup='menu']"));
-    }
-
     var best = null;
     for (var j = 0; j < candidates.length; j += 1) {
       var element = candidates[j];
       if (!isVisible(element)) {
+        continue;
+      }
+      // A menu/button is not model evidence merely because its visible text
+      // happens to look like a permissive internal slug. Only explicit model
+      // controls may supply the submit-time public selection.
+      if (!hasExplicitModelSemantics(element)) {
         continue;
       }
       if (isConversationNavigationCandidate(element) && !hasExplicitModelSemantics(element)) {

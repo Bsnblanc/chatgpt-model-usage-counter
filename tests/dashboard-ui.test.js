@@ -102,6 +102,8 @@ function createDirtyStats() {
     events: [
       {
         model: "gpt-5-5-preview",
+        requestModel: "gpt-5-thinking",
+        responseModel: "gpt-5-5-preview",
         apiModel: "gpt-5-thinking",
         modelParameters: { model: "gpt-5-thinking" },
         submittedAt: "2026-05-30T14:00:00.000Z",
@@ -111,6 +113,8 @@ function createDirtyStats() {
       },
       {
         model: "gpt-5-thinking",
+        requestModel: "gpt-5-thinking",
+        responseModel: "gpt-5-thinking",
         apiModel: "gpt-5-thinking",
         modelParameters: { model: "gpt-5-thinking" },
         submittedAt: "2026-05-30T15:00:00.000Z",
@@ -149,7 +153,7 @@ test("model conversations stay inside their request-response relation and are no
   assert.match(html, /future-family-2026-thinking/);
   assert.match(html, /future-family-2026-pro/);
   assert.match(html, /Reasoning effort/);
-  assert.match(html, /Web search/);
+  assert.doesNotMatch(html, /usage-feature-row|usage-feature-list/);
   assert.match(sessionsHtml, /usage-relation-conversation/);
   assert.match(sessionsHtml, /usage-source-mode/);
   assert.match(sessionsHtml, /usage-index-link/);

@@ -154,6 +154,24 @@ test("findCurrentModelInfo returns API model parameters for current models", () 
   assert.equal(info.parameters["text.verbosity"], undefined);
 });
 
+test("findCurrentModelInfo keeps the visible Chat public selection beside an internal data-model slug", () => {
+  const modelButton = new FakeElement({
+    innerText: "GPT-5.6 Sol",
+    attributes: {
+      "data-testid": "model-switcher-dropdown-button",
+      "data-model": "gpt-5-6-thinking",
+      "aria-haspopup": "menu"
+    },
+    rect: { top: 16, left: 90, width: 180, height: 36, right: 270, bottom: 52 }
+  });
+  const info = detector.findCurrentModelInfo(new FakeDocument([modelButton]));
+
+  assert.equal(info.label, "gpt-5-6-thinking");
+  assert.equal(info.apiModel, "gpt-5-6-thinking");
+  assert.equal(info.selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(info.selectedPublicModelSource, "selector-dom");
+});
+
 test("findCurrentModelInfo recognizes future explicit model slugs from model switcher text", () => {
   const modelButton = new FakeElement({
     innerText: "future-family-2026-thinking",
@@ -190,6 +208,18 @@ test("findCurrentModelInfo reads the explicit Work public model label without tr
   assert.equal(info.parameters.model, undefined);
 });
 
+test("findCurrentModelInfo preserves a Work public model whose product name contains Pro", () => {
+  const workModel = new FakeElement({
+    tagName: "SPAN",
+    innerText: "5.6 Pro",
+    className: "uFxlGa_SliderTriggerModelLabel"
+  });
+  const info = detector.findCurrentModelInfo(new FakeDocument([workModel]));
+
+  assert.equal(info.selectedPublicModel, "5.6 Pro");
+  assert.equal(info.selectedPublicModelSource, "work-selector-dom");
+});
+
 test("findCurrentModelInfo accepts an unknown versioned slug from an explicit data-model field", () => {
   const modelButton = new FakeElement({
     innerText: "Aurora",
@@ -204,6 +234,19 @@ test("findCurrentModelInfo accepts an unknown versioned slug from an explicit da
   assert.equal(info.label, "aurora-7");
   assert.equal(info.apiModel, "aurora-7");
   assert.deepEqual(info.parameters, { model: "aurora-7" });
+});
+
+test("findCurrentModelInfo rejects versioned feature names in explicit model attributes", () => {
+  const featureButton = new FakeElement({
+    innerText: "Files",
+    attributes: {
+      "data-testid": "model-switcher-dropdown-button",
+      "data-model": "file-upload-v2",
+      "aria-haspopup": "menu"
+    }
+  });
+
+  assert.equal(detector.findCurrentModelInfo(new FakeDocument([featureButton])), null);
 });
 
 test("resolveModelInfo normalizes future O-series visible labels", () => {
@@ -322,6 +365,19 @@ test("getComposerText reads textarea prompt text", () => {
   const doc = new FakeDocument([textarea]);
 
   assert.equal(detector.getComposerText(doc), "Explain MV3 storage.");
+});
+
+test("getComposerText reads a contenteditable prompt once when innerText and textContent are identical", () => {
+  const composer = new FakeElement({
+    tagName: "DIV",
+    innerText: "拖动windows窗口慢动作原因",
+    textContent: "拖动windows窗口慢动作原因",
+    attributes: { contenteditable: "true", role: "textbox" },
+    rect: { top: 700, left: 20, width: 500, height: 80, right: 520, bottom: 780 }
+  });
+  const doc = new FakeDocument([composer]);
+
+  assert.equal(detector.getComposerText(doc), "拖动windows窗口慢动作原因");
 });
 
 test("isComposerElement accepts nested text nodes inside the composer", () => {

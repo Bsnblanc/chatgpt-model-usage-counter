@@ -30,7 +30,8 @@ const conversations = [
           reasoning_effort: "high",
           text: { verbosity: "medium" },
           image_generation_options: { size: "1024x1024" }
-        }
+        },
+        requestReasoningEffort: "high"
       }
     ]
   }
@@ -56,7 +57,8 @@ const chineseConversations = [
           model_slug: "gpt-6-1-aurora",
           reasoning_effort: "medium",
           top_p: 0.8
-        }
+        },
+        requestReasoningEffort: "medium"
       }
     ]
   }
@@ -85,6 +87,7 @@ const featureConversations = [
           conversation_mode: "agentmode",
           canvas: true
         },
+        requestReasoningEffort: "high",
         features: ["deepsearch", "canvas-v2"]
       }
     ]
@@ -250,6 +253,38 @@ function pngHasDarkPixel(buffer) {
   return false;
 }
 
+function pngContainsRgb(buffer, expected) {
+  const chunks = parsePngChunks(buffer);
+  const ihdr = chunks.find((chunk) => chunk.type === "IHDR");
+  const idat = Buffer.concat(chunks.filter((chunk) => chunk.type === "IDAT").map((chunk) => chunk.data));
+  const width = ihdr.data.readUInt32BE(0);
+  const height = ihdr.data.readUInt32BE(4);
+  const data = zlib.inflateSync(idat);
+  const rowLength = width * 4 + 1;
+
+  for (let y = 0; y < height; y += 1) {
+    assert.equal(data[y * rowLength], 0, "PNG rows should use filter 0 in Node renderer");
+    for (let x = 0; x < width; x += 1) {
+      const pixel = y * rowLength + 1 + x * 4;
+      if (
+        data[pixel] === expected[0] &&
+        data[pixel + 1] === expected[1] &&
+        data[pixel + 2] === expected[2] &&
+        data[pixel + 3] === 255
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function assertBrandPalette(colors) {
+  for (const color of ["#172554", "#22D3EE", "#60A5FA", "#A78BFA", "#FFFFFF"]) {
+    assert.ok(colors.includes(color), `canvas watermark should paint brand color ${color}`);
+  }
+}
+
 function pngChunk(type, data = Buffer.alloc(0)) {
   const typeBytes = Buffer.from(type, "ascii");
   const length = Buffer.alloc(4);
@@ -279,6 +314,7 @@ const MOCK_CANVAS_PNG = bareMockPng();
 async function withMockCanvasDocument(assertion) {
   const previousDocument = globalThis.document;
   const drawnText = [];
+  drawnText.fillColors = [];
 
   class MockCanvas {
     constructor() {
@@ -297,7 +333,9 @@ async function withMockCanvasDocument(assertion) {
         beginPath() {},
         closePath() {},
         drawImage() {},
-        fill() {},
+        fill() {
+          drawnText.fillColors.push(String(this.fillStyle));
+        },
         fillRect() {},
         fillText(text) {
           drawnText.push(String(text));
@@ -402,7 +440,22 @@ function assertPublicJsonShape(payload) {
     assert.deepEqual(Object.keys(conversation).sort(), ["id", "messageCount", "messages", "time", "title", "url"]);
     assert.deepEqual(Object.keys(conversation.time).sort(), ["createdAt", "updatedAt"]);
     for (const message of conversation.messages) {
-      assert.deepEqual(Object.keys(message).sort(), ["features", "id", "model", "parameters", "role", "sequence", "text", "time"]);
+      assert.deepEqual(Object.keys(message).sort(), [
+        "features",
+        "id",
+        "model",
+        "parameters",
+        "reasoningEffort",
+        "requestModel",
+        "responseModel",
+        "role",
+        "selectedPublicMode",
+        "selectedPublicModeLabel",
+        "selectedPublicModel",
+        "sequence",
+        "text",
+        "time"
+      ]);
       assert.deepEqual(Object.keys(message.time).sort(), ["createdAt", "updatedAt"]);
     }
   }
@@ -486,7 +539,7 @@ test("exportJson returns stable normalized JSON payload", () => {
 
   assert.equal(payload.title, "ChatGPT Conversation Export");
   assert.equal(payload.exportedAt, "2026-05-30T00:00:00.000Z");
-  assert.equal(payload.formatVersion, 3);
+  assert.equal(payload.formatVersion, 4);
   assert.equal(payload.conversationCount, 2);
   assert.equal(payload.messageCount, 4);
   assert.deepEqual(payload.featureUsage, { total: 1, byFeature: { image_generation: 1 } });
@@ -529,7 +582,8 @@ test("exports keep exact slugs and public dotted GPT labels distinct", () => {
             model_slug: "gpt_5_thinking",
             reasoning_effort: "high",
             text: { verbosity: "medium" }
-          }
+          },
+          requestReasoningEffort: "high"
         },
         {
           id: "exact-chatgpt-model-message",
@@ -538,7 +592,8 @@ test("exports keep exact slugs and public dotted GPT labels distinct", () => {
           metadata: {
             model_slug: "gpt_5_5_thinking",
             reasoning_effort: "medium"
-          }
+          },
+          requestReasoningEffort: "medium"
         },
         {
           id: "public-model-message",
@@ -547,7 +602,8 @@ test("exports keep exact slugs and public dotted GPT labels distinct", () => {
           metadata: {
             model_slug: "GPT-5.5 Thinking",
             reasoning_effort: "medium"
-          }
+          },
+          requestReasoningEffort: "medium"
         },
         {
           id: "valid-model-message",
@@ -556,7 +612,8 @@ test("exports keep exact slugs and public dotted GPT labels distinct", () => {
           metadata: {
             model_slug: "future-family-2026-thinking",
             reasoning_effort: "low"
-          }
+          },
+          requestReasoningEffort: "low"
         }
       ]
     }
@@ -585,7 +642,7 @@ test("exports keep exact slugs and public dotted GPT labels distinct", () => {
   assert.match(markdown, /future-family-2026-thinking/);
 });
 
-test("exports preserve direct request model and usage-feature aliases", () => {
+test("exports preserve direct request model separately from the unconfirmed response model", () => {
   const output = JSON.parse(exporter.exportJson([
     {
       id: "direct-aliases",
@@ -596,7 +653,7 @@ test("exports preserve direct request model and usage-feature aliases", () => {
           id: "a1",
           role: "assistant",
           text: "Answer",
-          apiModel: "aurora-7",
+          requestModel: "aurora-7",
           usageFeatures: ["web_search", "code_interpreter"]
         }
       ]
@@ -604,12 +661,90 @@ test("exports preserve direct request model and usage-feature aliases", () => {
   ]));
   const assistant = output.conversations[0].messages[1];
 
-  assert.equal(assistant.model, "aurora-7");
+  assert.equal(assistant.model, "");
+  assert.equal(assistant.requestModel, "aurora-7");
+  assert.equal(assistant.responseModel, null);
   assert.deepEqual(assistant.features, ["code_interpreter", "web_search"]);
   assert.deepEqual(output.featureUsage.byFeature, { code_interpreter: 1, web_search: 1 });
 });
 
-test("exports fill missing assistant models from the same conversation only", () => {
+test("JSON export preserves every model identity field without substituting missing values", () => {
+  const output = JSON.parse(exporter.exportJson([
+    {
+      id: "model-identity-fields",
+      title: "Model identity fields",
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          text: "Complete metadata",
+          selectedPublicModel: "GPT-5.6 Sol",
+          selectedPublicMode: "thinking",
+          selectedPublicModeLabel: "Thinking",
+          requestModel: "gpt-5-6-thinking",
+          responseModel: "gpt-5-6-thinking"
+        },
+        {
+          id: "a2",
+          role: "assistant",
+          text: "Missing metadata"
+        },
+        {
+          id: "a3",
+          role: "assistant",
+          text: "Metadata aliases",
+          metadata: {
+            selected_public_model: "GPT-5.6 Luna",
+            selected_public_mode: "instant",
+            selected_public_mode_label: "Instant",
+            request_model: "gpt-5-6",
+            response_model: "gpt-5-6-mini"
+          }
+        }
+      ]
+    }
+  ]));
+  const complete = output.conversations[0].messages[0];
+  const missing = output.conversations[0].messages[1];
+  const aliases = output.conversations[0].messages[2];
+
+  assert.equal(complete.selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(complete.selectedPublicMode, "thinking");
+  assert.equal(complete.selectedPublicModeLabel, "Thinking");
+  assert.equal(complete.requestModel, "gpt-5-6-thinking");
+  assert.equal(complete.responseModel, "gpt-5-6-thinking");
+  assert.equal(missing.selectedPublicModel, null);
+  assert.equal(missing.selectedPublicMode, null);
+  assert.equal(missing.selectedPublicModeLabel, null);
+  assert.equal(missing.requestModel, null);
+  assert.equal(missing.responseModel, null);
+  assert.equal(aliases.selectedPublicModel, "GPT-5.6 Luna");
+  assert.equal(aliases.selectedPublicMode, "instant");
+  assert.equal(aliases.selectedPublicModeLabel, "Instant");
+  assert.equal(aliases.requestModel, "gpt-5-6");
+  assert.equal(aliases.responseModel, "gpt-5-6-mini");
+});
+
+test("readable exports label every unavailable model dimension and reasoning effort as unknown", () => {
+  const markdown = exporter.exportMarkdown([
+    {
+      id: "unknown-export-fields",
+      title: "Unknown export fields",
+      messages: [
+        { id: "u1", role: "user", text: "Question" },
+        { id: "a1", role: "assistant", text: "Answer" }
+      ]
+    }
+  ]);
+
+  assert.match(
+    markdown,
+    /\*请求型号：未知 · 实际回复型号：未知 · 思考强度：未知\*/
+  );
+  assert.doesNotMatch(markdown, /未提供|待确认|未取得|未识别/);
+});
+
+test("exports never fill a missing assistant response model from a neighboring turn", () => {
   const output = JSON.parse(exporter.exportJson([
     {
       id: "model-neighbor",
@@ -641,11 +776,50 @@ test("exports fill missing assistant models from the same conversation only", ()
     }
   ]));
 
-  assert.equal(output.conversations[0].messages[1].model, "gpt-5-thinking");
+  assert.equal(output.conversations[0].messages[1].model, "");
   assert.equal(output.conversations[0].messages[3].model, "gpt-5-thinking");
   assert.equal(output.conversations[1].messages[1].model, "");
   assert.equal(output.conversations[2].messages[1].model, "gpt-5-thinking");
   assert.equal(output.conversations[2].messages[3].model, "gpt-5.5-thinking");
+});
+
+test("exports omit ChatGPT thinking preambles and keep the final assistant reply", () => {
+  const conversation = [
+    {
+      id: "thinking-preamble",
+      title: "Thinking preamble",
+      messages: [
+        { id: "u1", role: "user", text: "Check the final answer only." },
+        {
+          id: "preamble",
+          role: "assistant",
+          text: "I will first inspect the source.",
+          metadata: {
+            is_thinking_preamble_message: true,
+            model_slug: "gpt-5-6-thinking",
+          },
+        },
+        {
+          id: "final",
+          role: "assistant",
+          text: "This is the final answer.",
+          metadata: {
+            model_slug: "gpt-5-6-thinking",
+          },
+        },
+      ],
+    },
+  ];
+  const payload = JSON.parse(exporter.exportJson(conversation));
+  const markdown = exporter.exportMarkdown(conversation);
+
+  assert.deepEqual(
+    payload.conversations[0].messages.map((message) => message.id),
+    ["u1", "final"],
+  );
+  assert.equal(payload.messageCount, 2);
+  assert.doesNotMatch(markdown, /I will first inspect the source/);
+  assert.match(markdown, /This is the final answer/);
 });
 
 test("exports keep model parameters separate from attachment metadata", () => {
@@ -710,7 +884,7 @@ test("text exports preserve readable Chinese content and normalized parameters",
   assert.doesNotMatch(markdown, /\*\*Content\*\*/);
   assert.doesNotMatch(markdown, /```text\n请总结：模型、角色、参数需要清晰，不要乱码。/);
   // 模型作为附注;参数只保留在 JSON 数据里,可读面不展开
-  assert.match(markdown, /\*gpt-6-1-aurora\*/);
+  assert.match(markdown, /\*请求型号：未知 · 实际回复型号：gpt-6-1-aurora · 思考强度：medium\*/);
   assert.doesNotMatch(markdown, /reasoning\.effort/);
   assertNoInternalExportFields(json);
   assertNoInternalExportFields(markdown);
@@ -849,6 +1023,21 @@ test("exportSvg returns standalone escaped SVG", () => {
   assert.match(svg, /Escaping &lt;check&gt;/);
   assert.match(svg, /Second conversation/);
   assert.match(svg, /Assistant answer with export details\./);
+  assert.match(svg, /ChatGPT Model Usage Counter/);
+  assert.match(svg, /fill="#172554"/);
+  assert.match(svg, /fill="#22D3EE"/);
+  assert.match(svg, /fill="#60A5FA"/);
+  assert.match(svg, /fill="#A78BFA"/);
+});
+
+test("exported brand geometry keeps the compact chat-and-counter identity", () => {
+  assert.equal(exporter.BRAND_ICON.viewBox, 128);
+  assert.equal(exporter.BRAND_ICON.background.color, "#172554");
+  assert.equal(exporter.BRAND_ICON.bubble.color, "#FFFFFF");
+  assert.deepEqual(
+    exporter.BRAND_ICON.bars.map((bar) => [bar.height, bar.color]),
+    [[14, "#22D3EE"], [23, "#60A5FA"], [33, "#A78BFA"]]
+  );
 });
 
 test("exportArtifact returns content, dataUrl, blob, filename, and mime type", async () => {
@@ -903,6 +1092,10 @@ test("exportArtifact image returns a PNG with selected content metadata", async 
   assert.ok(dimensions.width >= 640);
   assert.ok(dimensions.height > 180);
   assert.equal(pngHasDarkPixel(buffer), true);
+  assert.equal(pngContainsRgb(buffer, [23, 37, 84]), true, "PNG pixels should contain the navy icon body");
+  assert.equal(pngContainsRgb(buffer, [34, 211, 238]), true, "PNG pixels should contain the cyan counter bar");
+  assert.equal(pngContainsRgb(buffer, [96, 165, 250]), true, "PNG pixels should contain the blue counter bar");
+  assert.equal(pngContainsRgb(buffer, [167, 139, 250]), true, "PNG pixels should contain the violet counter bar");
   assert.match(text, /Escaping <check>/);
   assert.match(text, /Second conversation/);
   assert.match(text, /ChatGPT/);
@@ -969,6 +1162,50 @@ test("PNG browser export draws Chinese text directly instead of Unicode codepoin
     assert.match(visualText, /请总结：模型、角色、参数需要清晰，不要乱码。/);
     assert.match(visualText, /结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。/);
     assert.doesNotMatch(visualText, /U\+[0-9A-F]{4}/);
+  });
+});
+
+test("single-conversation browser PDF and PNG layout renders the conversation title once", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    const title = "Single conversation title";
+    const conversations = [{
+      id: "single-title",
+      title,
+      messages: [
+        { id: "single-user", role: "user", text: "Question" },
+        { id: "single-assistant", role: "assistant", text: "Answer" }
+      ]
+    }];
+
+    exporter.renderConversationsCanvas(conversations);
+
+    assert.equal(
+      drawnText.filter((text) => text === title).length,
+      1,
+      "the document title already represents the only conversation"
+    );
+  });
+});
+
+test("multi-conversation browser PDF and PNG layout keeps one heading for each conversation", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    const conversations = [
+      {
+        id: "multi-a",
+        title: "Conversation A",
+        messages: [{ id: "multi-a-user", role: "user", text: "Question A" }]
+      },
+      {
+        id: "multi-b",
+        title: "Conversation B",
+        messages: [{ id: "multi-b-user", role: "user", text: "Question B" }]
+      }
+    ];
+
+    exporter.renderConversationsCanvas(conversations);
+
+    assert.equal(drawnText.filter((text) => text === "Conversation A").length, 1);
+    assert.equal(drawnText.filter((text) => text === "Conversation B").length, 1);
   });
 });
 
@@ -1086,7 +1323,7 @@ test("buildPdfBlobFromCanvases creates one PDF page per rendered canvas", async 
 });
 
 test("memory-safe browser renderers create paged PDF and PNG output directly from conversations", async () => {
-  await withMockCanvasDocument(async () => {
+  await withMockCanvasDocument(async (drawnText) => {
     const longConversation = [{
       id: "streamed-pages",
       title: "Memory-safe pages",
@@ -1100,6 +1337,7 @@ test("memory-safe browser renderers create paged PDF and PNG output directly fro
     const pngPages = await exporter.renderConversationsPngBlobs(longConversation, { pageHeight: 700 });
     assert.ok(pngPages.length > 2);
     pngPages.forEach((blob) => assert.equal(blob.type, exporter.MIME.png));
+    assertBrandPalette(drawnText.fillColors);
 
     const pdfBlob = await exporter.buildPdfBlobFromConversations(longConversation, { pageHeight: 700 });
     const pdf = (await blobBuffer(pdfBlob)).toString("latin1");
@@ -1133,6 +1371,7 @@ test("one long selected conversation is streamed into one complete PNG file", as
     assert.ok(dimensions.height > 700, "the one PNG should contain the full multi-slice transcript");
     assert.match(metadata, /Single PNG line 1/);
     assert.match(metadata, /Single PNG line 120/);
+    assertBrandPalette(drawnText.fillColors);
     assert.equal(
       drawnText.filter((value) => /^120$/.test(value)).length,
       1,
@@ -1304,6 +1543,7 @@ test("createExport image uses browser canvas when browser canvas exists", async 
     assert.match(text, /future-family-2026-thinking/);
     assert.match(visualText, /Escaping <check>/);
     assert.match(visualText, /Assistant answer with export details\./);
+    assertBrandPalette(drawnText.fillColors);
   });
 });
 

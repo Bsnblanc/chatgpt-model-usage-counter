@@ -6,5 +6,10 @@
     return;
   }
 
-  window.ChatGPTUsageDashboard.init(root, { surface: "popup" });
+  window.ChatGPTUsageDashboard.init(root, {
+    surface: "popup",
+    onLanguageChange: function syncPopupLanguage(language) {
+      document.documentElement.lang = language === "en" ? "en" : "zh-CN";
+    }
+  });
 })();

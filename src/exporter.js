@@ -16,6 +16,22 @@
   var ZIP_MIME = "application/zip";
   var SVG_MIME = "image/svg+xml;charset=utf-8";
   var PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  // One normalized geometry drives both the extension artwork and every PNG
+  // watermark renderer. Keep the SVG source in icons/usage-counter-mark.svg
+  // visually equivalent to this data so the toolbar mark and exported mark
+  // remain the same identity at every size.
+  var BRAND_ICON = {
+    viewBox: 128,
+    background: { x: 4, y: 4, width: 120, height: 120, radius: 30, color: "#172554" },
+    orbit: { x: 96, y: 15, width: 18, height: 18, radius: 9, color: "#A78BFA" },
+    bubble: { x: 24, y: 25, width: 80, height: 58, radius: 19, color: "#FFFFFF" },
+    tail: { points: [[34, 78], [57, 78], [30, 101]], color: "#FFFFFF" },
+    bars: [
+      { x: 44, y: 57, width: 11, height: 14, radius: 5.5, color: "#22D3EE" },
+      { x: 61, y: 48, width: 11, height: 23, radius: 5.5, color: "#60A5FA" },
+      { x: 78, y: 38, width: 11, height: 33, radius: 5.5, color: "#A78BFA" }
+    ]
+  };
   var MIME = {
     json: JSON_MIME,
     markdown: MD_MIME,
@@ -211,6 +227,18 @@
       /all the files uploaded by the user have been fully loaded/i.test(value);
   }
 
+  function isThinkingPreambleMessage(message) {
+    var metadata =
+      message && message.metadata && typeof message.metadata === "object"
+        ? message.metadata
+        : {};
+    return Boolean(
+      (message && message.thinkingPreamble) ||
+        metadata.is_thinking_preamble_message ||
+        metadata.isThinkingPreambleMessage
+    );
+  }
+
   function markdownTableColumnCount(row) {
     var value = String(row || "").trim();
     if (!/^\|/.test(value)) {
@@ -339,8 +367,26 @@
       .trim();
   }
 
+  function stripWritingBlockWrappers(text) {
+    var depth = 0;
+    var lines = normalizeContentText(text).split("\n");
+    var visible = [];
+    lines.forEach(function stripLine(line) {
+      if (/^[ \t]*:::writing\{[^}\r\n]*\}[ \t]*$/.test(line)) {
+        depth += 1;
+        return;
+      }
+      if (depth > 0 && /^[ \t]*:::[ \t]*$/.test(line)) {
+        depth -= 1;
+        return;
+      }
+      visible.push(line);
+    });
+    return normalizeContentText(visible.join("\n"));
+  }
+
   function sanitizeTranscriptText(text) {
-    return restoreReadableTranscriptStructure(stripInternalContentBoundaryWrappers(normalizeContentText(text)
+    return restoreReadableTranscriptStructure(stripWritingBlockWrappers(stripInternalContentBoundaryWrappers(normalizeContentText(text)
       .replace(/[ \t]*\uE200filecite\uE202turn\d+file\d+\uE201[ \t]*/gi, " ")
       .replace(/[ \t]*\uE200[^\uE200\uE201]*(?:filecite|turn\d+file\d+)[^\uE200\uE201]*\uE201[ \t]*/gi, " ")
       .replace(/[ \t]*\uE200[^\uE200\uE201]*?\bcite\b[^\uE200\uE201]*?\uE201[ \t]*/gi, " ")
@@ -352,11 +398,14 @@
       .replace(/[\uE200-\uE202]/g, "")
       .replace(/[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
-      .trim()));
+      .trim())));
   }
 
   function shouldExportTranscriptMessage(message) {
     if (!message || !isHumanTranscriptRole(message.role)) {
+      return false;
+    }
+    if (isThinkingPreambleMessage(message)) {
       return false;
     }
     if (isInternalContentType(message.contentType)) {
@@ -404,6 +453,13 @@
           createdAt: createdAt,
           contentType: String((message.content && message.content.content_type) || "text"),
           model: exportMetadata.model,
+          selectedPublicModel: exportMetadata.selectedPublicModel,
+          selectedPublicMode: exportMetadata.selectedPublicMode,
+          selectedPublicModeLabel: exportMetadata.selectedPublicModeLabel,
+          requestModel: exportMetadata.requestModel,
+          responseModel: exportMetadata.responseModel,
+          reasoningEffort: exportMetadata.reasoningEffort,
+          thinkingPreamble: isThinkingPreambleMessage(message),
           modelCandidatePresent: exportMetadata.modelCandidatePresent,
           parameters: exportMetadata.parameters,
           features: exportMetadata.features,
@@ -450,6 +506,13 @@
               updateTime: isoTime(message && (message.update_time || message.updateTime || message.updatedAt)),
               contentType: String((message && (message.contentType || (message.content && message.content.content_type))) || "text"),
               model: exportMetadata.model,
+              selectedPublicModel: exportMetadata.selectedPublicModel,
+              selectedPublicMode: exportMetadata.selectedPublicMode,
+              selectedPublicModeLabel: exportMetadata.selectedPublicModeLabel,
+              requestModel: exportMetadata.requestModel,
+              responseModel: exportMetadata.responseModel,
+              reasoningEffort: exportMetadata.reasoningEffort,
+              thinkingPreamble: isThinkingPreambleMessage(message),
               modelCandidatePresent: exportMetadata.modelCandidatePresent,
               parameters: exportMetadata.parameters,
               features: exportMetadata.features,
@@ -512,7 +575,7 @@
           url: EXPORT_PROMO_URL,
           description: EXPORT_PROMO_DESC
         },
-        formatVersion: 3,
+        formatVersion: 4,
         conversationCount: normalized.length,
         messageCount: normalized.reduce(function countMessages(total, conversation) {
           return total + conversation.messages.length;
@@ -553,9 +616,22 @@
     if (!message || normalizedRoleKey(message.role) !== "assistant") {
       return "";
     }
-    var parts = [];
-    if (hasModel(message.model)) { parts.push(modelSummary(message.model)); }
-    if (hasFeatures(message.features)) { parts.push(featureDisplay(message.features)); }
+    var responseModel = sanitizeExportModel(message.responseModel);
+    var requestModel = sanitizeExportModel(message.requestModel);
+    var parts = [
+      "请求型号：" + (requestModel || "未知"),
+      "实际回复型号：" + (responseModel || "未知"),
+      "思考强度：" + (message.reasoningEffort ? String(message.reasoningEffort) : "未知")
+    ];
+    if (message.selectedPublicModel) {
+      parts.push("公开选择：" + String(message.selectedPublicModel));
+    }
+    if (message.selectedPublicModeLabel || message.selectedPublicMode) {
+      parts.push("公开模式：" + String(message.selectedPublicModeLabel || message.selectedPublicMode));
+    }
+    if (hasFeatures(message.features)) {
+      parts.push("功能：" + featureDisplay(message.features));
+    }
     return parts.join(" · ");
   }
 
@@ -693,6 +769,7 @@
 
   function exportMessageMetadata(message) {
     var parameters = {};
+    var explicitRequestParameters = {};
     var features = {};
     collectExportParameters(message || {}, parameters, [], 0);
     if (message && message.metadata) {
@@ -701,9 +778,11 @@
     }
     if (message && message.parameters) {
       collectExportParameters(message.parameters, parameters, [], 0);
+      collectExportParameters(message.parameters, explicitRequestParameters, [], 0);
     }
     if (message && message.modelParameters) {
       collectExportParameters(message.modelParameters, parameters, [], 0);
+      collectExportParameters(message.modelParameters, explicitRequestParameters, [], 0);
     }
     if (message && Array.isArray(message.features)) {
       message.features.forEach(function addFeature(feature) {
@@ -746,10 +825,85 @@
       messageParameters.model,
       parameters.model
     ];
-    var model = firstValidExportModel(modelCandidates);
+    var role = normalizedRoleKey(messageRole(message));
+    var responseModel = firstValidExportModel([
+      message && message.responseModel,
+      message && message.response_model,
+      metadata.response_model,
+      metadata.responseModel,
+      role === "assistant" && message && message.model_slug,
+      role === "assistant" && message && message.modelSlug,
+      role === "assistant" && metadata.model_slug,
+      role === "assistant" && metadata.modelSlug,
+      role === "assistant" && metadata.modelslug
+    ]);
+    var requestModel = firstValidExportModel([
+      message && message.requestModel,
+      message && message.request_model,
+      metadata.request_model,
+      metadata.requestModel,
+      messageParameters.model,
+      modelParameters.model
+    ]);
+    var selectedPublicModel = normalizeText(
+      message && (
+        message.selectedPublicModel ||
+        message.selected_public_model ||
+        message.publicModel ||
+        message.public_model ||
+        metadata.selectedPublicModel ||
+        metadata.selected_public_model ||
+        metadata.publicModel ||
+        metadata.public_model
+      )
+    ).slice(0, 96);
+    var selectedPublicMode = normalizeText(
+      message && (
+        message.selectedPublicMode ||
+        message.selected_public_mode ||
+        metadata.selectedPublicMode ||
+        metadata.selected_public_mode
+      )
+    ).slice(0, 64);
+    var selectedPublicModeLabel = normalizeText(
+      message && (
+        message.selectedPublicModeLabel ||
+        message.selected_public_mode_label ||
+        metadata.selectedPublicModeLabel ||
+        metadata.selected_public_mode_label
+      )
+    ).slice(0, 96);
+    var reasoningEffort = normalizeText(
+      message && (
+        message.requestReasoningEffort ||
+        message.request_reasoning_effort ||
+        message.reasoningEffort
+      ) ||
+      metadata.request_reasoning_effort ||
+      metadata.requestReasoningEffort ||
+      explicitRequestParameters["reasoning.effort"] ||
+      ""
+    ).toLowerCase().slice(0, 32);
+    // `metadata.reasoning_effort` belongs to the historical response payload
+    // and does not prove what the same request carried. Request effort is
+    // attached from the locally observed submission event when available.
+    delete parameters["reasoning.effort"];
+    delete parameters.reasoning_effort;
+    if (reasoningEffort) {
+      parameters["reasoning.effort"] = reasoningEffort;
+    }
     delete parameters.model;
     return {
-      model: model,
+      // `model` remains as a compatibility alias, but it now always means the
+      // assistant's exact response slug. Request and public selection are
+      // separate fields and are never guessed from neighboring messages.
+      model: role === "assistant" ? responseModel : "",
+      selectedPublicModel: selectedPublicModel,
+      selectedPublicMode: selectedPublicMode,
+      selectedPublicModeLabel: selectedPublicModeLabel,
+      requestModel: requestModel,
+      responseModel: role === "assistant" ? responseModel : "",
+      reasoningEffort: reasoningEffort,
       modelCandidatePresent: modelCandidates.some(function hasCandidate(candidate) {
         return Boolean(String(candidate || "").trim());
       }),
@@ -824,29 +978,15 @@
   }
 
   function fillMissingAssistantModels(messages) {
-    var filled = (messages || []).map(function fill(message, index) {
-      if (message && normalizedRoleKey(message.role) === "assistant" && !validAssistantModel(message)) {
-        var fallback = nearestAssistantModel(messages, index);
-        if (fallback) {
-          message.model = fallback;
-        }
-      }
+    // Missing assistant metadata stays missing. Copying the nearest model from
+    // another turn makes a readable file look precise while being factually
+    // unverifiable, especially when one conversation switches models.
+    return (messages || []).map(function clean(message) {
       if (message && Object.prototype.hasOwnProperty.call(message, "modelCandidatePresent")) {
         delete message.modelCandidatePresent;
       }
       return message;
     });
-
-    var conversationModel = mostFrequentAssistantModel(filled);
-    if (conversationModel) {
-      filled.forEach(function fillAgain(message) {
-        if (message && normalizedRoleKey(message.role) === "assistant" && !validAssistantModel(message)) {
-          message.model = conversationModel;
-        }
-      });
-    }
-
-    return filled;
   }
 
   function hasParameters(params) {
@@ -918,6 +1058,12 @@
         updatedAt: String(message.updateTime || message.updatedAt || "")
       },
       model: String(message.model || ""),
+      selectedPublicModel: message.selectedPublicModel || null,
+      selectedPublicMode: message.selectedPublicMode || null,
+      selectedPublicModeLabel: message.selectedPublicModeLabel || null,
+      requestModel: message.requestModel || null,
+      responseModel: message.responseModel || null,
+      reasoningEffort: message.reasoningEffort || null,
       parameters: Object.assign({}, message.parameters || {}),
       features: Array.isArray(message.features) ? message.features.slice() : [],
       text: String(message.text || message.content || "")
@@ -973,8 +1119,8 @@
       return String(value || "");
     }
     var pad = function pad(n) { return String(n).padStart(2, "0"); };
-    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) +
-      " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+    return date.getUTCFullYear() + "-" + pad(date.getUTCMonth() + 1) + "-" + pad(date.getUTCDate()) +
+      " " + pad(date.getUTCHours()) + ":" + pad(date.getUTCMinutes()) + " UTC";
   }
 
   function conversationTimeText(conversation) {
@@ -1064,8 +1210,12 @@
       lines.push("---");
       lines.push("title: " + yamlString(title));
       if (c.url) { lines.push("url: " + yamlString(c.url)); }
-      var created = conversationTimeText(c);
-      if (created) { lines.push("created: " + yamlString(created.replace(/^Created:\s*/i, ""))); }
+      if (c.createTime) {
+        lines.push("created: " + yamlString(c.createTime));
+      }
+      if (c.updateTime) {
+        lines.push("updated: " + yamlString(c.updateTime));
+      }
       lines.push("exported: " + yamlString(exportTimestamp(options)));
       lines.push("messages: " + c.messages.length);
       lines.push("---", "");
@@ -1228,6 +1378,30 @@
     }, 0);
   }
 
+  function brandIconSvg(x, y, size) {
+    var scale = Number(size || 0) / BRAND_ICON.viewBox;
+    var background = BRAND_ICON.background;
+    var orbit = BRAND_ICON.orbit;
+    var bubble = BRAND_ICON.bubble;
+    var tailPoints = BRAND_ICON.tail.points.map(function point(pair) {
+      return pair[0] + "," + pair[1];
+    }).join(" ");
+    var bars = BRAND_ICON.bars.map(function barSvg(bar) {
+      return '<rect x="' + bar.x + '" y="' + bar.y + '" width="' + bar.width + '" height="' + bar.height +
+        '" rx="' + bar.radius + '" fill="' + bar.color + '"/>';
+    }).join("");
+    return '<g transform="translate(' + x + " " + y + ") scale(" + scale + ')">' +
+      '<rect x="' + background.x + '" y="' + background.y + '" width="' + background.width + '" height="' + background.height +
+        '" rx="' + background.radius + '" fill="' + background.color + '"/>' +
+      '<rect x="' + orbit.x + '" y="' + orbit.y + '" width="' + orbit.width + '" height="' + orbit.height +
+        '" rx="' + orbit.radius + '" fill="' + orbit.color + '"/>' +
+      '<rect x="' + bubble.x + '" y="' + bubble.y + '" width="' + bubble.width + '" height="' + bubble.height +
+        '" rx="' + bubble.radius + '" fill="' + bubble.color + '"/>' +
+      '<polygon points="' + tailPoints + '" fill="' + BRAND_ICON.tail.color + '"/>' +
+      bars +
+      "</g>";
+  }
+
   // 把对话渲染成聊天气泡的 SVG(PNG 由它栅格化):用户靠右蓝气泡、助手靠左灰气泡。
   function exportSvg(conversations, options) {
     var list = normalizeConversations(conversations);
@@ -1305,6 +1479,17 @@
       });
       y += 6;
     });
+
+    y += 10;
+    els.push('<line x1="' + margin + '" y1="' + y + '" x2="' + (width - margin) + '" y2="' + y + '" stroke="#e6e9ef" stroke-width="1"/>');
+    y += 16;
+    var brandIconSize = 42;
+    var brandTextX = margin + brandIconSize + 12;
+    els.push(brandIconSvg(margin, y, brandIconSize));
+    els.push(svgText(brandTextX, y + 13, EXPORT_PROMO_NAME, { size: 12.5, weight: 700, fill: "#1f4f9f" }));
+    els.push(svgText(brandTextX, y + 29, EXPORT_PROMO_DESC, { size: 10.5, fill: "#64748b" }));
+    els.push(svgText(brandTextX, y + 45, "GitHub · " + EXPORT_PROMO_URL, { size: 10.5, fill: "#1f4f9f" }));
+    y += 53;
 
     var height = Math.max(160, Math.ceil(y + margin - gap));
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + " " + height + '"><rect width="100%" height="100%" fill="#f7f8fa"/><g font-family="' + fontFamily + '">' + els.join("") + "</g></svg>";
@@ -1825,6 +2010,103 @@
     }
   }
 
+  function pngColor(hex) {
+    var clean = String(hex || "").replace(/^#/, "");
+    return [
+      parseInt(clean.slice(0, 2), 16) || 0,
+      parseInt(clean.slice(2, 4), 16) || 0,
+      parseInt(clean.slice(4, 6), 16) || 0,
+      255
+    ];
+  }
+
+  function fillPngRoundedRect(raw, width, height, x, y, rectWidth, rectHeight, radius, color) {
+    var startX = Math.max(0, Math.floor(x));
+    var startY = Math.max(0, Math.floor(y));
+    var endX = Math.min(width, Math.ceil(x + rectWidth));
+    var endY = Math.min(height, Math.ceil(y + rectHeight));
+    var r = Math.max(0, Math.min(Number(radius) || 0, rectWidth / 2, rectHeight / 2));
+    for (var row = startY; row < endY; row += 1) {
+      var py = row + 0.5;
+      var rowStart = row * (width * 4 + 1) + 1;
+      for (var column = startX; column < endX; column += 1) {
+        var px = column + 0.5;
+        var closestX = Math.max(x + r, Math.min(px, x + rectWidth - r));
+        var closestY = Math.max(y + r, Math.min(py, y + rectHeight - r));
+        var dx = px - closestX;
+        var dy = py - closestY;
+        if (dx * dx + dy * dy > r * r) {
+          continue;
+        }
+        var pixel = rowStart + column * 4;
+        raw[pixel] = color[0];
+        raw[pixel + 1] = color[1];
+        raw[pixel + 2] = color[2];
+        raw[pixel + 3] = color[3];
+      }
+    }
+  }
+
+  function fillPngTriangle(raw, width, height, points, color) {
+    var xs = points.map(function pointX(point) { return point[0]; });
+    var ys = points.map(function pointY(point) { return point[1]; });
+    var startX = Math.max(0, Math.floor(Math.min.apply(Math, xs)));
+    var startY = Math.max(0, Math.floor(Math.min.apply(Math, ys)));
+    var endX = Math.min(width, Math.ceil(Math.max.apply(Math, xs)));
+    var endY = Math.min(height, Math.ceil(Math.max.apply(Math, ys)));
+    function edge(a, b, px, py) {
+      return (px - a[0]) * (b[1] - a[1]) - (py - a[1]) * (b[0] - a[0]);
+    }
+    for (var row = startY; row < endY; row += 1) {
+      var py = row + 0.5;
+      var rowStart = row * (width * 4 + 1) + 1;
+      for (var column = startX; column < endX; column += 1) {
+        var px = column + 0.5;
+        var e1 = edge(points[0], points[1], px, py);
+        var e2 = edge(points[1], points[2], px, py);
+        var e3 = edge(points[2], points[0], px, py);
+        if (!((e1 >= 0 && e2 >= 0 && e3 >= 0) || (e1 <= 0 && e2 <= 0 && e3 <= 0))) {
+          continue;
+        }
+        var pixel = rowStart + column * 4;
+        raw[pixel] = color[0];
+        raw[pixel + 1] = color[1];
+        raw[pixel + 2] = color[2];
+        raw[pixel + 3] = color[3];
+      }
+    }
+  }
+
+  function drawPngBrandIcon(raw, width, height, x, y, size) {
+    var scale = Number(size || 0) / BRAND_ICON.viewBox;
+    function rounded(shape) {
+      fillPngRoundedRect(
+        raw,
+        width,
+        height,
+        x + shape.x * scale,
+        y + shape.y * scale,
+        shape.width * scale,
+        shape.height * scale,
+        shape.radius * scale,
+        pngColor(shape.color)
+      );
+    }
+    rounded(BRAND_ICON.background);
+    rounded(BRAND_ICON.orbit);
+    rounded(BRAND_ICON.bubble);
+    fillPngTriangle(
+      raw,
+      width,
+      height,
+      BRAND_ICON.tail.points.map(function scalePoint(point) {
+        return [x + point[0] * scale, y + point[1] * scale];
+      }),
+      pngColor(BRAND_ICON.tail.color)
+    );
+    BRAND_ICON.bars.forEach(rounded);
+  }
+
   function drawPngGlyph(raw, width, height, x, y, character, scale, color) {
     var pattern = PIXEL_FONT[String(character || " ").toUpperCase()] || PIXEL_FONT["?"];
     pattern.forEach(function drawRow(row, rowIndex) {
@@ -1850,8 +2132,11 @@
     var lines = buildPlainTextLines(conversations, options || {});
     var metadataText = lines.join("\n");
     var layout = layoutPngVisualLines(lines, width, margin);
+    var footerTop = layout.height + 10;
+    var footerIconSize = 38;
+    var footerHeight = 58;
     var requestedHeight = Number((options && options.height) || 0) || 0;
-    var height = Math.ceil(Math.max(180, layout.height, requestedHeight));
+    var height = Math.ceil(Math.max(180, footerTop + footerHeight + margin, requestedHeight));
     var rowLength = width * 4 + 1;
     var raw = new Uint8Array(rowLength * height);
     for (var y = 0; y < height; y += 1) {
@@ -1872,6 +2157,28 @@
       }
       drawPngText(raw, width, height, item.x, item.y, item.text, item.scale, item.color);
     });
+    fillPngRect(raw, width, height, margin, footerTop, width - margin * 2, 2, [219, 227, 238, 255]);
+    drawPngBrandIcon(raw, width, height, margin, footerTop + 12, footerIconSize);
+    drawPngText(
+      raw,
+      width,
+      height,
+      margin + footerIconSize + 12,
+      footerTop + 14,
+      EXPORT_PROMO_NAME,
+      2,
+      pngColor(BRAND_ICON.background.color)
+    );
+    drawPngText(
+      raw,
+      width,
+      height,
+      margin + footerIconSize + 12,
+      footerTop + 36,
+      "GITHUB / BSNBLANC / CHATGPT-MODEL-USAGE-COUNTER",
+      1,
+      [71, 85, 105, 255]
+    );
 
     return { width: width, height: height, raw: raw, metadataText: metadataText };
   }
@@ -2417,6 +2724,27 @@
       }
       line(value, "24px system-ui, Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif", /^[A-Za-z ]+: /.test(value) ? "#64748b" : "#111827");
     });
+    if (y + 92 > height - margin) {
+      newPage();
+    }
+    y += 12;
+    context.strokeStyle = "#dbe3ee";
+    context.beginPath();
+    context.moveTo(margin, y);
+    context.lineTo(width - margin, y);
+    context.stroke();
+    y += 18;
+    drawBrandIconCanvas(context, margin, y, 58);
+    context.fillStyle = "#1f4f9f";
+    context.font = "700 22px system-ui, Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif";
+    context.fillText(EXPORT_PROMO_NAME, margin + 76, y + 22);
+    context.fillStyle = "#64748b";
+    context.font = "18px system-ui, Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif";
+    context.fillText(EXPORT_PROMO_DESC, margin + 76, y + 46);
+    context.fillStyle = "#1f4f9f";
+    context.font = "17px system-ui, Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif";
+    context.fillText("GitHub · " + EXPORT_PROMO_URL, margin + 76, y + 68);
+    y += 82;
 
     return canvases;
   }
@@ -2984,7 +3312,8 @@
         id: (typeof node.getAttribute === "function" && node.getAttribute("data-message-id")) || String(index),
         role: role,
         text: content,
-        model: (typeof node.getAttribute === "function" && node.getAttribute("data-message-model-slug")) || ""
+        model: (typeof node.getAttribute === "function" && node.getAttribute("data-message-model-slug")) || "",
+        responseModel: (typeof node.getAttribute === "function" && node.getAttribute("data-message-model-slug")) || ""
       });
     });
     var url = (root && root.location && root.location.href) ||
@@ -3149,6 +3478,30 @@
     ctx.closePath();
   }
 
+  function drawBrandIconCanvas(ctx, x, y, size) {
+    var scale = Number(size || 0) / BRAND_ICON.viewBox;
+    function rounded(shape) {
+      ctx.fillStyle = shape.color;
+      cvRoundRect(ctx, shape.x, shape.y, shape.width, shape.height, shape.radius);
+      ctx.fill();
+    }
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale, scale);
+    rounded(BRAND_ICON.background);
+    rounded(BRAND_ICON.orbit);
+    rounded(BRAND_ICON.bubble);
+    ctx.fillStyle = BRAND_ICON.tail.color;
+    ctx.beginPath();
+    ctx.moveTo(BRAND_ICON.tail.points[0][0], BRAND_ICON.tail.points[0][1]);
+    ctx.lineTo(BRAND_ICON.tail.points[1][0], BRAND_ICON.tail.points[1][1]);
+    ctx.lineTo(BRAND_ICON.tail.points[2][0], BRAND_ICON.tail.points[2][1]);
+    ctx.closePath();
+    ctx.fill();
+    BRAND_ICON.bars.forEach(rounded);
+    ctx.restore();
+  }
+
   function layoutConversationsCanvas(conversations, options) {
     var doc = root.document;
     if (!doc || typeof doc.createElement !== "function") { throw new Error("Canvas export requires a browser environment"); }
@@ -3279,7 +3632,9 @@
     rule(margin, width - margin); gap(18);
     list.forEach(function (conv, ci) {
       if (ci > 0) { gap(6); rule(margin, width - margin); gap(16); }
-      addText(margin, conv.title || conv.id || "对话", 18, ACCENT, { bold: true }); gap(24);
+      if (list.length > 1) {
+        addText(margin, conv.title || conv.id || "对话", 18, ACCENT, { bold: true }); gap(24);
+      }
       conv.messages.forEach(function (msg) {
         gap(6);
         addText(margin, speakerName(msg.role), 13, isUserMessage(msg.role) ? USERC : ACCENT, { bold: true }); gap(20);
@@ -3291,13 +3646,27 @@
     });
     // 推广页脚:简要介绍 + GitHub 链接,放在所有对话之后。
     gap(18); rule(margin, width - margin); gap(16);
-    addText(margin, EXPORT_PROMO_NAME, 13, ACCENT, { bold: true }); gap(19);
-    drawSpans(cvParseInline(EXPORT_PROMO_DESC), margin, contentW, 11.5, MUTED, false); gap(3);
-    addText(margin, "GitHub · " + EXPORT_PROMO_URL, 11.5, ACCENT); gap(4);
+    var footerStart = y;
+    var includeBrandIcon = options.includeBrandIcon === true;
+    var footerTextX = includeBrandIcon ? margin + 48 : margin;
+    if (includeBrandIcon) {
+      ops.push({ kind: "brandIcon", x: margin, y: footerStart, w: 36, h: 36 });
+    }
+    addText(footerTextX, EXPORT_PROMO_NAME, 13, ACCENT, { bold: true }); gap(19);
+    drawSpans(cvParseInline(EXPORT_PROMO_DESC), footerTextX, width - margin - footerTextX, 11.5, MUTED, false); gap(3);
+    addText(footerTextX, "GitHub · " + EXPORT_PROMO_URL, 11.5, ACCENT); gap(4);
+    var footerEnd = Math.max(y, footerStart + (includeBrandIcon ? 40 : 0));
+    y = footerEnd;
     gap(margin);
 
     var totalH = Math.ceil(y);
-    return { doc: doc, width: width, height: totalH, ops: ops };
+    return {
+      doc: doc,
+      width: width,
+      height: totalH,
+      ops: ops,
+      footer: includeBrandIcon ? { start: footerStart, end: footerEnd } : null
+    };
   }
 
   function paintConversationCanvas(layout, startY, pageHeight, forcedDpr) {
@@ -3340,7 +3709,9 @@
           return;
         }
       }
-      if (op.kind === "rect") {
+      if (op.kind === "brandIcon") {
+        drawBrandIconCanvas(ctx, op.x, op.y, op.w);
+      } else if (op.kind === "rect") {
         ctx.fillStyle = op.color;
         if (op.radius) { cvRoundRect(ctx, op.x, op.y, op.w, op.h, op.radius); ctx.fill(); }
         else ctx.fillRect(op.x, op.y, op.w, op.h);
@@ -3373,7 +3744,16 @@
     while (start < layout.height) {
       var desiredEnd = Math.min(layout.height, start + limit);
       var end = desiredEnd;
-      if (desiredEnd < layout.height) {
+      var footerBreak = Boolean(
+        layout.footer &&
+        layout.footer.start > start + Math.floor(limit * 0.55) &&
+        desiredEnd > layout.footer.start &&
+        desiredEnd < layout.footer.end
+      );
+      if (footerBreak) {
+        end = layout.footer.start;
+      }
+      if (!footerBreak && desiredEnd < layout.height) {
         for (var index = 0; index < textTops.length; index += 1) {
           var top = textTops[index];
           if (top > start + Math.floor(limit * 0.55) && top <= desiredEnd) {
@@ -3394,7 +3774,7 @@
   }
 
   function renderConversationsCanvas(conversations, options) {
-    var layout = layoutConversationsCanvas(conversations, options || {});
+    var layout = layoutConversationsCanvas(conversations, Object.assign({}, options || {}, { includeBrandIcon: true }));
     if (layout.height > 30000) {
       throw new Error("Conversation is too long for one PNG canvas.");
     }
@@ -3402,7 +3782,7 @@
   }
 
   function renderConversationsCanvasPages(conversations, options) {
-    var layout = layoutConversationsCanvas(conversations, options || {});
+    var layout = layoutConversationsCanvas(conversations, Object.assign({}, options || {}, { includeBrandIcon: true }));
     return conversationCanvasPageRanges(layout, options && options.pageHeight).map(function renderPage(range) {
       return paintConversationCanvas(layout, range.start, range.height);
     });
@@ -3478,7 +3858,7 @@
   // slices, feed their scanlines into one streaming zlib stream, and assemble
   // the resulting IDAT chunks into a single standards-compliant PNG.
   function buildPngBlobFromConversations(conversations, options) {
-    options = options || {};
+    options = Object.assign({}, options || {}, { includeBrandIcon: true });
     var layout = layoutConversationsCanvas(conversations, options);
     var ranges = conversationCanvasPageRanges(layout, options.pageHeight || 14000);
     var CompressionCtor = root.CompressionStream || (typeof CompressionStream !== "undefined" ? CompressionStream : null);
@@ -3675,7 +4055,7 @@
   }
 
   function renderConversationsPngBlobs(conversations, options) {
-    options = options || {};
+    options = Object.assign({}, options || {}, { includeBrandIcon: true });
     var layout = layoutConversationsCanvas(conversations, options);
     var ranges = conversationCanvasPageRanges(layout, options.pageHeight || 14000);
     var pages = [];
@@ -3731,6 +4111,7 @@
     exportPngDataUrl: exportPngDataUrl,
     exportPrintHtml: exportPrintHtml,
     exportSvg: exportSvg,
+    BRAND_ICON: BRAND_ICON,
     MIME: MIME,
     normalizeConversations: normalizeConversations,
     safeName: safeName,

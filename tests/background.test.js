@@ -49,6 +49,159 @@ const SUPPORTED_USAGE_FEATURE_NAMES = {
   web_search: "Web search"
 };
 
+test("account request coordinator exports the enforced single-request safety limits", () => {
+  assert.equal(background.ACCOUNT_REQUEST_MAX_CONCURRENCY, 1);
+  assert.equal(background.ACCOUNT_REQUEST_MIN_GAP_MS, 1000);
+  assert.equal(background.ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS, 60000);
+});
+
+function acquireAccountPermit(tabId, url = "https://chatgpt.com/") {
+  return new Promise((resolve) => {
+    background._testAccountRequests.acquire(
+      { tab: { id: tabId, url }, url },
+      resolve
+    );
+  });
+}
+
+function completeAccountPermit(tabId, permitId, status = 200, retryAfterMs = 0, url = "https://chatgpt.com/") {
+  return new Promise((resolve) => {
+    background._testAccountRequests.complete(
+      { permitId, status, retryAfterMs },
+      { tab: { id: tabId, url }, url },
+      resolve
+    );
+  });
+}
+
+test("two ChatGPT tabs share one global request-start interval", async () => {
+  background._testAccountRequests.reset();
+  const first = await acquireAccountPermit(101);
+  assert.equal(first.granted, true);
+  const startedAt = Date.now();
+  const secondPromise = acquireAccountPermit(202, "https://chat.openai.com/");
+  await completeAccountPermit(101, first.permitId);
+  const second = await secondPromise;
+  const elapsed = Date.now() - startedAt;
+
+  assert.equal(second.granted, true);
+  assert.ok(elapsed >= 900, `second tab started after only ${elapsed} ms`);
+  await completeAccountPermit(202, second.permitId, 200, 0, "https://chat.openai.com/");
+  background._testAccountRequests.reset();
+});
+
+test("a 429 cooldown in one tab blocks every other ChatGPT tab", async () => {
+  background._testAccountRequests.reset();
+  const first = await acquireAccountPermit(303);
+  const startedAt = Date.now();
+  const secondPromise = acquireAccountPermit(404);
+  await completeAccountPermit(303, first.permitId, 429, 1500);
+  const second = await secondPromise;
+  const elapsed = Date.now() - startedAt;
+
+  assert.equal(second.granted, true);
+  assert.ok(elapsed >= 1400, `shared Retry-After cooldown lasted only ${elapsed} ms`);
+  await completeAccountPermit(404, second.permitId);
+
+  const longBlock = await acquireAccountPermit(505);
+  await completeAccountPermit(505, longBlock.permitId, 429, 120000);
+  const rejected = await acquireAccountPermit(606);
+  assert.equal(rejected.granted, false);
+  assert.equal(rejected.stopOperation, true);
+  assert.equal(rejected.status, 429);
+  assert.ok(rejected.retryAfterMs > 60000);
+  background._testAccountRequests.reset();
+});
+
+test("the persisted coordinator snapshot contains timing only and no account credentials", async () => {
+  background._testAccountRequests.reset();
+  const permit = await acquireAccountPermit(707);
+  const snapshot = background._testAccountRequests.snapshot();
+  const serialized = JSON.stringify(snapshot);
+
+  assert.deepEqual(Object.keys(snapshot).sort(), ["permits", "states", "version"]);
+  assert.match(serialized, /nextStartAt/);
+  assert.match(serialized, /cooldownUntil/);
+  assert.match(serialized, /expiresAt/);
+  assert.doesNotMatch(serialized, /authorization|bearer|cookie|access.?token|account.?id/i);
+
+  await completeAccountPermit(707, permit.permitId);
+  background._testAccountRequests.reset();
+});
+
+test("statistics import rebuilds events from a strict whitelist and drops sensitive parameter identifiers", () => {
+  const submittedAt = "2026-08-24T12:00:00.000Z";
+  const model = "gpt-5-6-thinking";
+  const stats = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "safe-import-event-0001",
+      requestModel: model,
+      apiModel: model,
+      modelObservedSource: "webRequest",
+      modelParameters: {
+        model,
+        "reasoning.effort": "high",
+        prompt_cache_key: "cache-secret",
+        safety_identifier: "account-secret"
+      },
+      sourceMode: "chat",
+      source: "send-button",
+      submittedAt,
+      pageUrl: "https://chatgpt.com/c/safe-import-event-0001",
+      pageTitle: "Safe import event"
+    },
+    new Date(submittedAt)
+  );
+  const raw = JSON.parse(JSON.stringify(stats));
+  const rawEvent = raw.events[0];
+  rawEvent.authorization = "Bearer must-not-persist";
+  rawEvent.cookie = "session=must-not-persist";
+  rawEvent.access_token = "must-not-persist";
+  rawEvent.prompt = "private prompt";
+  rawEvent.response = "private response";
+  rawEvent.runtimeModelCatalog = { accountId: "private-account" };
+  rawEvent.unknownNestedState = { secret: "must-not-persist" };
+  rawEvent.constructor = { prototype: { polluted: true } };
+  rawEvent.prototype = { polluted: true };
+  Object.defineProperty(rawEvent, "__proto__", {
+    value: { polluted: true },
+    enumerable: true,
+    configurable: true
+  });
+
+  const restored = background.sanitizeStatisticsBackup({
+    format: background.STATISTICS_BACKUP_FORMAT,
+    formatVersion: background.STATISTICS_BACKUP_VERSION,
+    exportedAt: submittedAt,
+    extensionVersion: "1.3.3",
+    statistics: raw
+  }).statistics;
+  const event = restored.events[0];
+  const serialized = JSON.stringify(restored);
+
+  assert.equal(event.requestModel, model);
+  assert.equal(event.modelParameters.model, model);
+  assert.equal(event.modelParameters["reasoning.effort"], "high");
+  assert.equal(event.modelParameters.prompt_cache_key, undefined);
+  assert.equal(event.modelParameters.safety_identifier, undefined);
+  assert.equal(event.authorization, undefined);
+  assert.equal(event.cookie, undefined);
+  assert.equal(event.access_token, undefined);
+  assert.equal(event.prompt, undefined);
+  assert.equal(event.response, undefined);
+  assert.equal(event.runtimeModelCatalog, undefined);
+  assert.equal(event.unknownNestedState, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(event, "__proto__"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(event, "prototype"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(event, "constructor"), false);
+  assert.equal(Object.prototype.polluted, undefined);
+  assert.doesNotMatch(
+    serialized,
+    /must-not-persist|private prompt|private response|private-account|cache-secret|account-secret/
+  );
+});
+
 test("computeBadgeCount shows only the selected date range, not the all-time total", () => {
   // 用户:角标不要显示全部总数,只显示面板所选日期范围内的次数。
   const stats = {
@@ -128,6 +281,8 @@ test("GPT-5.6 Sol is the primary count while gpt-5-6-thinking remains an interna
       selectedPublicModel: "GPT-5.6 Sol",
       requestModel: "gpt-5-6-thinking",
       responseModel: "gpt-5-6-thinking",
+      responseObservedAt: now.toISOString(),
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-thinking",
       model: "GPT-5.6 Sol",
       modelObservedSource: "webRequest",
@@ -168,6 +323,8 @@ test("Work keeps its explicit public model while preserving exact request, respo
       selectedPublicModelSource: "work-selector-dom",
       requestModel: "gpt-5.6-terra-wm",
       responseModel: "gpt-5.6-terra-wm",
+      responseObservedAt: now.toISOString(),
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5.6-terra-wm",
       modelObservedSource: "webRequest",
       modelParameters: {
@@ -213,6 +370,8 @@ test("Work keeps its explicit public model while preserving exact request, respo
       selectedPublicModelSource: "selector-dom",
       requestModel: "gpt-5-6-pro",
       responseModel: "gpt-5-6-thinking",
+      responseObservedAt: new Date(now.getTime() + 1000).toISOString(),
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       modelObservedSource: "webRequest",
       modelParameters: {
@@ -244,6 +403,235 @@ test("Work keeps its explicit public model while preserving exact request, respo
       .conversations["work-terra-0001"].sourceMode,
     "work",
   );
+});
+
+test("Work preserves an explicit public model whose product name contains Pro", () => {
+  const now = new Date("2026-08-23T12:00:00.000Z");
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      model: "5.6 Pro",
+      selectedPublicModel: "5.6 Pro",
+      selectedPublicModelSource: "work-selector-dom",
+      requestModel: "gpt-5.6-pro-wm",
+      responseModel: "gpt-5.6-pro-wm",
+      responseObservedAt: now.toISOString(),
+      responseObservedSource: "message-dom:model-slug",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5.6-pro-wm" },
+      sourceMode: "work",
+      source: "send-button",
+      submittedAt: now.toISOString(),
+      submissionId: "work-pro-0001"
+    },
+    now
+  );
+
+  assert.deepEqual(next.totals, { "5.6 Pro": 1 });
+  assert.equal(next.events[0].selectedPublicModel, "5.6 Pro");
+  assert.equal(next.events[0].requestModel, "gpt-5.6-pro-wm");
+  assert.equal(next.events[0].responseModel, "gpt-5.6-pro-wm");
+});
+
+test("Project conversations do not count as GPTs while real custom GPT conversations do", () => {
+  const now = new Date("2026-08-23T12:05:00.000Z");
+  const base = {
+    requestModel: "gpt-5-6-thinking",
+    apiModel: "gpt-5-6-thinking",
+    modelObservedSource: "webRequest",
+    modelParameters: { model: "gpt-5-6-thinking" },
+    sourceMode: "chat",
+    usageFeatures: ["gpts", "web_search"]
+  };
+  const project = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      ...base,
+      submissionId: "project-feature-0001",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/g/g-p-project123/c/project-conversation"
+    },
+    now
+  );
+  const custom = background.applyIncrement(
+    project,
+    {
+      ...base,
+      submissionId: "custom-gpt-feature-0001",
+      submittedAt: new Date(now.getTime() + 1000).toISOString(),
+      pageUrl: "https://chatgpt.com/g/g-custom123/c/custom-conversation"
+    },
+    new Date(now.getTime() + 1000)
+  );
+
+  const projectEvent = custom.events.find((event) => event.submissionId === "project-feature-0001");
+  const customEvent = custom.events.find((event) => event.submissionId === "custom-gpt-feature-0001");
+  const countedModel = customEvent.model;
+  assert.deepEqual(projectEvent.usageFeatures, ["web_search"]);
+  assert.deepEqual(customEvent.usageFeatures, ["gpts", "web_search"]);
+  assert.equal(projectEvent.model, countedModel);
+  assert.equal(custom.featuresByModel[countedModel].features.gpts.count, 1);
+  assert.equal(custom.featuresByModel[countedModel].features.web_search.count, 2);
+});
+
+test("history normalization removes legacy Project GPTs without deleting custom GPT usage", () => {
+  const now = new Date("2026-08-23T12:06:00.000Z");
+  const model = "gpt-5-6-thinking";
+  const event = (submissionId, pageUrl, submittedAt) => ({
+    submissionId,
+    model,
+    publicModel: model,
+    requestModel: model,
+    requestModelEvidence: "trusted",
+    responseModel: "",
+    apiModel: model,
+    chatgptModel: model,
+    modelObservedSource: "webRequest",
+    modelParameters: { model },
+    usageFeatures: ["gpts"],
+    sourceMode: "chat",
+    submittedAt,
+    pageUrl
+  });
+  const projectEvents = Array.from({ length: 15 }, (_unused, index) => event(
+    `legacy-project-gpts-${index + 1}`,
+    `https://chatgpt.com/g/g-p-project${index + 1}/c/project-conversation-${index + 1}`,
+    new Date(now.getTime() + index * 1000).toISOString()
+  ));
+  const customEvent = event(
+    "legacy-custom-gpts",
+    "https://chatgpt.com/g/g-custom123/c/custom-conversation",
+    new Date(now.getTime() + 15000).toISOString()
+  );
+  const existing = {
+    version: 1,
+    totals: { [model]: 16 },
+    byDate: { "2026-08-23": { [model]: 16 } },
+    models: {
+      [model]: {
+        label: model,
+        publicModel: model,
+        requestModel: model,
+        apiModel: model,
+        chatgptModel: model,
+        observedSource: "webRequest",
+        parameters: { model }
+      }
+    },
+    sessionsByModel: {},
+    variantsByModel: {},
+    featuresByModel: {
+      [model]: {
+        total: 16,
+        features: {
+          gpts: { id: "gpts", count: 16 }
+        }
+      }
+    },
+    parametersByModel: {},
+    relationsByModel: {},
+    events: [customEvent].concat(projectEvents.slice().reverse()),
+    eventHistoryComplete: true,
+    lastUpdated: customEvent.submittedAt
+  };
+
+  const normalized = background.applyIncrement(existing, {}, now);
+  const normalizedCustom = normalized.events.find((item) => item.submissionId === "legacy-custom-gpts");
+  const normalizedProjects = normalized.events.filter((item) => /^legacy-project-gpts-/.test(item.submissionId));
+
+  assert.equal(normalizedProjects.length, 15);
+  normalizedProjects.forEach((item) => assert.deepEqual(item.usageFeatures, []));
+  assert.deepEqual(normalizedCustom.usageFeatures, ["gpts"]);
+  assert.equal(new Set(normalizedProjects.map((item) => item.model)).size, 1);
+  assert.equal(normalizedProjects[0].model, normalizedCustom.model);
+  assert.equal(normalized.featuresByModel[normalizedCustom.model].features.gpts.count, 1);
+});
+
+test("incomplete history subtracts only known Project GPTs and preserves custom GPT plus untracked aggregate usage", () => {
+  const model = "future-family-2029-thinking";
+  const submittedAt = "2026-08-23T12:07:00.000Z";
+  const event = (submissionId, pageUrl) => ({
+    submissionId,
+    model,
+    publicModel: model,
+    requestModel: model,
+    requestModelEvidence: "trusted",
+    responseModel: "",
+    apiModel: model,
+    chatgptModel: model,
+    modelObservedSource: "webRequest",
+    modelParameters: { model },
+    usageFeatures: ["gpts"],
+    sourceMode: "chat",
+    submittedAt,
+    pageUrl
+  });
+  const projectEvent = event(
+    "partial-project-gpts",
+    "https://chatgpt.com/g/g-p-project123?view=project"
+  );
+  const customEvent = event(
+    "partial-custom-gpts",
+    "https://chatgpt.com/g/g-custom123/c/custom-conversation"
+  );
+  const existing = {
+    version: 1,
+    totals: { [model]: 3 },
+    byDate: { "2026-08-23": { [model]: 3 } },
+    models: {
+      [model]: {
+        label: model,
+        publicModel: model,
+        requestModel: model,
+        apiModel: model,
+        chatgptModel: model,
+        observedSource: "webRequest",
+        parameters: { model }
+      }
+    },
+    sessionsByModel: {},
+    variantsByModel: {},
+    featuresByModel: {
+      [model]: {
+        total: 3,
+        features: {
+          gpts: { id: "gpts", count: 3 }
+        }
+      }
+    },
+    parametersByModel: {},
+    relationsByModel: {
+      [model]: {
+        [`${model}\u0001`]: {
+          requestModel: model,
+          responseModel: "",
+          count: 3,
+          efforts: { unspecified: 3 },
+          features: { gpts: 3 },
+          sourceModes: { chat: 3 },
+          conversations: {},
+          firstSubmittedAt: submittedAt,
+          lastSubmittedAt: submittedAt
+        }
+      }
+    },
+    events: [customEvent, projectEvent],
+    eventHistoryComplete: false,
+    lastUpdated: submittedAt
+  };
+
+  const normalized = background.applyIncrement(existing, {}, new Date(submittedAt));
+  const normalizedProject = normalized.events.find((item) => item.submissionId === "partial-project-gpts");
+  const normalizedCustom = normalized.events.find((item) => item.submissionId === "partial-custom-gpts");
+  const relation = normalized.relationsByModel[model][`${model}\u0001`];
+
+  assert.equal(normalized.eventHistoryComplete, false);
+  assert.deepEqual(normalizedProject.usageFeatures, []);
+  assert.deepEqual(normalizedCustom.usageFeatures, ["gpts"]);
+  assert.equal(normalized.featuresByModel[model].features.gpts.count, 2);
+  assert.equal(normalized.featuresByModel[model].total, 2);
+  assert.equal(relation.count, 3);
+  assert.equal(relation.features.gpts, 2);
 });
 
 test("a pending new chat keeps one temporary conversation contribution until the final response supplies its real id", () => {
@@ -284,6 +672,8 @@ test("GPT-5.6 Pro effort counts under Sol while the internal pro slug remains a 
       selectedPublicModel: "GPT-5.6 Luna",
       requestModel: "gpt-5-6-pro",
       responseModel: "gpt-5-6-pro",
+      responseObservedAt: now.toISOString(),
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       model: "GPT-5.6 Luna",
       modelObservedSource: "webRequest",
@@ -304,8 +694,8 @@ test("GPT-5.6 Pro effort counts under Sol while the internal pro slug remains a 
   assert.equal(next.events[0].publicModel, "GPT-5.6 Sol");
   assert.equal(next.events[0].requestModel, "gpt-5-6-pro");
   assert.equal(next.events[0].responseModel, "gpt-5-6-pro");
-  assert.equal(next.events[0].selectedPublicModel, "GPT-5.6 Sol");
-  assert.equal(next.events[0].selectedPublicModelSource, "request+account-catalog:corrected");
+  assert.equal(next.events[0].selectedPublicModel, "GPT-5.6 Luna");
+  assert.equal(next.events[0].selectedPublicModelSource, "selector-dom");
   assert.equal(next.events[0].modelMode, "pro");
   assert.equal(next.events[0].publicModelSource, "account-catalog:version-intelligence");
   assert.equal(next.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
@@ -319,6 +709,8 @@ test("a missing selector snapshot is recovered from the exact request and live a
     {
       requestModel: "gpt-5-6-pro",
       responseModel: "gpt-5-6-pro",
+      responseObservedAt: now.toISOString(),
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6-pro" },
@@ -358,6 +750,8 @@ test("actual response slug overrides the requested route while preserving the re
       selectedPublicModel: "GPT-5.6 Luna",
       requestModel: "gpt-5-6",
       responseModel: "gpt-5-6-pro",
+      responseObservedAt: base.submittedAt,
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6",
       modelMode: "",
       modelParameters: { model: "gpt-5-6" },
@@ -383,6 +777,8 @@ test("actual response slug overrides the requested route while preserving the re
       selectedPublicModel: "GPT-5.6 Sol",
       requestModel: "gpt-5-6-pro",
       responseModel: "gpt-5-6-mini",
+      responseObservedAt: base.submittedAt,
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       modelMode: "pro",
       modelParameters: { model: "gpt-5-6-pro" },
@@ -408,6 +804,8 @@ test("visible labels and answer text cannot override exact response metadata", (
       selectedPublicModel: "GPT-5.6 Sol",
       requestModel: "gpt-5-6-mini",
       responseModel: "gpt-5-6-mini",
+      responseObservedAt: "2026-08-22T15:01:00.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-mini",
       chatgptModel: "GPT-5.6 Sol",
       modelMode: "pro",
@@ -428,6 +826,32 @@ test("visible labels and answer text cannot override exact response metadata", (
   assert.equal(next.events[0].selectedPublicModel, "GPT-5.6 Sol");
   assert.equal(next.events[0].responseModel, "gpt-5-6-mini");
   assert.equal(next.events[0].modelIdentitySource, "response-model");
+});
+
+test("a bare response slug without final assistant metadata remains response-pending", () => {
+  const submittedAt = "2026-08-22T15:01:30.000Z";
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "unproven-response",
+      requestModel: "future-family-2029-thinking",
+      responseModel: "future-family-2029-pro",
+      apiModel: "future-family-2029-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "future-family-2029-thinking" },
+      sourceMode: "chat",
+      submittedAt,
+      pageUrl: "https://chatgpt.com/c/unproven-response"
+    },
+    new Date(submittedAt)
+  );
+  const relation = Object.values(next.relationsByModel["future-family-2029-thinking"])[0];
+
+  assert.deepEqual(next.totals, { "future-family-2029-thinking": 1 });
+  assert.equal(next.events[0].requestModel, "future-family-2029-thinking");
+  assert.equal(next.events[0].responseModel, "");
+  assert.equal(next.events[0].responseObservedAt, undefined);
+  assert.equal(relation.responseModel, "");
 });
 
 test("Auto remains the selected request route while the actual response decides the primary count", () => {
@@ -465,6 +889,8 @@ test("Auto remains the selected request route while the actual response decides 
       selectedPublicModel: "Auto",
       requestModel: "auto",
       responseModel: "gpt-5-6-thinking",
+      responseObservedAt: "2026-08-22T15:03:00.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "auto",
       modelParameters: { model: "auto" },
       runtimeModelCatalog: runtimeModelCatalog(),
@@ -495,6 +921,8 @@ test("an unknown new response slug is preserved exactly and never renamed by sta
       selectedPublicModel: "GPT-5.6 Sol",
       requestModel: "gpt-5-6-pro",
       responseModel: "future-family-2027-thinking",
+      responseObservedAt: "2026-08-22T15:04:00.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       modelParameters: { model: "gpt-5-6-pro" },
       runtimeModelCatalog: runtimeModelCatalog(),
@@ -525,6 +953,9 @@ test("late response reconciliation moves one existing count without incrementing
       model: "GPT-5.6 Luna",
       publicModel: "GPT-5.6 Luna",
       selectedPublicModel: "GPT-5.6 Luna",
+      selectedPublicMode: "instant",
+      selectedPublicModeLabel: "Instant",
+      selectedPublicModeSource: "selector-dom:model-control",
       requestModel: "gpt-5-6-mini",
       apiModel: "gpt-5-6-mini",
       modelParameters: { model: "gpt-5-6-mini", "reasoning.effort": "xhigh" },
@@ -562,6 +993,9 @@ test("late response reconciliation moves one existing count without incrementing
   assert.equal(reconciled.events[0].submissionId, "late-response");
   assert.equal(reconciled.events[0].requestModel, "gpt-5-6-mini");
   assert.equal(reconciled.events[0].responseModel, "gpt-5-6-pro");
+  assert.equal(reconciled.events[0].selectedPublicMode, "instant");
+  assert.equal(reconciled.events[0].selectedPublicModeLabel, "Instant");
+  assert.equal(reconciled.events[0].selectedPublicModeSource, "selector-dom:model-control");
   assert.equal(reconciled.events[0].responseObservedSource, "message-dom:model-slug");
   assert.equal(reconciled.events[0].runtimeModelCatalog, undefined);
   assert.equal(reconciled.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
@@ -575,6 +1009,7 @@ test("late response reconciliation moves one existing count without incrementing
     {
       submissionId: "late-response",
       responseModel: "gpt-5-6-pro",
+      observedSource: "message-dom:model-slug",
       observedAt: "2026-08-22T15:05:21.000Z"
     },
     new Date("2026-08-22T15:05:21.000Z")
@@ -582,7 +1017,171 @@ test("late response reconciliation moves one existing count without incrementing
   assert.equal(background.totalCount(repeated), 1);
   assert.deepEqual(repeated.totals, { "GPT-5.6 Sol": 1 });
   assert.equal(repeated.events.length, 1);
+  assert.deepEqual(repeated.events, reconciled.events);
   assert.equal(repeated.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+});
+
+test("a generated-image outcome adds its feature to the same event without inventing a response model", () => {
+  const submittedAt = new Date("2026-08-23T11:17:29.289Z");
+  const pending = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "image-outcome-0001",
+      conversationId: "image-conversation-0001",
+      requestModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking", "reasoning.effort": "max" },
+      usageFeatures: [],
+      pageUrl: "https://chatgpt.com/c/image-conversation-0001",
+      submittedAt: submittedAt.toISOString()
+    },
+    submittedAt
+  );
+
+  const updated = background.applyResponseObservation(
+    pending,
+    {
+      submissionId: "image-outcome-0001",
+      conversationId: "image-conversation-0001",
+      responseModel: "",
+      usageFeatures: ["image_generation"],
+      observedSource: "message-dom:feature:image-generation",
+      featureObservedSource: "message-dom:feature:image-generation",
+      observedAt: "2026-08-23T11:17:40.000Z"
+    },
+    new Date("2026-08-23T11:17:40.000Z")
+  );
+
+  assert.equal(background.totalCount(updated), 1);
+  assert.equal(updated.events[0].responseModel, "");
+  assert.deepEqual(updated.events[0].usageFeatures, ["image_generation"]);
+  assert.equal(
+    updated.featuresByModel[updated.events[0].model].features.image_generation.count,
+    1
+  );
+});
+
+test("research and agent request routes survive final-response migration and keep auditable relations", () => {
+  [
+    ["research", "Deep research", "deep_research"],
+    ["agent-mode", "Agent mode", "agent_mode"]
+  ].forEach(([requestModel, pendingModel, feature], index) => {
+    const submittedAt = new Date(`2026-08-23T11:2${index}:00.000Z`);
+    const pending = background.applyIncrement(
+      background.createEmptyStats(),
+      {
+        submissionId: `mode-migration-${index}`,
+        conversationId: `mode-conversation-${index}`,
+        requestModel,
+        apiModel: requestModel,
+        modelObservedSource: "webRequest",
+        modelParameters: { model: requestModel },
+        usageFeatures: [feature],
+        pageUrl: `https://chatgpt.com/c/mode-conversation-${index}`,
+        submittedAt: submittedAt.toISOString()
+      },
+      submittedAt
+    );
+    assert.equal(pending.events[0].model, pendingModel);
+
+    const updated = background.applyResponseObservation(
+      pending,
+      {
+        submissionId: `mode-migration-${index}`,
+        conversationId: `mode-conversation-${index}`,
+        responseModel: "gpt-5-6-pro",
+        runtimeModelCatalog: runtimeModelCatalog(),
+        observedSource: "message-dom:model-slug",
+        observedAt: new Date(submittedAt.getTime() + 5000).toISOString()
+      },
+      new Date(submittedAt.getTime() + 5000)
+    );
+
+    assert.equal(updated.events[0].requestModel, requestModel);
+    assert.equal(updated.events[0].responseModel, "gpt-5-6-pro");
+    assert.ok(updated.events[0].usageFeatures.includes(feature));
+    const relations = updated.relationsByModel[updated.events[0].model];
+    const relation = Object.values(relations)[0];
+    assert.equal(relation.requestModel, requestModel);
+    assert.equal(relation.responseModel, "gpt-5-6-pro");
+    assert.equal(relation.count, 1);
+  });
+});
+
+test("cloning preserves trusted response evidence and the actual response model", () => {
+  const submittedAt = "2026-08-22T15:05:30.000Z";
+  const observedAt = "2026-08-22T15:05:35.000Z";
+  const stored = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "clone-response-evidence",
+      requestModel: "future-family-2029-thinking",
+      responseModel: "future-family-2029-pro",
+      responseObservedAt: observedAt,
+      responseObservedSource: "message-dom:model-slug",
+      apiModel: "future-family-2029-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "future-family-2029-thinking" },
+      submittedAt,
+      pageUrl: "https://chatgpt.com/c/clone-response-evidence"
+    },
+    new Date(submittedAt)
+  );
+
+  const cloned = background.applyIncrement(stored, {}, new Date(observedAt));
+
+  assert.equal(background.totalCount(cloned), 1);
+  assert.equal(cloned.events[0].responseModel, "future-family-2029-pro");
+  assert.equal(cloned.events[0].responseObservedAt, observedAt);
+  assert.equal(cloned.events[0].responseObservedSource, "message-dom:model-slug");
+});
+
+test("same-response observation backfills the real conversation and message ids without incrementing", () => {
+  const submittedAt = "2026-08-22T15:05:40.000Z";
+  const initial = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "same-response-backfill",
+      requestModel: "future-family-2029-thinking",
+      responseModel: "future-family-2029-pro",
+      responseObservedAt: "2026-08-22T15:05:45.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      apiModel: "future-family-2029-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "future-family-2029-thinking" },
+      submittedAt,
+      pageUrl: "https://chatgpt.com/"
+    },
+    new Date(submittedAt)
+  );
+
+  const updated = background.applyResponseObservation(
+    initial,
+    {
+      submissionId: "same-response-backfill",
+      conversationId: "real-conversation-0001",
+      requestMessageId: "real-user-message-0001",
+      responseMessageId: "real-assistant-message-0001",
+      responseModel: "future-family-2029-pro",
+      observedSource: "message-dom:model-slug:recovered",
+      observedAt: "2026-08-22T15:05:50.000Z",
+      pageUrl: "https://chatgpt.com/c/real-conversation-0001",
+      pageTitle: "Recovered conversation"
+    },
+    new Date("2026-08-22T15:05:50.000Z")
+  );
+  const relation = Object.values(updated.relationsByModel["future-family-2029-pro"])[0];
+
+  assert.equal(background.totalCount(updated), 1);
+  assert.equal(updated.events.length, 1);
+  assert.equal(updated.events[0].conversationId, "real-conversation-0001");
+  assert.equal(updated.events[0].requestMessageId, "real-user-message-0001");
+  assert.equal(updated.events[0].responseMessageId, "real-assistant-message-0001");
+  assert.equal(updated.events[0].responseModel, "future-family-2029-pro");
+  assert.equal(relation.count, 1);
+  assert.equal(relation.conversations["real-conversation-0001"].count, 1);
+  assert.equal(relation.conversations["pending:same-response-backfill"], undefined);
 });
 
 test("late response reconciliation updates the tracked event even when older event history is incomplete", () => {
@@ -626,6 +1225,7 @@ test("late response reconciliation updates the tracked event even when older eve
     Object.keys(partial.parametersByModel["GPT-5.6 Luna"].combinations)[0]
   ].count += 1;
   partial.parametersByModel["GPT-5.6 Luna"].fields.model["gpt-5-6-mini"] += 1;
+  partial.eventHistoryComplete = false;
 
   const reconciled = background.applyResponseObservation(
     partial,
@@ -633,6 +1233,7 @@ test("late response reconciliation updates the tracked event even when older eve
       submissionId: "partial-late-response",
       responseModel: "gpt-5-6-thinking",
       runtimeModelCatalog: runtimeModelCatalog(),
+      observedSource: "message-dom:model-slug",
       observedAt: "2026-08-22T15:06:30.000Z"
     },
     new Date("2026-08-22T15:06:30.000Z")
@@ -706,6 +1307,8 @@ test("complete event history corrects both paid Instant and Pro routes to Sol", 
       selectedPublicModelSource: "selector-dom",
       requestModel: "gpt-5-6-pro",
       responseModel: "gpt-5-6-pro",
+      responseObservedAt: "2026-08-22T14:55:58.197Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       chatgptModel: "GPT-5.6 Luna",
       modelMode: "pro",
@@ -726,6 +1329,8 @@ test("complete event history corrects both paid Instant and Pro routes to Sol", 
       selectedPublicModelSource: "selector-dom",
       requestModel: "gpt-5-6",
       responseModel: "gpt-5-6",
+      responseObservedAt: "2026-08-22T14:54:46.493Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6",
       chatgptModel: "GPT-5.6 Luna",
       modelMode: "",
@@ -747,12 +1352,12 @@ test("complete event history corrects both paid Instant and Pro routes to Sol", 
   assert.deepEqual(remapped.byDate["2026-08-22"], { "GPT-5.6 Sol": 2 });
   assert.equal(remapped.events[0].model, "GPT-5.6 Sol");
   assert.equal(remapped.events[0].requestModel, "gpt-5-6-pro");
-  assert.equal(remapped.events[0].selectedPublicModel, "GPT-5.6 Sol");
-  assert.equal(remapped.events[0].selectedPublicModelSource, "request+account-catalog:corrected");
+  assert.equal(remapped.events[0].selectedPublicModel, "GPT-5.6 Luna");
+  assert.equal(remapped.events[0].selectedPublicModelSource, "selector-dom");
   assert.equal(remapped.events[1].model, "GPT-5.6 Sol");
   assert.equal(remapped.events[1].requestModel, "gpt-5-6");
-  assert.equal(remapped.events[1].selectedPublicModel, "GPT-5.6 Sol");
-  assert.equal(remapped.events[1].selectedPublicModelSource, "request+account-catalog:corrected");
+  assert.equal(remapped.events[1].selectedPublicModel, "GPT-5.6 Luna");
+  assert.equal(remapped.events[1].selectedPublicModelSource, "selector-dom");
   assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
   assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6"].count, 1);
   assert.equal(remapped.sessionsByModel["GPT-5.6 Sol"].mixed.count, 2);
@@ -796,6 +1401,8 @@ test("publishing the live catalog rebuilds stale variant and request-parameter d
       publicModel: "GPT-5.6 Sol",
       requestModel: "gpt-5-6-thinking",
       responseModel: "gpt-5-6-thinking",
+      responseObservedAt: "2026-08-22T16:01:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-thinking",
       chatgptModel: "GPT-5.6 Sol",
       modelObservedSource: "webRequest",
@@ -812,6 +1419,8 @@ test("publishing the live catalog rebuilds stale variant and request-parameter d
       publicModel: "GPT-5.6 Sol",
       requestModel: "gpt-5-6-pro",
       responseModel: "gpt-5-6-pro",
+      responseObservedAt: "2026-08-22T16:00:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-pro",
       chatgptModel: "GPT-5.6 Sol",
       modelObservedSource: "webRequest",
@@ -834,6 +1443,58 @@ test("publishing the live catalog rebuilds stale variant and request-parameter d
     "gpt-5-6-pro": 1,
     "gpt-5-6-thinking": 1
   });
+});
+
+test("catalog rebuild drops unmatched small legacy aggregates and keeps auditable events", () => {
+  const catalog = runtimeModelCatalog();
+  const submittedAt = new Date("2026-08-22T17:00:00.000Z");
+  const existing = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "auditable-small-history",
+      model: "gpt-5-6-pro",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      responseObservedAt: "2026-08-22T17:00:05.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      apiModel: "gpt-5-6-pro",
+      chatgptModel: "GPT-5.6 Sol",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      runtimeModelCatalog: catalog,
+      submittedAt: submittedAt.toISOString(),
+      pageUrl: "https://chatgpt.com/c/auditable-small-history",
+      pageTitle: "Auditable small history",
+      source: "send-button",
+      sourceMode: "chat",
+      promptHash: "transient-only",
+      promptLength: 14
+    },
+    submittedAt
+  );
+
+  existing.totals["GPT-5.6 Sol"] += 1;
+  existing.byDate["2026-08-22"]["GPT-5.6 Sol"] += 1;
+  // Only a ledger explicitly known to be complete may discard an aggregate
+  // that has no matching event. Legacy stores without this marker can contain
+  // older aggregate-only history and must preserve it.
+  existing.eventHistoryComplete = true;
+
+  const rebuilt = background.applyIncrement(
+    existing,
+    { runtimeModelCatalog: catalog },
+    submittedAt
+  );
+
+  assert.equal(background.totalCount(rebuilt), 1);
+  assert.equal(rebuilt.totals["GPT-5.6 Sol"], 1);
+  assert.equal(rebuilt.events.length, 1);
+  assert.equal(rebuilt.events[0].submissionId, "auditable-small-history");
+  assert.equal(rebuilt.events[0].promptHash, undefined);
+  assert.equal(rebuilt.events[0].promptLength, undefined);
+  assert.equal(rebuilt.eventHistoryComplete, true);
 });
 
 test("catalog rebuild removes legacy pending events whose request model came only from DOM text", () => {
@@ -871,6 +1532,8 @@ test("catalog rebuild removes legacy pending events whose request model came onl
       selectedPublicModelSource: "selector-dom",
       requestModel: "gpt-5-6-thinking",
       responseModel: "gpt-5-6-thinking",
+      responseObservedAt: "2026-08-22T16:00:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5-6-thinking",
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6-thinking" },
@@ -907,10 +1570,12 @@ test("catalog rebuild preserves an exact legacy response while marking an unprov
       selectedPublicModelSource: "selector-dom",
       requestModel: "gpt-5.6-sol",
       responseModel: "gpt-5-6-thinking",
+      responseObservedAt: "2026-08-22T16:00:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
       apiModel: "gpt-5.6-sol",
       chatgptModel: "GPT-5.6 Sol",
       modelIdentitySource: "response-model",
-      modelObservedSource: "message-dom:dom",
+      modelObservedSource: "message-dom:model-slug",
       modelParameters: {
         model: "gpt-5.6-sol",
         "reasoning.effort": "high"
@@ -933,7 +1598,12 @@ test("catalog rebuild preserves an exact legacy response while marking an unprov
   assert.equal(rebuilt.events[0].responseModel, "gpt-5-6-thinking");
   assert.equal(rebuilt.events[0].modelParameters.model, undefined);
   assert.equal(rebuilt.events[0].modelParameters["reasoning.effort"], "high");
-  assert.deepEqual(rebuilt.relationsByModel, {});
+  const relation = rebuilt.relationsByModel["GPT-5.6 Sol"]["\u0001gpt-5-6-thinking"];
+  assert.equal(relation.requestModel, "");
+  assert.equal(relation.responseModel, "gpt-5-6-thinking");
+  assert.equal(relation.count, 1);
+  assert.deepEqual(relation.efforts, { high: 1 });
+  assert.equal(relation.conversations["legacy-response-only"].count, 1);
 });
 
 test("cloning a public-model aggregate preserves every exact request model instead of replacing them with the latest route", () => {
@@ -1037,6 +1707,7 @@ test("applyIncrement dedupes racing observations for the same submitted prompt",
   const first = background.applyIncrement(
     stats,
     {
+      submissionId: "usage-duplicate-race",
       model: "future-family-2026-thinking",
       modelObservedSource: "webRequest",
       modelParameters: { model: "future-family-2026-thinking", "reasoning.effort": "high" },
@@ -1052,6 +1723,7 @@ test("applyIncrement dedupes racing observations for the same submitted prompt",
   const next = background.applyIncrement(
     first,
     {
+      submissionId: "usage-duplicate-race",
       model: "future-family-2026-thinking",
       modelObservedSource: "fetch-request",
       modelParameters: { model: "future-family-2026-thinking", "reasoning.effort": "high" },
@@ -1081,6 +1753,7 @@ test("applyIncrement dedupes root ChatGPT submissions observed by webRequest the
   const first = background.applyIncrement(
     stats,
     {
+      submissionId: "usage-root-duplicate-race",
       model,
       modelObservedSource: "webRequest",
       modelParameters: { model },
@@ -1096,6 +1769,7 @@ test("applyIncrement dedupes root ChatGPT submissions observed by webRequest the
   const next = background.applyIncrement(
     first,
     {
+      submissionId: "usage-root-duplicate-race",
       model,
       modelObservedSource: "fetch-request",
       modelParameters: { model },
@@ -1115,7 +1789,8 @@ test("applyIncrement dedupes root ChatGPT submissions observed by webRequest the
   assert.equal(next.events.length, 1);
   assert.equal(next.events[0].conversationId, "");
   assert.equal(next.events[0].pageUrl, "https://chatgpt.com/");
-  assert.equal(next.events[0].promptHash, promptHash);
+  assert.equal(next.events[0].promptHash, undefined);
+  assert.equal(next.events[0].promptLength, undefined);
   assert.equal(next.events[0].modelObservedSource, "webRequest");
   assert.equal(next.events[0].source, "send-button");
 });
@@ -1422,6 +2097,7 @@ test("applyIncrement migrates public historical labels through exact request met
       submittedAt: "2026-05-22T12:00:00.000Z"
     });
   });
+  existingStats.eventHistoryComplete = false;
 
   const next = background.applyIncrement(
     existingStats,
@@ -2007,7 +2683,7 @@ test("parseNetworkRequestBody covers official model parameters and excludes cont
   assert.equal(parsed.parallel_tool_calls, true);
   assert.equal(parsed.service_tier, "auto");
   assert.equal(parsed.truncation, "auto");
-  assert.deepEqual(parsed.stop, ["END"]);
+  assert.equal(parsed.stop, undefined);
   assert.deepEqual(parsed.modalities, ["text", "audio"]);
   assert.equal(parsed.voice, undefined);
   assert.equal(parsed.voice_mode, undefined);
@@ -2015,12 +2691,12 @@ test("parseNetworkRequestBody covers official model parameters and excludes cont
   assert.equal(parsed.realtime_mode, undefined);
   assert.equal(parsed["audio.output.voice"], "alloy");
   assert.equal(parsed["audio.output.speed"], 1);
-  assert.equal(parsed["prompt.id"], "pmpt_123");
-  assert.equal(parsed["prompt.version"], "2");
-  assert.equal(parsed.prompt_cache_key, "cache-key");
+  assert.equal(parsed["prompt.id"], undefined);
+  assert.equal(parsed["prompt.version"], undefined);
+  assert.equal(parsed.prompt_cache_key, undefined);
   assert.equal(parsed.prompt_cache_retention, "24h");
-  assert.equal(parsed.safety_identifier, "user_123");
-  assert.deepEqual(parsed.include, ["reasoning.encrypted_content"]);
+  assert.equal(parsed.safety_identifier, undefined);
+  assert.equal(parsed.include, undefined);
   assert.equal(parsed["response_format.type"], "json_schema");
   assert.equal(parsed["turn_detection.type"], "server_vad");
   assert.equal(parsed["input_audio_transcription.model"], "gpt-realtime-whisper");
@@ -2049,6 +2725,65 @@ test("parseNetworkRequestBody covers official model parameters and excludes cont
   assert.equal(parsed.transport, undefined);
   assert.equal(parsed.protocol, undefined);
   assert.equal(parsed["prompt.variables"], undefined);
+  assert.equal(parsed.logit_bias, undefined);
+});
+
+test("model parameter sanitization drops free-text schemas, locations, predictions, and object values", () => {
+  const parsed = background.parseNetworkRequestBody({
+    raw: [
+      {
+        bytes: Buffer.from(
+          JSON.stringify({
+            model: "gpt-5-6-thinking",
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: "private_schema",
+                description: "User-authored private instructions",
+                schema: {
+                  type: "object",
+                  properties: {
+                    secret: { type: "string", description: "Private field" }
+                  }
+                }
+              }
+            },
+            web_search_options: {
+              search_context_size: "low",
+              user_location: {
+                type: "approximate",
+                city: "Denver",
+                country: "US"
+              }
+            },
+            prediction: {
+              type: "content",
+              content: "Private predicted text"
+            },
+            logit_bias: { "123": -1 },
+            stop: ["PRIVATE END"],
+            include: ["reasoning.encrypted_content"]
+          }),
+          "utf8"
+        )
+      }
+    ]
+  });
+
+  assert.equal(parsed.model, "gpt-5-6-thinking");
+  assert.equal(parsed["response_format.type"], "json_schema");
+  assert.equal(parsed["web_search_options.search_context_size"], "low");
+  assert.equal(parsed["response_format.json_schema.name"], undefined);
+  assert.equal(parsed["response_format.json_schema.description"], undefined);
+  assert.equal(parsed["response_format.json_schema.schema"], undefined);
+  assert.equal(parsed["web_search_options.user_location.type"], undefined);
+  assert.equal(parsed["web_search_options.user_location.city"], undefined);
+  assert.equal(parsed["web_search_options.user_location.country"], undefined);
+  assert.equal(parsed["prediction.type"], undefined);
+  assert.equal(parsed["prediction.content"], undefined);
+  assert.equal(parsed.logit_bias, undefined);
+  assert.equal(parsed.stop, undefined);
+  assert.equal(parsed.include, undefined);
 });
 
 test("parseNetworkRequestBody uses only the current request model field", () => {
@@ -3055,7 +3790,11 @@ test("webRequest observations override DOM metadata with request body parameters
   };
 
   const parsed = background.parseNetworkRequestBody(requestBody);
-  const observed = background.observeNetworkRequest({ tabId: 17, requestBody }, now);
+  const observed = background.observeNetworkRequest({
+    tabId: 17,
+    url: "https://chatgpt.com/backend-api/f/conversation",
+    requestBody
+  }, now);
   const merged = background.mergeRecentNetworkObservation(
     {
       model: "GPT-5.5",
@@ -3095,6 +3834,209 @@ test("webRequest observations override DOM metadata with request body parameters
   assert.equal(next.featuresByModel["future-family-2026-thinking"].features.web_search.count, 1);
 });
 
+test("webRequest always retains the exact top-level reasoning effort from large ChatGPT request bodies", () => {
+  const now = new Date("2026-08-23T07:05:00.000Z");
+  const noisyReasoning = {};
+  for (let index = 0; index < 70; index += 1) {
+    noisyReasoning[`diagnostic_${String(index).padStart(2, "0")}`] = index;
+  }
+  const payload = JSON.stringify({
+    model: "gpt-5-6-thinking",
+    reasoning: noisyReasoning,
+    reasoning_effort: "extended",
+    conversation_id: "conversation-effort-0001",
+    messages: [
+      {
+        id: "user-message-effort-0001",
+        author: { role: "user" },
+        content: { parts: ["private prompt"] }
+      }
+    ]
+  });
+  const requestBody = {
+    raw: [
+      { bytes: Buffer.from(payload.slice(0, 240), "utf8") },
+      { bytes: Buffer.from(payload.slice(240), "utf8") }
+    ]
+  };
+
+  const parsed = background.parseNetworkRequestBody(requestBody);
+  const observed = background.observeNetworkRequest(
+    {
+      tabId: 171,
+      method: "POST",
+      url: "https://chatgpt.com/backend-api/f/conversation",
+      requestBody
+    },
+    now
+  );
+  const merged = background.mergeRecentNetworkObservation(
+    {
+      model: "GPT-5.6 Sol",
+      selectedPublicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      source: "send-button",
+      sourceMode: "chat",
+      submittedAt: now.toISOString(),
+      submissionId: "usage-effort-0001"
+    },
+    { tab: { id: 171 } },
+    new Date(now.getTime() + 500)
+  );
+  const next = background.applyIncrement(background.createEmptyStats(), merged, now);
+
+  assert.equal(parsed["reasoning.effort"], "extended");
+  assert.equal(observed.modelParameters["reasoning.effort"], "extended");
+  assert.equal(merged.modelParameters["reasoning.effort"], "extended");
+  assert.equal(next.events[0].requestReasoningEffort, "extended");
+  assert.equal(next.events[0].modelParameters["reasoning.effort"], "extended");
+});
+
+test("webRequest preserves exact submitted message linkage without storing prompt content", () => {
+  const submitted = new Date("2026-08-23T06:10:00.000Z");
+  const payload = JSON.stringify({
+    model: "gpt-5-6-thinking",
+    conversation_id: "conversation-exact-0001",
+    messages: [
+      {
+        id: "user-message-exact-0001",
+        author: { role: "user" },
+        content: { parts: ["private prompt that must not be stored"] }
+      }
+    ]
+  });
+  background.observeNetworkRequest(
+    {
+      tabId: 160,
+      method: "POST",
+      url: "https://chatgpt.com/backend-api/f/conversation",
+      requestBody: {
+        raw: [
+          { bytes: Buffer.from(payload.slice(0, 70), "utf8") },
+          { bytes: Buffer.from(payload.slice(70), "utf8") }
+        ]
+      }
+    },
+    new Date(submitted.getTime() + 25)
+  );
+
+  const merged = background.mergeRecentNetworkObservation(
+    {
+      submittedAt: submitted.toISOString(),
+      pageUrl: "https://chatgpt.com/"
+    },
+    { tab: { id: 160 } },
+    new Date(submitted.getTime() + 500)
+  );
+  const stored = background.applyIncrement(
+    background.createEmptyStats(),
+    merged,
+    submitted
+  );
+
+  assert.equal(merged.conversationId, "conversation-exact-0001");
+  assert.equal(merged.requestMessageId, "user-message-exact-0001");
+  assert.equal(stored.events[0].conversationId, "conversation-exact-0001");
+  assert.equal(stored.events[0].requestMessageId, "user-message-exact-0001");
+  assert.doesNotMatch(JSON.stringify(stored), /private prompt/);
+});
+
+test("response recovery matches a stored event by exact submitted user message id", () => {
+  const now = new Date("2026-08-23T06:12:00.000Z");
+  const pending = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "submission-exact-message-0001",
+      conversationId: "conversation-exact-0002",
+      requestMessageId: "user-message-exact-0002",
+      requestModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/c/conversation-exact-0002"
+    },
+    now
+  );
+
+  const resolved = background.applyResponseObservation(
+    pending,
+    {
+      conversationId: "conversation-exact-0002",
+      requestMessageId: "user-message-exact-0002",
+      responseMessageId: "assistant-message-exact-0002",
+      responseModel: "gpt-5-6-pro",
+      observedSource: "message-dom:model-slug:recovered",
+      observedAt: new Date(now.getTime() + 5000).toISOString()
+    },
+    new Date(now.getTime() + 5000)
+  );
+
+  assert.equal(resolved.events[0].submissionId, "submission-exact-message-0001");
+  assert.equal(resolved.events[0].requestMessageId, "user-message-exact-0002");
+  assert.equal(resolved.events[0].responseMessageId, "assistant-message-exact-0002");
+  assert.equal(resolved.events[0].responseModel, "gpt-5-6-pro");
+  assert.equal(background.totalCount(resolved), 1);
+});
+
+test("conversation event lookup exposes only local linkage fields in chronological order", () => {
+  const first = new Date("2026-08-23T06:14:00.000Z");
+  let stats = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "pending-lookup-1",
+      conversationId: "pending-conversation-0001",
+      requestMessageId: "pending-user-1",
+      requestModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      submittedAt: first.toISOString(),
+      pageUrl: "https://chatgpt.com/c/pending-conversation-0001"
+    },
+    first
+  );
+  stats = background.applyIncrement(
+    stats,
+    {
+      submissionId: "pending-lookup-2",
+      conversationId: "pending-conversation-0001",
+      requestMessageId: "pending-user-2",
+      requestModel: "gpt-5.6-luna-wm",
+      apiModel: "gpt-5.6-luna-wm",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5.6-luna-wm" },
+      submittedAt: new Date(first.getTime() + 1000).toISOString(),
+      pageUrl: "https://chatgpt.com/c/pending-conversation-0001"
+    },
+    new Date(first.getTime() + 1000)
+  );
+
+  const events = background.usageEventsForConversation(
+    stats,
+    "pending-conversation-0001"
+  );
+  assert.deepEqual(
+    events.map((event) => [event.submissionId, event.requestMessageId]),
+    [
+      ["pending-lookup-1", "pending-user-1"],
+      ["pending-lookup-2", "pending-user-2"]
+    ]
+  );
+  assert.deepEqual(
+    Object.keys(events[0]).sort(),
+    [
+      "conversationId",
+      "requestMessageId",
+      "requestModel",
+      "responseMessageId",
+      "responseModel",
+      "submissionId",
+      "submittedAt"
+    ]
+  );
+});
+
 test("webRequest observations preserve explicit research and agent conversation modes", () => {
   const base = new Date("2026-08-22T12:00:00.000Z");
   [
@@ -3105,6 +4047,7 @@ test("webRequest observations preserve explicit research and agent conversation 
     const observed = background.observeNetworkRequest({
       tabId: 180 + index,
       method: "POST",
+      url: "https://chatgpt.com/backend-api/f/conversation",
       requestBody: {
         raw: [{ bytes: Buffer.from(JSON.stringify({ model: requestModel }), "utf8") }]
       }
@@ -3130,7 +4073,8 @@ test("webRequest observations read model parameters from request URLs", () => {
   const observed = background.observeNetworkRequest(
     {
       tabId: 18,
-      url: "https://chatgpt.com/local-model-probe?model=future-family-2026-thinking&reasoning_effort=high&temperature=0.2"
+      method: "POST",
+      url: "https://chatgpt.com/backend-api/f/conversation?model=future-family-2026-thinking&reasoning_effort=high&temperature=0.2"
     },
     now
   );
@@ -3158,6 +4102,7 @@ test("webRequest observations accept a future versioned model family from the ex
   const observed = background.observeNetworkRequest(
     {
       tabId: 118,
+      url: "https://chatgpt.com/backend-api/f/conversation",
       requestBody: {
         raw: [{ bytes: Buffer.from(JSON.stringify({ model: "aurora-7" }), "utf8") }]
       }
@@ -3172,6 +4117,7 @@ test("webRequest observations accept a future versioned model family from the ex
   const rejected = background.observeNetworkRequest(
     {
       tabId: 119,
+      url: "https://chatgpt.com/backend-api/f/conversation",
       requestBody: {
         raw: [{ bytes: Buffer.from(JSON.stringify({ model: "temperature-v2" }), "utf8") }]
       }
@@ -3186,6 +4132,7 @@ test("webRequest observations are consumed once per tab", () => {
   background.observeNetworkRequest(
     {
       tabId: 19,
+      url: "https://chatgpt.com/backend-api/f/conversation",
       requestBody: {
         raw: [{ bytes: Buffer.from(JSON.stringify({ model: "future-family-2026-thinking" }), "utf8") }]
       }
@@ -3223,6 +4170,7 @@ test("webRequest observations match the submitted request instead of a stale pri
   background.observeNetworkRequest({
     tabId: 120,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5-5" }), "utf8") }]
     }
@@ -3230,6 +4178,7 @@ test("webRequest observations match the submitted request instead of a stale pri
   background.observeNetworkRequest({
     tabId: 120,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol" }), "utf8") }]
     }
@@ -3254,6 +4203,7 @@ test("webRequest observations choose the first model-bearing request after submi
   background.observeNetworkRequest({
     tabId: 121,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-luna" }), "utf8") }]
     }
@@ -3261,6 +4211,7 @@ test("webRequest observations choose the first model-bearing request after submi
   background.observeNetworkRequest({
     tabId: 121,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-terra" }), "utf8") }]
     }
@@ -3280,6 +4231,7 @@ test("message DOM fallback matches the closest request before the rendered messa
   background.observeNetworkRequest({
     tabId: 123,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-sol" }), "utf8") }]
     }
@@ -3287,6 +4239,7 @@ test("message DOM fallback matches the closest request before the rendered messa
   background.observeNetworkRequest({
     tabId: 123,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-luna" }), "utf8") }]
     }
@@ -3294,6 +4247,7 @@ test("message DOM fallback matches the closest request before the rendered messa
   background.observeNetworkRequest({
     tabId: 123,
     method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: {
       raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-terra" }), "utf8") }]
     }
@@ -3308,6 +4262,108 @@ test("message DOM fallback matches the closest request before the rendered messa
   assert.equal(merged.model, "gpt-5.6-luna");
 });
 
+test("webRequest matching prioritizes the exact submitted user message id", () => {
+  const renderedAt = new Date("2026-08-22T12:18:05.000Z");
+  const requestBody = (model, messageId) => ({
+    raw: [{
+      bytes: Buffer.from(JSON.stringify({
+        model,
+        messages: [{ id: messageId, author: { role: "user" } }]
+      }), "utf8")
+    }]
+  });
+  background.observeNetworkRequest({
+    tabId: 124,
+    method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
+    requestBody: requestBody("gpt-5.6-sol", "user-exact-0001")
+  }, new Date(renderedAt.getTime() - 4500));
+  background.observeNetworkRequest({
+    tabId: 124,
+    method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
+    requestBody: requestBody("gpt-5.6-luna", "user-other-0002")
+  }, new Date(renderedAt.getTime() - 900));
+
+  const merged = background.mergeRecentNetworkObservation(
+    {
+      source: "message-dom",
+      requestMessageId: "user-exact-0001",
+      submittedAt: renderedAt.toISOString()
+    },
+    { tab: { id: 124 } },
+    new Date(renderedAt.getTime() + 500)
+  );
+
+  assert.equal(merged.model, "gpt-5.6-sol");
+  assert.equal(merged.requestMessageId, "user-exact-0001");
+});
+
+test("webRequest fallback never replaces an explicit submit message id or submit-time source mode", () => {
+  const submittedAt = new Date("2026-08-22T12:19:00.000Z");
+  background.observeNetworkRequest({
+    tabId: 126,
+    method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
+    requestBody: {
+      raw: [{
+        bytes: Buffer.from(JSON.stringify({
+          model: "gpt-5-6-thinking",
+          source_mode: "work",
+          messages: [{ id: "different-user-message", author: { role: "user" } }]
+        }), "utf8")
+      }]
+    }
+  }, new Date(submittedAt.getTime() + 25));
+
+  const merged = background.mergeRecentNetworkObservation(
+    {
+      source: "send-button",
+      sourceMode: "chat",
+      requestMessageId: "submitted-user-message",
+      submittedAt: submittedAt.toISOString()
+    },
+    { tab: { id: 126 } },
+    new Date(submittedAt.getTime() + 500)
+  );
+
+  assert.equal(merged.model, undefined);
+  assert.equal(merged.requestMessageId, "submitted-user-message");
+  assert.equal(merged.sourceMode, "chat");
+});
+
+test("an observation without a message id may fill the request while submit-time source mode stays authoritative", () => {
+  const submittedAt = new Date("2026-08-22T12:19:30.000Z");
+  background.observeNetworkRequest({
+    tabId: 127,
+    method: "POST",
+    url: "https://chatgpt.com/backend-api/f/conversation",
+    requestBody: {
+      raw: [{
+        bytes: Buffer.from(JSON.stringify({
+          model: "gpt-5-6-thinking",
+          source_mode: "work"
+        }), "utf8")
+      }]
+    }
+  }, new Date(submittedAt.getTime() + 25));
+
+  const merged = background.mergeRecentNetworkObservation(
+    {
+      source: "send-button",
+      sourceMode: "chat",
+      requestMessageId: "submitted-user-message",
+      submittedAt: submittedAt.toISOString()
+    },
+    { tab: { id: 127 } },
+    new Date(submittedAt.getTime() + 500)
+  );
+
+  assert.equal(merged.requestModel, "gpt-5-6-thinking");
+  assert.equal(merged.requestMessageId, "submitted-user-message");
+  assert.equal(merged.sourceMode, "chat");
+});
+
 test("webRequest ignores read-only URL probes with model query parameters", () => {
   const observed = background.observeNetworkRequest({
     tabId: 122,
@@ -3316,6 +4372,23 @@ test("webRequest ignores read-only URL probes with model query parameters", () =
   }, new Date("2026-08-22T12:20:00.000Z"));
 
   assert.equal(observed, null);
+});
+
+test("webRequest ignores model-bearing writes outside conversation submission endpoints", () => {
+  const observed = background.observeNetworkRequest({
+    tabId: 125,
+    method: "POST",
+    url: "https://chatgpt.com/backend-api/feedback",
+    requestBody: {
+      raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5.6-terra" }), "utf8") }]
+    }
+  }, new Date("2026-08-22T12:21:00.000Z"));
+
+  assert.equal(observed, null);
+  assert.equal(background.isConversationSubmissionUrl("https://chatgpt.com/backend-api/f/conversation"), true);
+  assert.equal(background.isConversationSubmissionUrl("https://chat.openai.com/backend-api/conversation"), true);
+  assert.equal(background.isConversationSubmissionUrl("https://chatgpt.com/backend-api/models"), false);
+  assert.equal(background.isConversationSubmissionUrl("https://chatgpt.com/backend-api/conversation/feedback"), false);
 });
 
 test("applyIncrement stores daily counts using submittedAt date", () => {
@@ -3359,7 +4432,8 @@ test("applyIncrement limits stored event history", () => {
 
   assert.equal(stats.totals["gpt-4o"], 510);
   assert.equal(stats.events.length, 500);
-  assert.equal(stats.events[0].promptLength, 509);
+  assert.equal(stats.events[0].promptHash, undefined);
+  assert.equal(stats.events[0].promptLength, undefined);
 });
 
 test("badgeText keeps action badge compact", () => {
@@ -3413,28 +4487,134 @@ test("OpenAI status records drive compact abnormal badge and title", () => {
   assert.equal(background.statusBadgeText(fetchFail, 0), "?");
 });
 
-test("sanitizeSettings keeps only supported UI languages", () => {
-  assert.deepEqual(background.sanitizeSettings({ language: "en", startDate: "2026-05-01", endDate: "2026-05-30" }), {
+test("sanitizeSettings keeps only supported UI languages, main views, and statistics modes", () => {
+  assert.deepEqual(background.sanitizeSettings({
+    language: "en",
+    startDate: "2026-05-01",
+    endDate: "2026-05-30",
+    activeView: "status",
+    statisticsMode: "internal",
+    chartType: "donut",
+    themeMode: "dark",
+    sourceModeFilter: "work",
+    showTrendChart: false,
+    showTextStatistics: true,
+    mappedVisibleModels: ["GPT-5.6 Sol"],
+    mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
+    mappedModelSelectionInitialized: true,
+    internalVisibleModels: ["gpt-5-6-thinking"],
+    internalKnownModels: ["gpt-5-6-thinking", "gpt-5-6-pro"],
+    internalModelSelectionInitialized: true
+  }), {
     version: 1,
     language: "en",
     startDate: "2026-05-01",
-    endDate: "2026-05-30"
+    endDate: "2026-05-30",
+    activeView: "status",
+    statisticsMode: "internal",
+    chartType: "donut",
+    themeMode: "dark",
+    sourceModeFilter: "work",
+    showTrendChart: false,
+    showTextStatistics: true,
+    mappedVisibleModels: ["GPT-5.6 Sol"],
+    mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
+    mappedModelSelectionInitialized: true,
+    internalVisibleModels: ["gpt-5-6-thinking"],
+    internalKnownModels: ["gpt-5-6-thinking", "gpt-5-6-pro"],
+    internalModelSelectionInitialized: true
   });
-  assert.deepEqual(background.sanitizeSettings({ language: "fr", startDate: "bad", endDate: "2026-05-30" }), {
+  assert.deepEqual(background.sanitizeSettings({
+    language: "fr",
+    startDate: "bad",
+    endDate: "2026-05-30",
+    activeView: "unsupported",
+    statisticsMode: "unsupported",
+    mappedVisibleModels: "GPT-5.6 Sol",
+    mappedKnownModels: null,
+    mappedModelSelectionInitialized: "true",
+    internalVisibleModels: {},
+    internalKnownModels: 42,
+    internalModelSelectionInitialized: 1
+  }), {
     version: 1,
-    language: "zh",
+    language: "en",
     startDate: "",
-    endDate: "2026-05-30"
+    endDate: "2026-05-30",
+    activeView: "chart",
+    statisticsMode: "mapped",
+    chartType: "line",
+    themeMode: "system",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true,
+    mappedVisibleModels: [],
+    mappedKnownModels: [],
+    mappedModelSelectionInitialized: false,
+    internalVisibleModels: [],
+    internalKnownModels: [],
+    internalModelSelectionInitialized: false
   });
-  assert.deepEqual(background.sanitizeSettings(null), { version: 1, language: "zh", startDate: "", endDate: "" });
+  assert.equal(background.sanitizeSettings({ activeView: "export" }).activeView, "export");
+  assert.deepEqual(background.sanitizeSettings(null), {
+    version: 1,
+    language: "en",
+    startDate: "",
+    endDate: "",
+    activeView: "chart",
+    statisticsMode: "mapped",
+    chartType: "line",
+    themeMode: "system",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true,
+    mappedVisibleModels: [],
+    mappedKnownModels: [],
+    mappedModelSelectionInitialized: false,
+    internalVisibleModels: [],
+    internalKnownModels: [],
+    internalModelSelectionInitialized: false
+  });
 });
 
-test("sanitizeSettings clamps stored future dates to the browser's local today", () => {
+test("sanitizeSettings cleans and bounds mapped and internal model visibility independently", () => {
+  const longModel = "x".repeat(120);
+  const internalKnownModels = Array.from({ length: 405 }, (_, index) => `internal-${index}`);
+  const sanitized = background.sanitizeSettings({
+    mappedVisibleModels: [
+      " GPT-5.6 Sol ",
+      "GPT-5.6 Sol",
+      "\u0000gpt-5-6-thinking\u007f",
+      "",
+      null
+    ],
+    mappedKnownModels: ["GPT-5.6 Sol", " GPT-5.6 Luna "],
+    mappedModelSelectionInitialized: true,
+    internalVisibleModels: [" gpt-5-6-thinking ", longModel],
+    internalKnownModels,
+    internalModelSelectionInitialized: "true"
+  });
+
+  assert.deepEqual(sanitized.mappedVisibleModels, ["GPT-5.6 Sol", "gpt-5-6-thinking"]);
+  assert.deepEqual(sanitized.mappedKnownModels, ["GPT-5.6 Sol", "GPT-5.6 Luna"]);
+  assert.equal(sanitized.mappedModelSelectionInitialized, true);
+  assert.deepEqual(sanitized.internalVisibleModels, ["gpt-5-6-thinking", "x".repeat(96)]);
+  assert.equal(sanitized.internalKnownModels.length, 400);
+  assert.equal(sanitized.internalKnownModels[0], "internal-0");
+  assert.equal(sanitized.internalKnownModels[399], "internal-399");
+  assert.equal(sanitized.internalModelSelectionInitialized, false);
+});
+
+test("sanitizeSettings clamps stored future dates to the current UTC calendar day", () => {
   const today = background.todayKey();
   const tomorrowDate = new Date();
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
   const tomorrow = background.todayKey(tomorrowDate);
 
+  assert.equal(
+    background.todayKey(new Date("2026-08-24T00:30:00.000Z")),
+    "2026-08-24",
+  );
   assert.equal(background.dateSettingNoLaterThanToday(tomorrow), today);
   assert.deepEqual(background.sanitizeSettings({
     language: "en",
@@ -3444,8 +4624,158 @@ test("sanitizeSettings clamps stored future dates to the browser's local today",
     version: 1,
     language: "en",
     startDate: today,
-    endDate: today
+    endDate: today,
+    activeView: "chart",
+    statisticsMode: "mapped",
+    chartType: "line",
+    themeMode: "system",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true,
+    mappedVisibleModels: [],
+    mappedKnownModels: [],
+    mappedModelSelectionInitialized: false,
+    internalVisibleModels: [],
+    internalKnownModels: [],
+    internalModelSelectionInitialized: false
   });
+});
+
+test("mergeSettings updates one shared UI preference without resetting the other entry point's settings", () => {
+  const current = {
+    version: 1,
+    language: "en",
+    startDate: "2026-05-01",
+    endDate: "2026-05-30",
+    activeView: "status",
+    statisticsMode: "internal",
+    chartType: "donut",
+    themeMode: "dark",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true,
+    mappedVisibleModels: ["GPT-5.6 Sol"],
+    mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
+    mappedModelSelectionInitialized: true,
+    internalVisibleModels: ["gpt-5-6-thinking"],
+    internalKnownModels: ["gpt-5-6-thinking", "gpt-5-6-pro"],
+    internalModelSelectionInitialized: true
+  };
+
+  assert.deepEqual(background.mergeSettings(current, { activeView: "export" }), {
+    version: 1,
+    language: "en",
+    startDate: "2026-05-01",
+    endDate: "2026-05-30",
+    activeView: "export",
+    statisticsMode: "internal",
+    chartType: "donut",
+    themeMode: "dark",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true,
+    mappedVisibleModels: ["GPT-5.6 Sol"],
+    mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
+    mappedModelSelectionInitialized: true,
+    internalVisibleModels: ["gpt-5-6-thinking"],
+    internalKnownModels: ["gpt-5-6-thinking", "gpt-5-6-pro"],
+    internalModelSelectionInitialized: true
+  });
+});
+
+test("mergeSettings cleans one model visibility mode without resetting the other mode", () => {
+  const current = background.sanitizeSettings({
+    mappedVisibleModels: ["GPT-5.6 Sol"],
+    mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
+    mappedModelSelectionInitialized: true,
+    internalVisibleModels: ["gpt-5-6-thinking"],
+    internalKnownModels: ["gpt-5-6-thinking", "gpt-5-6-pro"],
+    internalModelSelectionInitialized: true
+  });
+
+  const merged = background.mergeSettings(current, {
+    mappedVisibleModels: [" GPT-5.6 Luna ", "GPT-5.6 Luna"],
+    mappedKnownModels: ["GPT-5.6 Sol", " GPT-5.6 Luna "],
+    mappedModelSelectionInitialized: true
+  });
+
+  assert.deepEqual(merged.mappedVisibleModels, ["GPT-5.6 Luna"]);
+  assert.deepEqual(merged.mappedKnownModels, ["GPT-5.6 Sol", "GPT-5.6 Luna"]);
+  assert.equal(merged.mappedModelSelectionInitialized, true);
+  assert.deepEqual(merged.internalVisibleModels, ["gpt-5-6-thinking"]);
+  assert.deepEqual(merged.internalKnownModels, ["gpt-5-6-thinking", "gpt-5-6-pro"]);
+  assert.equal(merged.internalModelSelectionInitialized, true);
+  assert.deepEqual(current.mappedVisibleModels, ["GPT-5.6 Sol"]);
+});
+
+test("settingsSet serializes simultaneous patches so entry points cannot overwrite each other", async () => {
+  const previousChrome = globalThis.chrome;
+  let stored = background.sanitizeSettings({
+    language: "zh",
+    activeView: "chart",
+    statisticsMode: "mapped",
+    sourceModeFilter: "all",
+    showTrendChart: true,
+    showTextStatistics: true
+  });
+  let activeStorageOperations = 0;
+  let maximumConcurrentStorageOperations = 0;
+
+  globalThis.chrome = {
+    storage: {
+      local: {
+        get(_keys, callback) {
+          activeStorageOperations += 1;
+          maximumConcurrentStorageOperations = Math.max(
+            maximumConcurrentStorageOperations,
+            activeStorageOperations
+          );
+          setTimeout(() => {
+            activeStorageOperations -= 1;
+            callback({ [background.SETTINGS_KEY]: { ...stored } });
+          }, 4);
+        },
+        set(record, callback) {
+          activeStorageOperations += 1;
+          maximumConcurrentStorageOperations = Math.max(
+            maximumConcurrentStorageOperations,
+            activeStorageOperations
+          );
+          setTimeout(() => {
+            stored = { ...record[background.SETTINGS_KEY] };
+            activeStorageOperations -= 1;
+            callback();
+          }, 4);
+        }
+      }
+    }
+  };
+
+  try {
+    await Promise.all([
+      new Promise((resolve) => {
+        background.settingsSet({ activeView: "status" }, resolve);
+      }),
+      new Promise((resolve) => {
+        background.settingsSet({ statisticsMode: "internal" }, resolve);
+      }),
+      new Promise((resolve) => {
+        background.settingsSet({ showTrendChart: false }, resolve);
+      })
+    ]);
+  } finally {
+    if (typeof previousChrome === "undefined") {
+      delete globalThis.chrome;
+    } else {
+      globalThis.chrome = previousChrome;
+    }
+  }
+
+  assert.equal(maximumConcurrentStorageOperations, 1);
+  assert.equal(stored.activeView, "status");
+  assert.equal(stored.statisticsMode, "internal");
+  assert.equal(stored.showTrendChart, false);
+  assert.equal(stored.showTextStatistics, true);
 });
 
 test("sanitizeOpenAIStatusPayload keeps only web ChatGPT availability without incident timeline data", () => {
@@ -3709,11 +5039,287 @@ test("OpenAI status fetch combines summary and full components, reports partial 
   assert.match(failed.error, /components HTTP 503/);
 });
 
-test("isChatGPTUrl accepts only ChatGPT page URLs", () => {
+test("isChatGPTUrl accepts ChatGPT application pages and rejects data endpoints", () => {
   assert.equal(background.isChatGPTUrl("https://chatgpt.com/"), true);
   assert.equal(background.isChatGPTUrl("https://chatgpt.com/c/abc"), true);
+  assert.equal(background.isChatGPTUrl("https://chatgpt.com/library"), true);
   assert.equal(background.isChatGPTUrl("https://chat.openai.com/"), true);
+  assert.equal(background.isChatGPTUrl("https://chatgpt.com/backend-api/models"), false);
+  assert.equal(background.isChatGPTUrl("https://chatgpt.com/api/auth/session"), false);
+  assert.equal(background.isChatGPTUrl("https://chat.openai.com/backend-api/conversations"), false);
   assert.equal(background.isChatGPTUrl("https://example.com/"), false);
+});
+
+test("MAIN-world project extractor returns real React project names in rendered sidebar order", () => {
+  const firstId = "g-p-11111111111111111111111111111111";
+  const secondId = "g-p-22222222222222222222222222222222";
+  const firstProject = {
+    gizmoResource: {
+      gizmo: {
+        id: firstId,
+        short_url: `${firstId}-route-slug`,
+        display: { name: "真实项目一" }
+      }
+    },
+    authorization: "Bearer must-not-leave-main-world"
+  };
+  firstProject.loop = firstProject;
+  const firstRow = {
+    getAttribute() { return ""; },
+    querySelector() { return null; }
+  };
+  Object.defineProperty(firstRow, "__reactProps$first", {
+    value: { project: firstProject },
+    enumerable: false
+  });
+
+  const secondRow = {
+    getAttribute() { return ""; },
+    querySelector() { return null; }
+  };
+  Object.defineProperty(secondRow, "__reactFiber$second", {
+    value: {
+      memoizedProps: {
+        gizmo: {
+          id: secondId,
+          display_name: "Research / 研究"
+        }
+      }
+    },
+    enumerable: false
+  });
+
+  const duplicateRow = {
+    getAttribute() { return ""; },
+    querySelector() { return null; },
+    "__reactProps$duplicate": {
+      project: { gizmo_id: firstId, project_title: "错误重复名" }
+    }
+  };
+  const unrelatedRow = {
+    getAttribute() { return ""; },
+    querySelector() { return null; },
+    "__reactProps$unrelated": {
+      title: "Conversation title",
+      accessToken: "must-not-be-returned"
+    }
+  };
+  let requestedSelector = "";
+  const document = {
+    querySelectorAll(selector) {
+      requestedSelector = selector;
+      return [firstRow, secondRow, duplicateRow, unrelatedRow];
+    }
+  };
+  const serializedExtractor = `(${background.extractRenderedProjectDirectoriesFromMainWorld.toString()})()`;
+  const result = vm.runInNewContext(serializedExtractor, { document });
+
+  assert.equal(requestedSelector, "[class~='group/project-unfurl-row']");
+  assert.deepEqual(
+    Array.from(result.entries, (entry) => ({
+      gizmoId: entry.gizmoId,
+      projectName: entry.projectName,
+      projectOrder: entry.projectOrder
+    })),
+    [
+      { gizmoId: firstId, projectName: "真实项目一", projectOrder: 0 },
+      { gizmoId: secondId, projectName: "Research / 研究", projectOrder: 1 }
+    ]
+  );
+  assert.deepEqual(Array.from(result.projectOrder), [firstId, secondId]);
+  assert.doesNotMatch(JSON.stringify(result), /Bearer|accessToken|must-not/i);
+});
+
+test("MAIN-world project extractor reads the exact project catalog from bounded React Fiber ancestors", () => {
+  const projects = [
+    ["g-p-6a4c521f96a88191bddcaf82bb8081ae", "invest"],
+    ["g-p-6a4a938ff7888191bd120d64ef3a3b6e", "@#!#"],
+    ["g-p-6a4b8296bd608191b14b08be897b746a", "prompt"],
+    ["g-p-6a7d3f0e0970819198b164ac76243cb4", "Crea"],
+    ["g-p-6a4b80c229f8819185e39d411e12e893", "code"]
+  ];
+  const catalog = projects.map(([id, name]) => ({
+    gizmo: {
+      gizmo: {
+        id,
+        short_url: `${id}-${name.replace(/[^a-z0-9]+/gi, "").toLowerCase()}`,
+        display: { name },
+        authorization: "must-not-leave-main-world"
+      }
+    },
+    account: { accessToken: "must-not-leave-main-world" }
+  }));
+  const ancestor = {
+    memoizedProps: {
+      projects: catalog,
+      sessionToken: "must-not-leave-main-world"
+    },
+    return: null
+  };
+  const middle = { memoizedProps: {}, return: ancestor };
+  const leaf = { memoizedProps: {}, return: middle };
+  const row = {
+    getAttribute() { return ""; },
+    querySelector() { return null; }
+  };
+  Object.defineProperty(row, "__reactFiber$real", {
+    value: leaf,
+    enumerable: false
+  });
+  const document = {
+    querySelectorAll(selector) {
+      assert.equal(selector, "[class~='group/project-unfurl-row']");
+      return [row];
+    }
+  };
+  const serializedExtractor = `(${background.extractRenderedProjectDirectoriesFromMainWorld.toString()})()`;
+  const result = vm.runInNewContext(serializedExtractor, { document });
+
+  assert.deepEqual(
+    Array.from(result.entries, (entry) => ({
+      gizmoId: entry.gizmoId,
+      projectName: entry.projectName,
+      projectOrder: entry.projectOrder
+    })),
+    projects.map(([gizmoId, projectName], projectOrder) => ({
+      gizmoId,
+      projectName,
+      projectOrder
+    }))
+  );
+  assert.deepEqual(Array.from(result.projectOrder), projects.map(([id]) => id));
+  assert.doesNotMatch(JSON.stringify(result), /authorization|accessToken|sessionToken|must-not/i);
+});
+
+test("project directory message uses MAIN-world executeScript without storage, network, click, or refresh", async () => {
+  const listeners = [];
+  const executeCalls = [];
+  let storageReads = 0;
+  let storageWrites = 0;
+  let networkCalls = 0;
+  let logCalls = 0;
+  const firstId = "g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const secondId = "g-p-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const context = {
+    chrome: {
+      runtime: {
+        lastError: null,
+        onMessage: { addListener: (listener) => listeners.push(["message", listener]) },
+        onInstalled: { addListener: (listener) => listeners.push(["installed", listener]) }
+      },
+      scripting: {
+        executeScript(options, callback) {
+          executeCalls.push(options);
+          callback([{
+            result: {
+              entries: [
+                { gizmoId: secondId, projectName: "第二个", projectOrder: 8, authorization: "secret" },
+                { gizmoId: firstId, projectName: "第一个", projectOrder: 3 }
+              ],
+              projectOrder: [firstId, secondId]
+            }
+          }]);
+        }
+      },
+      alarms: {
+        create: () => {},
+        onAlarm: { addListener: (listener) => listeners.push(["alarm", listener]) }
+      },
+      storage: {
+        local: {
+          get(_keys, callback) {
+            storageReads += 1;
+            callback({});
+          },
+          set(_value, callback) {
+            storageWrites += 1;
+            if (callback) callback();
+          }
+        }
+      },
+      action: {
+        setBadgeBackgroundColor: () => {},
+        setBadgeText: () => {},
+        setTitle: () => {}
+      }
+    },
+    fetch() {
+      networkCalls += 1;
+      throw new Error("must not fetch");
+    },
+    console: {
+      log() { logCalls += 1; },
+      info() { logCalls += 1; },
+      warn() { logCalls += 1; },
+      error() { logCalls += 1; }
+    },
+    URL,
+    Date,
+    Math,
+    Number,
+    Object,
+    String,
+    Array,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  const messageListener = listeners.find((entry) => entry[0] === "message")[1];
+  const storageReadsBeforeMessage = storageReads;
+  const response = await new Promise((resolve) => {
+    const asyncResponse = messageListener(
+      { type: "conversation.projectDirectories.get" },
+      {
+        url: "https://chatgpt.com/c/project-chat",
+        tab: { id: 77, url: "https://chatgpt.com/c/project-chat" }
+      },
+      resolve
+    );
+    assert.equal(asyncResponse, true);
+  });
+
+  assert.equal(executeCalls.length, 1);
+  assert.equal(executeCalls[0].target.tabId, 77);
+  assert.deepEqual(Object.keys(executeCalls[0].target), ["tabId"]);
+  assert.equal(executeCalls[0].world, "MAIN");
+  assert.equal(typeof executeCalls[0].func, "function");
+  assert.equal(Object.prototype.hasOwnProperty.call(executeCalls[0], "files"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(executeCalls[0].target, "allFrames"), false);
+  assert.deepEqual(
+    Array.from(response.entries, (entry) => ({
+      gizmoId: entry.gizmoId,
+      projectName: entry.projectName,
+      projectOrder: entry.projectOrder
+    })),
+    [
+      { gizmoId: firstId, projectName: "第一个", projectOrder: 0 },
+      { gizmoId: secondId, projectName: "第二个", projectOrder: 1 }
+    ]
+  );
+  assert.deepEqual(Array.from(response.projectOrder), [firstId, secondId]);
+  assert.equal(storageReads, storageReadsBeforeMessage);
+  assert.equal(storageWrites, 0);
+  assert.equal(networkCalls, 0);
+  assert.equal(logCalls, 0);
+
+  const rejected = await new Promise((resolve) => {
+    const asyncResponse = messageListener(
+      { type: "conversation.projectDirectories.get" },
+      {
+        url: "https://example.com/",
+        tab: { id: 88, url: "https://example.com/" }
+      },
+      resolve
+    );
+    assert.equal(asyncResponse, false);
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error, "untrusted-chatgpt-sender");
+  assert.equal(executeCalls.length, 1, "untrusted pages never receive MAIN-world injection");
 });
 
 test("service worker script registers available chrome events without requiring optional events", () => {
@@ -3759,6 +5365,128 @@ test("service worker script registers available chrome events without requiring 
   assert.equal(alarms.length, 1);
   assert.equal(alarms[0].name, background.STATUS_ALARM_NAME);
   assert.equal(alarms[0].options.periodInMinutes, background.STATUS_ALARM_PERIOD_MINUTES);
+});
+
+test("service worker wake after extension update preserves the last catalog-proven public mapping", async () => {
+  const listeners = [];
+  const catalogObservedAt = "2026-08-23T03:17:50.167Z";
+  let storedStats = {
+    version: 1,
+    totals: { "GPT-5.6 Sol": 1 },
+    byDate: { "2026-08-23": { "GPT-5.6 Sol": 1 } },
+    models: {
+      "GPT-5.6 Sol": {
+        label: "GPT-5.6 Sol",
+        publicModel: "GPT-5.6 Sol",
+        chatgptModel: "GPT-5.6 Sol",
+        selectedPublicModel: "GPT-5.6 Sol",
+        selectedPublicModelSource: "selector-dom",
+        requestModel: "gpt-5-6-thinking",
+        responseModel: "gpt-5-6-thinking",
+        responseObservedAt: "2026-08-23T03:18:10.000Z",
+        responseObservedSource: "message-dom:model-slug",
+        apiModel: "gpt-5-6-thinking",
+        modelIdentitySource: "response-model",
+        modelMappingStatus: "mapped",
+        publicModelSource: "selector+account-catalog",
+        catalogObservedAt,
+        parameters: { model: "gpt-5-6-thinking" }
+      }
+    },
+    sessionsByModel: {},
+    variantsByModel: {},
+    featuresByModel: {},
+    parametersByModel: {},
+    relationsByModel: {},
+    events: [
+      {
+        model: "GPT-5.6 Sol",
+        publicModel: "GPT-5.6 Sol",
+        chatgptModel: "GPT-5.6 Sol",
+        selectedPublicModel: "GPT-5.6 Sol",
+        selectedPublicModelSource: "selector-dom",
+        requestModel: "gpt-5-6-thinking",
+        requestModelEvidence: "trusted",
+        responseModel: "gpt-5-6-thinking",
+        responseObservedAt: "2026-08-23T03:18:10.000Z",
+        responseObservedSource: "message-dom:model-slug",
+        apiModel: "gpt-5-6-thinking",
+        modelIdentitySource: "response-model",
+        modelMappingStatus: "mapped",
+        publicModelSource: "selector+account-catalog",
+        catalogObservedAt,
+        modelObservedSource: "webRequest",
+        modelParameters: { model: "gpt-5-6-thinking" },
+        submittedAt: "2026-08-23T03:18:00.000Z",
+        sourceMode: "chat",
+        usageFeatures: []
+      }
+    ],
+    lastUpdated: "2026-08-23T03:18:00.000Z"
+  };
+  const context = {
+    ChatGPTModelCatalog: require("../src/model-catalog"),
+    chrome: {
+      runtime: {
+        onMessage: { addListener: (listener) => listeners.push(["message", listener]) },
+        onInstalled: { addListener: (listener) => listeners.push(["installed", listener]) }
+      },
+      alarms: {
+        create: () => {},
+        onAlarm: { addListener: (listener) => listeners.push(["alarm", listener]) }
+      },
+      storage: {
+        local: {
+          get: (_keys, callback) => setTimeout(
+            () => callback({ [background.STORAGE_KEY]: storedStats }),
+            0
+          ),
+          set: (value, callback) => {
+            if (Object.prototype.hasOwnProperty.call(value, background.STORAGE_KEY)) {
+              storedStats = value[background.STORAGE_KEY];
+            }
+            setTimeout(() => callback && callback(), 0);
+          }
+        },
+        session: {
+          // Extension reload/update clears session storage before this worker
+          // wake, so the live catalog is intentionally absent.
+          get: (_keys, callback) => setTimeout(() => callback({}), 0),
+          set: (_value, callback) => setTimeout(() => callback && callback(), 0)
+        }
+      },
+      action: {
+        setBadgeBackgroundColor: () => {},
+        setBadgeText: () => {},
+        setTitle: () => {}
+      }
+    },
+    Date,
+    Math,
+    Number,
+    Object,
+    String,
+    Array,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
+
+  vm.createContext(context);
+  assert.doesNotThrow(() => vm.runInContext(script, context));
+  const messageListener = listeners.find((entry) => entry[0] === "message")[1];
+  const response = await new Promise((resolve) => {
+    assert.equal(messageListener({ type: "usage.get" }, {}, resolve), true);
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(Object.keys(response.stats.totals).length, 1);
+  assert.equal(response.stats.totals["GPT-5.6 Sol"], 1);
+  assert.equal(response.stats.totals["gpt-5-6-thinking"], undefined);
+  assert.equal(response.stats.events[0].model, "GPT-5.6 Sol");
+  assert.equal(response.stats.events[0].publicModel, "GPT-5.6 Sol");
+  assert.equal(response.stats.events[0].responseModel, "gpt-5-6-thinking");
 });
 
 test("runtime reinjection loads the same complete content-script stack as the manifest", () => {
@@ -3891,6 +5619,7 @@ test("usage.increment message path dedupes root submissions across webRequest an
   const promptHash = "86bc567";
   const sender = { tab: { id: 31 } };
   const firstPayload = {
+    submissionId: "usage-message-path-root-duplicate",
     model,
     apiModel: model,
     chatgptModel: model,
@@ -3933,7 +5662,8 @@ test("usage.increment message path dedupes root submissions across webRequest an
   assert.equal(storedStats.events.length, 1);
   assert.equal(storedStats.events[0].conversationId, "");
   assert.equal(storedStats.events[0].pageUrl, "https://chatgpt.com/");
-  assert.equal(storedStats.events[0].promptHash, promptHash);
+  assert.equal(storedStats.events[0].promptHash, undefined);
+  assert.equal(storedStats.events[0].promptLength, undefined);
   assert.equal(storedStats.events[0].source, "send-button");
   assert.equal(storedStats.events[0].modelObservedSource, "webRequest");
   assert.deepEqual(storedStats.events[0].usageFeatures, ["web_search"]);
@@ -3948,6 +5678,7 @@ test("mergeRecentNetworkObservation lets the current request model replace stale
   // 网络请求体只给裸基座 gpt-5-5(GPT-5.5 的 /f/conversation 实测如此)
   background.observeNetworkRequest({
     tabId: 71,
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: { raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5-5" }), "utf8") }] }
   }, now);
   // content 据助手消息 data-message-model-slug 给出真实模型 gpt-5-5-thinking
@@ -3971,6 +5702,7 @@ test("mergeRecentNetworkObservation still lets a specific network model override
   const now = new Date("2026-06-26T12:00:00.000Z");
   background.observeNetworkRequest({
     tabId: 72,
+    url: "https://chatgpt.com/backend-api/f/conversation",
     requestBody: { raw: [{ bytes: Buffer.from(JSON.stringify({ model: "gpt-5-5-instant" }), "utf8") }] }
   }, now);
   const merged = background.mergeRecentNetworkObservation(

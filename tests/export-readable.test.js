@@ -32,7 +32,12 @@ const readableConversations = [
         role: "assistant",
         contentType: "text",
         text: visibleAnswer,
-        model: MODEL,
+        selectedPublicModel: "GPT-5.6 Sol",
+        selectedPublicMode: "thinking",
+        selectedPublicModeLabel: "Thinking",
+        responseModel: MODEL,
+        requestModel: MODEL,
+        requestReasoningEffort: "high",
         modelParameters: {
           model: MODEL,
           reasoning: { effort: "high" },
@@ -244,6 +249,11 @@ test("all public export formats are readable and hide internal export artifacts"
   assert.deepEqual(json.conversations[0].messages.map((message) => message.sequence), [1, 2]);
   assert.equal(json.conversations[0].messages[1].text, "Readable answer with source marker and plain text.");
   assert.equal(json.conversations[0].messages[1].model, MODEL);
+  assert.equal(json.conversations[0].messages[1].selectedPublicModel, "GPT-5.6 Sol");
+  assert.equal(json.conversations[0].messages[1].selectedPublicMode, "thinking");
+  assert.equal(json.conversations[0].messages[1].selectedPublicModeLabel, "Thinking");
+  assert.equal(json.conversations[0].messages[1].requestModel, MODEL);
+  assert.equal(json.conversations[0].messages[1].responseModel, MODEL);
   assert.equal(json.conversations[0].messages[1].parameters.model, undefined);
   assert.equal(json.conversations[0].messages[1].parameters["reasoning.effort"], "high");
 
@@ -267,6 +277,41 @@ test("visible structured content keeps line breaks and indentation", () => {
   }
 });
 
+test("all public export formats unwrap ChatGPT writing blocks without exposing directives", () => {
+  const conversations = [{
+    id: "writing-block",
+    title: "Writing block export",
+    messages: [
+      {
+        id: "writing-user",
+        role: "user",
+        text: "生成报告"
+      },
+      {
+        id: "writing-assistant",
+        role: "assistant",
+        text: [
+          ':::writing{variant="document" id="48317"}',
+          "# 清晰报告",
+          "",
+          "正文内容",
+          ":::"
+        ].join("\n"),
+        metadata: { model_slug: "gpt-5-6-thinking" }
+      }
+    ]
+  }];
+  const surfaces = exportSurfaces(conversations, { title: "Writing Block Export" });
+  const json = JSON.parse(surfaces.JSON);
+
+  assert.equal(json.conversations[0].messages[1].text, "# 清晰报告\n\n正文内容");
+  for (const [format, text] of Object.entries(surfaces)) {
+    assert.match(text, /清晰报告/, `${format} should preserve the writing-block content`);
+    assert.match(text, /正文内容/, `${format} should preserve the writing-block body`);
+    assert.doesNotMatch(text, /:::writing|variant="document"|id="48317"/, `${format} leaked a writing directive`);
+  }
+});
+
 test("flattened ChatGPT markdown is restored into readable export lines", () => {
   const surfaces = exportSurfaces(flattenedMarkdownConversations, { title: "Flattened Markdown Export" });
   const expectedTable = /## 关键结论\n\| 场景 \| 谁强 \| 大致差距 \| 判断 \|\n\|---\|---:\|---:\|---\|\n\| 多线程跑分 \/ 渲染 \/ 编译 \| \*\*265K 强\*\* \| 约 \*\*\+58%\*\* \| 核心更多 \|\n\| 游戏 \| \*\*9700X 略强或接近持平\*\* \| 常见 \*\*0-10%\*\* \| 功耗低 \|\n[ \t]*\n## 最终答案/;
@@ -283,7 +328,7 @@ test("flattened ChatGPT markdown is restored into readable export lines", () => 
   }
 });
 
-test("all public export formats keep exact and public model identities", () => {
+test("all public export formats keep response, request, and public model identities distinct", () => {
   const conversations = [
     {
       id: "model-readable",
@@ -297,15 +342,21 @@ test("all public export formats keep exact and public model identities", () => {
             model_slug: "gpt_5_thinking",
             reasoning_effort: "high"
           },
+          requestReasoningEffort: "high",
           createTime: "2026-05-31T14:00:01.000Z"
         },
         {
           id: "invalid-unknown",
           role: "assistant",
           text: "Invalid model metadata is removed from export metadata.",
-          model: "Unknown model",
+          selectedPublicModel: "GPT-5.5",
+          selectedPublicMode: "thinking",
+          selectedPublicModeLabel: "Thinking",
+          requestModel: "gpt-5-5",
+          responseModel: "",
+          requestReasoningEffort: "medium",
           modelParameters: {
-            model: "GPT-5.5",
+            model: "gpt-5-5",
             reasoning: { effort: "medium" }
           },
           createTime: "2026-05-31T14:00:02.000Z"
@@ -319,6 +370,7 @@ test("all public export formats keep exact and public model identities", () => {
             selected_model: "GPT-5 5",
             reasoning_effort: "low"
           },
+          requestReasoningEffort: "low",
           createTime: "2026-05-31T14:00:03.000Z"
         }
       ]
@@ -330,7 +382,12 @@ test("all public export formats keep exact and public model identities", () => {
 
   assert.equal(messages[0].model, "gpt-5-thinking");
   assert.equal(messages[0].parameters.model, undefined);
-  assert.equal(messages[1].model, "gpt-5.5");
+  assert.equal(messages[1].model, "");
+  assert.equal(messages[1].selectedPublicModel, "GPT-5.5");
+  assert.equal(messages[1].selectedPublicMode, "thinking");
+  assert.equal(messages[1].selectedPublicModeLabel, "Thinking");
+  assert.equal(messages[1].requestModel, "gpt-5-5");
+  assert.equal(messages[1].responseModel, null);
   assert.equal(messages[1].parameters.model, undefined);
   assert.equal(messages[1].parameters["reasoning.effort"], "medium");
   assert.equal(messages[2].model, "gpt-5-5-thinking");
@@ -339,9 +396,58 @@ test("all public export formats keep exact and public model identities", () => {
 
   for (const [format, text] of Object.entries(surfaces)) {
     assert.match(text, /gpt-5-thinking/, `${format} should keep the valid thinking slug`);
-    assert.match(text, /gpt-5\.5/, `${format} should keep the public dotted model label`);
+    assert.match(text, /GPT-5\.5/, `${format} should keep the public dotted model label`);
+    assert.match(text, /gpt-5-5/, `${format} should keep the exact request model`);
     assert.match(text, /gpt-5-5-thinking/, `${format} should keep the exact dash-versioned model slug`);
     assertNoInvalidModelNames(format, text);
+  }
+});
+
+test("all human-readable formats describe equal, different, and missing request/response models without substitution", () => {
+  const conversations = [
+    {
+      id: "model-relationships",
+      title: "Model relationships",
+      messages: [
+        {
+          id: "same",
+          role: "assistant",
+          text: "Same model.",
+          requestModel: "gpt-5-6-thinking",
+          responseModel: "gpt-5-6-thinking"
+        },
+        {
+          id: "different",
+          role: "assistant",
+          text: "Different models.",
+          requestModel: "gpt-5-6",
+          responseModel: "gpt-5-6-thinking"
+        },
+        {
+          id: "missing-request",
+          role: "assistant",
+          text: "Missing request.",
+          responseModel: "gpt-5-6-mini"
+        },
+        {
+          id: "missing-response",
+          role: "assistant",
+          text: "Missing response.",
+          requestModel: "gpt-5-6-pro"
+        }
+      ]
+    }
+  ];
+  const surfaces = exportSurfaces(conversations, { title: "Model Relationships Export" });
+
+  for (const [format, text] of Object.entries(surfaces)) {
+    if (format === "JSON") continue;
+    assert.match(text, /请求型号：gpt-5-6-thinking · 实际回复型号：gpt-5-6-thinking/, `${format} should name both equal model fields without a redundant equality note`);
+    assert.match(text, /请求型号：gpt-5-6 · 实际回复型号：gpt-5-6-thinking/, `${format} should show different models in request-to-response order`);
+    assert.match(text, /请求型号：未知 · 实际回复型号：gpt-5-6-mini/, `${format} should keep a missing request unknown`);
+    assert.match(text, /请求型号：gpt-5-6-pro · 实际回复型号：未知/, `${format} should keep a missing response unknown`);
+    assert.doesNotMatch(text, /请求与实际回复型号一致/, `${format} should not add a redundant equality sentence`);
+    assert.doesNotMatch(text, /未提供|待确认|未取得|未识别/, `${format} should use the single unknown label`);
   }
 });
 

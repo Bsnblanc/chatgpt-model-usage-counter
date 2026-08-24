@@ -54,7 +54,13 @@ test("a single conversation exports to every selectable format with a valid arti
     url: "https://chatgpt.com/c/abc123",
     messages: [
       { id: "m1", role: "user", text: "写一个冒泡排序", model: "" },
-      { id: "m2", role: "assistant", text: "```js\nfunction bubble(a){return a}\n```\n这是冒泡排序。", model: "gpt-5-5-thinking" }
+      {
+        id: "m2",
+        role: "assistant",
+        text: "```js\nfunction bubble(a){return a}\n```\n这是冒泡排序。",
+        responseModel: "gpt-5-5-thinking",
+        requestModel: "gpt-5-5-thinking"
+      }
     ]
   };
 

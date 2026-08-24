@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">ChatGPT Model Usage Counter</title>
+  <desc id="desc">A midnight-blue chat bubble containing three rising colored usage bars.</desc>
+  <rect x="4" y="4" width="120" height="120" rx="30" fill="#172554"/>
+  <circle cx="105" cy="24" r="9" fill="#A78BFA"/>
+  <rect x="24" y="25" width="80" height="58" rx="19" fill="#FFFFFF"/>
+  <path d="M34 78H57L30 101Z" fill="#FFFFFF"/>
+  <rect x="44" y="57" width="11" height="14" rx="5.5" fill="#22D3EE"/>
+  <rect x="61" y="48" width="11" height="23" rx="5.5" fill="#60A5FA"/>
+  <rect x="78" y="38" width="11" height="33" rx="5.5" fill="#A78BFA"/>
+</svg>

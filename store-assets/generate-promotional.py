@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "promotional"
 SCREENSHOTS = ROOT / "screenshots"
+APP_ICON = ROOT.parent / "icons" / "icon128.png"
 OUT.mkdir(parents=True, exist_ok=True)
 SCREENSHOTS.mkdir(parents=True, exist_ok=True)
 
@@ -101,24 +102,24 @@ def marquee():
     draw.ellipse((1880, -360, 3020, 780), fill=(18, 72, 99))
     draw.ellipse((-520, 700, 420, 1640), fill=(7, 50, 62))
 
-    rounded(draw, (88 * scale, 46 * scale, 407 * scale, 84 * scale), 19 * scale, (7, 39, 52), (18, 132, 139), scale)
-    text(draw, (105 * scale, 65 * scale), "●  LOCAL STATS · NO PUBLISHER SERVER", 13 * scale, (84, 238, 222), "semibold", "lm")
+    rounded(draw, (88 * scale, 46 * scale, 430 * scale, 84 * scale), 19 * scale, (7, 39, 52), (18, 132, 139), scale)
+    text(draw, (105 * scale, 65 * scale), "●  LOCAL STATS · CHAT + WORK · PRIVATE", 13 * scale, (84, 238, 222), "semibold", "lm")
 
     text(draw, (88 * scale, 116 * scale), "ChatGPT", 57 * scale, (243, 248, 255), "bold")
     text(draw, (88 * scale, 178 * scale), "Model Usage", 57 * scale, (59, 226, 207), "bold")
     text(draw, (88 * scale, 240 * scale), "Counter", 57 * scale, (243, 248, 255), "bold")
 
-    text(draw, (90 * scale, 326 * scale), "Actual response models and request routes stay separate.", 20 * scale, (168, 190, 215))
-    text(draw, (90 * scale, 358 * scale), "Pick one or more chats from a clear conversation list.", 20 * scale, (168, 190, 215))
+    text(draw, (90 * scale, 326 * scale), "Basic public models or Advanced internal routes.", 20 * scale, (168, 190, 215))
+    text(draw, (90 * scale, 358 * scale), "Trend, composition, projects and readable exports.", 20 * scale, (168, 190, 215))
 
-    draw_check(draw, 90 * scale, 414 * scale, "Final response slug · request slug · public model", scale)
-    draw_check(draw, 90 * scale, 458 * scale, "JSON · Markdown · PDF · DOCX · PNG", scale)
-    draw_check(draw, 90 * scale, 502 * scale, "Multi-chat ZIP · one file per chat · integrity report", scale)
+    draw_check(draw, 90 * scale, 414 * scale, "Chat + Work · request route · actual response model", scale)
+    draw_check(draw, 90 * scale, 458 * scale, "Line trend · model → reasoning-effort donut", scale)
+    draw_check(draw, 90 * scale, 502 * scale, "Project selection · 5 formats · backup + import", scale)
 
     card = (742 * scale, 72 * scale, 1360 * scale, 524 * scale)
     rounded(draw, card, 24 * scale, (18, 38, 62), (48, 75, 105), scale)
-    text(draw, (780 * scale, 112 * scale), "Usage & export", 24 * scale, (239, 246, 255), "bold")
-    text(draw, (1318 * scale, 116 * scale), "observed model identity", 13 * scale, (132, 156, 183), "regular", "rm")
+    text(draw, (780 * scale, 112 * scale), "Usage · export · backup", 24 * scale, (239, 246, 255), "bold")
+    text(draw, (1318 * scale, 116 * scale), "Basic / Advanced", 13 * scale, (132, 156, 183), "regular", "rm")
 
     models = [
         ("GPT-5.6 Sol", "11", (39, 214, 176), 0.92),
@@ -135,11 +136,11 @@ def marquee():
 
     draw_chart(draw, (780 * scale, 300 * scale, 1320 * scale, 396 * scale), scale)
     draw.line((780 * scale, 418 * scale, 1320 * scale, 418 * scale), fill=(48, 75, 105), width=scale)
-    text(draw, (780 * scale, 444 * scale), "Conversation list", 14 * scale, (132, 156, 183), "semibold")
+    text(draw, (780 * scale, 444 * scale), "Project-aware conversation list", 14 * scale, (132, 156, 183), "semibold")
     for index, (label, checked) in enumerate([
-        ("Product research", True),
-        ("Code review notes", True),
-        ("Archived planning", False),
+        ("Launch / Research", True),
+        ("Launch / Code review", True),
+        ("Archive / Planning", False),
     ]):
         x = (918 + index * 132) * scale
         y = 436 * scale
@@ -154,7 +155,7 @@ def marquee():
             text(draw, (x + 9 * scale, y + 8 * scale), "✓", 12 * scale, (5, 27, 38), "bold", "mm")
         text(draw, (x + 24 * scale, y + 9 * scale), label, 10 * scale, (213, 226, 240), "regular", "lm")
 
-    text(draw, (780 * scale, 493 * scale), "JSON   MD   PDF   DOCX   PNG   →   ZIP for multiple chats", 14 * scale, (199, 216, 233), "semibold")
+    text(draw, (780 * scale, 493 * scale), "5 formats   ·   multi-chat ZIP   ·   statistics backup / import", 14 * scale, (199, 216, 233), "semibold")
 
     image.resize((1400, 560), Image.Resampling.LANCZOS).save(OUT / "marquee-1400x560.png", optimize=True)
 
@@ -166,24 +167,24 @@ def small():
     draw = ImageDraw.Draw(image)
 
     draw.ellipse((740, -250, 1500, 510), fill=(18, 72, 99))
-    rounded(draw, (26 * scale, 25 * scale, 246 * scale, 53 * scale), 14 * scale, (7, 39, 52), (18, 132, 139), scale)
-    text(draw, (37 * scale, 39 * scale), "●  EXACT MODELS · PRIVATE EXPORTS", 9 * scale, (84, 238, 222), "semibold", "lm")
+    rounded(draw, (26 * scale, 25 * scale, 256 * scale, 53 * scale), 14 * scale, (7, 39, 52), (18, 132, 139), scale)
+    text(draw, (37 * scale, 39 * scale), "●  CHAT + WORK · LOCAL & PRIVATE", 9 * scale, (84, 238, 222), "semibold", "lm")
 
     text(draw, (26 * scale, 75 * scale), "ChatGPT", 31 * scale, (244, 248, 255), "bold")
     text(draw, (26 * scale, 112 * scale), "Model Usage", 31 * scale, (59, 226, 207), "bold")
     text(draw, (26 * scale, 149 * scale), "Counter", 31 * scale, (244, 248, 255), "bold")
 
-    text(draw, (28 * scale, 203 * scale), "Select one or multiple chats", 14 * scale, (202, 216, 231), "semibold")
-    text(draw, (28 * scale, 228 * scale), "JSON · MD · PDF · DOCX · PNG", 12 * scale, (151, 176, 203))
-    text(draw, (28 * scale, 253 * scale), "Multi-chat ZIP + integrity report", 12 * scale, (151, 176, 203))
+    text(draw, (28 * scale, 203 * scale), "Basic / Advanced model stats", 14 * scale, (202, 216, 231), "semibold")
+    text(draw, (28 * scale, 228 * scale), "Line + model → effort donut", 12 * scale, (151, 176, 203))
+    text(draw, (28 * scale, 253 * scale), "Projects · 5 formats · backup", 12 * scale, (151, 176, 203))
 
     card = (258 * scale, 72 * scale, 426 * scale, 254 * scale)
     rounded(draw, card, 16 * scale, (17, 38, 62), (48, 75, 105), scale)
-    text(draw, (276 * scale, 92 * scale), "Export", 16 * scale, (239, 246, 255), "bold")
+    text(draw, (276 * scale, 92 * scale), "Project export", 16 * scale, (239, 246, 255), "bold")
     for index, (label, checked) in enumerate([
-        ("Product research", True),
-        ("Code review", True),
-        ("Archived chat", False),
+        ("Launch / Research", True),
+        ("Launch / Code", True),
+        ("Archive / Plan", False),
     ]):
         x = 276 * scale
         y = (119 + index * 35) * scale
@@ -197,7 +198,7 @@ def small():
         if checked:
             text(draw, (x + 8.5 * scale, y + 8 * scale), "✓", 11 * scale, (5, 27, 38), "bold", "mm")
         text(draw, (x + 24 * scale, y + 8 * scale), label, 10 * scale, (213, 226, 240), "regular", "lm")
-    text(draw, (276 * scale, 232 * scale), "5 formats  →  ZIP", 11 * scale, (199, 216, 233), "semibold")
+    text(draw, (276 * scale, 232 * scale), "5 formats · ZIP", 11 * scale, (199, 216, 233), "semibold")
 
     image.resize((440, 280), Image.Resampling.LANCZOS).save(OUT / "small-promo-440x280.png", optimize=True)
 
@@ -229,6 +230,64 @@ def preview_card(canvas, draw, image, box, label, scale=1):
     text(draw, (x1 + 92 * scale, pill_y + 15 * scale), "verified", 11 * scale, (177, 198, 218), "regular", "lm")
 
 
+def demo_export_preview(kind):
+    width, height = 460, 700
+    image = Image.new("RGB", (width, height), (248, 250, 252))
+    draw = ImageDraw.Draw(image)
+    accent = (15, 118, 110)
+    ink = (26, 39, 54)
+    muted = (92, 108, 126)
+    light = (225, 232, 238)
+
+    if APP_ICON.is_file():
+        icon = Image.open(APP_ICON).convert("RGBA")
+        icon.thumbnail((48, 48), Image.Resampling.LANCZOS)
+        image.paste(icon, (34, 27), icon)
+    text(draw, (94, 34), "ChatGPT Model Usage Counter", 19, ink, "bold")
+    text(draw, (94, 61), f"{kind} export · v1.4.0", 13, muted)
+    draw.line((34, 93, 426, 93), fill=light, width=2)
+
+    text(draw, (34, 119), "Quarterly product research", 24, ink, "bold")
+    text(draw, (34, 154), "Exported 2026-08-24 · 4 messages", 13, muted)
+
+    blocks = [
+        ("USER", "Compare the launch options and keep the decision criteria clear."),
+        ("ASSISTANT", "Recommended structure",),
+    ]
+    y = 198
+    for label, value in blocks:
+        text(draw, (34, y), label, 11, accent, "bold")
+        y += 24
+        text(draw, (34, y), value, 14, ink, "regular")
+        y += 35
+
+    rounded(draw, (34, y, 426, y + 122), 10, (239, 245, 247), (211, 224, 229))
+    text(draw, (52, y + 19), "Decision matrix", 15, ink, "bold")
+    draw.line((52, y + 50, 408, y + 50), fill=(196, 211, 219), width=2)
+    text(draw, (52, y + 64), "Option", 12, muted, "semibold")
+    text(draw, (214, y + 64), "Score", 12, muted, "semibold")
+    text(draw, (315, y + 64), "Status", 12, muted, "semibold")
+    text(draw, (52, y + 91), "Focused", 13, ink)
+    text(draw, (214, y + 91), "9 / 10", 13, ink)
+    text(draw, (315, y + 91), "Selected", 13, accent, "semibold")
+    y += 150
+
+    text(draw, (34, y), "Implementation notes", 17, ink, "bold")
+    y += 34
+    for line in (
+        "• Keep headings and lists visually distinct.",
+        "• Preserve tables, links and code blocks.",
+        "• Export one chat per file inside a ZIP.",
+    ):
+        text(draw, (42, y), line, 13, ink)
+        y += 28
+
+    rounded(draw, (34, 574, 426, 632), 9, (19, 35, 54))
+    text(draw, (51, 591), "status = readable && complete", 14, (113, 231, 215), "semibold")
+    text(draw, (34, 663), "Local export · sanitized preview", 12, muted)
+    return image
+
+
 def readable_exports():
     scale = 2
     width, height = 1280 * scale, 800 * scale
@@ -246,7 +305,7 @@ def readable_exports():
         (18, 132, 139),
         scale,
     )
-    text(draw, (88 * scale, 73 * scale), "ACTUAL BROWSER EXPORTS · v1.3.2", 12 * scale, (84, 238, 222), "semibold", "lm")
+    text(draw, (88 * scale, 73 * scale), "READABLE LOCAL EXPORTS · v1.4.0", 12 * scale, (84, 238, 222), "semibold", "lm")
     text(draw, (70 * scale, 142 * scale), "One chat.", 48 * scale, (245, 249, 255), "bold")
     text(draw, (70 * scale, 197 * scale), "Five readable formats.", 48 * scale, (59, 226, 207), "bold")
     text(
@@ -266,41 +325,24 @@ def readable_exports():
 
     draw_check(draw, 72 * scale, 384 * scale, "PDF paginates without clipped text", scale)
     draw_check(draw, 72 * scale, 435 * scale, "DOCX keeps headings, tables, code and links editable", scale)
-    draw_check(draw, 72 * scale, 486 * scale, "Long PNG stays one image — no split parts", scale)
+    draw_check(draw, 72 * scale, 486 * scale, "Long PNG stays one image with the extension watermark", scale)
 
     chip_x = 72 * scale
     for label in ("JSON", "Markdown", "PDF", "DOCX", "PNG"):
         chip_x = pill(draw, chip_x, 570 * scale, label, scale) + 10 * scale
 
     text(draw, (72 * scale, 724 * scale), "ChatGPT Model Usage Counter", 14 * scale, (142, 171, 194), "regular")
-    text(draw, (319 * scale, 724 * scale), "v1.3.2", 14 * scale, (84, 238, 222), "bold")
-
-    audit_root = (
-        ROOT.parent
-        / "tmp-verify"
-        / "cdp"
-        / "live-export-qa"
-        / "audit"
-        / "render-v1.3.2-final2"
-    )
-    preview_paths = [
-        (audit_root / "pdf-structured" / "page.png", "PDF"),
-        (audit_root / "structured-pages" / "page.png", "DOCX"),
-        (audit_root.parent / "visual" / "structuredPng.png", "PNG"),
-    ]
-    missing = [str(path) for path, _ in preview_paths if not path.is_file()]
-    if missing:
-        raise FileNotFoundError("Verified export previews are missing: " + ", ".join(missing))
+    text(draw, (319 * scale, 724 * scale), "v1.4.0", 14 * scale, (84, 238, 222), "bold")
 
     card_width = 164 * scale
     card_gap = 18 * scale
     card_left = 692 * scale
-    for index, (path, label) in enumerate(preview_paths):
+    for index, label in enumerate(("PDF", "DOCX", "PNG")):
         x1 = card_left + index * (card_width + card_gap)
         preview_card(
             image,
             draw,
-            Image.open(path),
+            demo_export_preview(label),
             (x1, 128 * scale, x1 + card_width, 664 * scale),
             label,
             scale,

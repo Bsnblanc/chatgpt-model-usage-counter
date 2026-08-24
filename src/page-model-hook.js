@@ -29,6 +29,11 @@ function featureId(value) {
   if (/^(realtime|real_time|realtime_mode|real_time_mode)$/.test(versionless)) return "realtime";
   if (/^(audio|audiomode|audio_mode|voice|voicemode|voice_mode|advanced_voice|input_audio|output_audio|transcription|transcribe|tts|whisper)$/.test(versionless)) return "audio";
   if (/^(canvas|canvases|canvas_mode|canvasmode)$/.test(versionless)) return "canvas";
+  if (/^(file_upload|fileupload|attachment|attachments|upload|uploads|file_attachment)$/.test(versionless)) return "file_upload";
+  if (/^(code_interpreter|codeinterpreter|data_analysis|dataanalysis|python)$/.test(versionless)) return "code_interpreter";
+  if (/^(connectors|connector|apps|connected_apps|connectedapps)$/.test(versionless)) return "connectors";
+  if (/^(gpts|gpt_id|gptid|gizmo|gizmo_id|gizmoid|custom_gpt|customgpt)$/.test(versionless)) return "gpts";
+  if (/^(tasks|scheduled_task|scheduledtask|scheduled_tasks)$/.test(versionless)) return "tasks";
   return "";
 }
 
@@ -36,7 +41,7 @@ function hasKnownModelPrefix(value) {
   if (/^image-\d+-image$/i.test(String(value || "").replace(/_/g, "-"))) {
     return false;
   }
-  return /^(?:gpt|o\d+(?:-(?:mini|pro|high))?|chat|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(String(value || ""));
+  return /^(?:gpt|o\d+(?:-(?:mini|pro|high))?|chat-latest(?:$|[-_.])|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(String(value || ""));
 }
 
 function hasGenericModelSlugEvidence(value) {
@@ -64,7 +69,7 @@ function isFeatureNamedSlug(value) {
   if (/^image-\d+-image$/i.test(slug)) {
     return true;
   }
-  return /^(?:agent(?:-?mode)?|deep-?(?:research|search)|image(?:-?generation)?|web-?search|realtime|real-time|audio|voice|canvas)(?:$|[-_.])/.test(slug) &&
+  return /^(?:agent(?:-?mode)?|deep-?(?:research|search)|image(?:-?generation)?|web-?search|realtime|real-time|audio|voice|canvas|file-?upload|attachments?|uploads?|code-?interpreter|data-?analysis|python|connectors?|connected-?apps?|gpts|gizmo(?:-?id)?|gpt-?id|custom-?gpt|tasks?|scheduled-?tasks?)(?:$|[-_.])/.test(slug) &&
     !/^(?:gpt-image|dall-e|image-\d)/i.test(slug);
 }
 
