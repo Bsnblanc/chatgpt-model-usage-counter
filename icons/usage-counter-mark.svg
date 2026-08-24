@@ -1,17 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
   <title id="title">ChatGPT Model Usage Counter</title>
-  <desc id="desc">A midnight-blue model-usage mark with a conversation orbit and three rising bars.</desc>
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#081234"/>
-      <stop offset="1" stop-color="#182A6A"/>
-    </linearGradient>
-  </defs>
-  <rect x="4" y="4" width="120" height="120" rx="29" fill="url(#tile)"/>
-  <rect x="6.5" y="6.5" width="115" height="115" rx="27" fill="none" stroke="#304C9C" stroke-width="1.5"/>
-  <path d="M96.4 38.3A41 41 0 1 0 94.5 89.4" fill="none" stroke="#FFFFFF" stroke-width="13" stroke-linecap="round"/>
-  <circle cx="100.5" cy="61.5" r="4.5" fill="#22D3EE"/>
-  <rect x="43" y="66" width="13" height="20" rx="6.5" fill="#22D3EE"/>
-  <rect x="59" y="52" width="13" height="34" rx="6.5" fill="#60A5FA"/>
-  <rect x="75" y="37" width="13" height="49" rx="6.5" fill="#C48BFA"/>
+  <desc id="desc">A restrained black bsnblanc monogram containing three blue model-usage columns.</desc>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#121214"/>
+  <rect x="6" y="6" width="116" height="116" rx="24" fill="none" stroke="#37373C" stroke-width="1.5"/>
+  <rect x="28" y="20" width="13" height="88" rx="6.5" fill="#F7F4EC"/>
+  <circle cx="71" cy="71" r="37" fill="none" stroke="#F7F4EC" stroke-width="11"/>
+  <rect x="53" y="72" width="9" height="19" rx="4.5" fill="#1818FF"/>
+  <rect x="68" y="59" width="9" height="32" rx="4.5" fill="#1818FF"/>
+  <rect x="83" y="44" width="9" height="47" rx="4.5" fill="#1818FF"/>
 </svg>

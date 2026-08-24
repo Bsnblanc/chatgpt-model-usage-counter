@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
@@ -80,8 +81,6 @@ function alphaBounds(decoded) {
   for (let y = 0; y < decoded.height; y += 1) {
     for (let x = 0; x < decoded.width; x += 1) {
       const alpha = alphaAt(decoded, x, y);
-      // Ignore sub-32 Lanczos fringe pixels: the measured rectangle represents
-      // the visually effective mark rather than resampling noise.
       if (alpha >= 32) {
         visible += 1;
         minX = Math.min(minX, x);
@@ -127,95 +126,79 @@ function countNearColor(decoded, expected, tolerance = 24) {
   return count;
 }
 
-const actionSpecs = {
-  16: { safeX: 5, safeY: 9 },
-  20: { safeX: 6, safeY: 11 },
-  24: { safeX: 7, safeY: 14 },
-  32: { safeX: 10, safeY: 18 },
-  48: { safeX: 14, safeY: 27 }
-};
-const badgeStarts = {
-  one: Object.fromEntries(Object.entries(actionSpecs).map(([size, spec]) => [
-    Number(size),
-    Math.max(spec.safeX, Math.round(Number(size) * 0.64))
-  ])),
-  two: Object.fromEntries(Object.entries(actionSpecs).map(([size, spec]) => [
-    Number(size),
-    Math.max(spec.safeX, Math.round(Number(size) * 0.46))
-  ])),
-  wide: Object.fromEntries(Object.entries(actionSpecs).map(([size, spec]) => [
-    Number(size),
-    spec.safeX
-  ]))
+function sha256(file) {
+  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+const fullSizes = [16, 20, 24, 32, 48, 128];
+const actionSizes = [16, 20, 24, 32, 48];
+const palette = {
+  ink: [18, 18, 20, 255],
+  paper: [247, 244, 236, 255],
+  cobalt: [24, 24, 255, 255]
 };
 
-test("action icon generator uses dedicated optical geometry instead of resizing the full mark", () => {
+test("generator uses a full-size toolbar drawing without badge-shaped cutouts", () => {
   const source = fs.readFileSync(path.join(root, "store-assets", "generate-icons.py"), "utf8");
-  const actionBody = source.match(/def draw_action_mark\(size, badge_width\):([\s\S]*?)\n\ndef main\(\):/);
-  assert.ok(actionBody);
-  assert.doesNotMatch(actionBody[1], /draw_mark\(/);
-  assert.match(actionBody[1], /ACTION_SPECS\[size\]/);
-  assert.match(actionBody[1], /ACTION_BADGE_STARTS\[badge_width\]\[size\]/);
-  assert.match(actionBody[1], /rounded\(\s*draw/);
-  assert.match(actionBody[1], /arc\(/);
+  assert.match(source, /def draw_brand_mark\(size, \*, toolbar=False\):/);
+  assert.match(source, /def draw_action_mark\(size\):/);
+  assert.match(source, /draw_brand_mark\(size, toolbar=True\)/);
+  assert.doesNotMatch(source, /ACTION_SPECS|ACTION_BADGE_STARTS|safe_x|safe_y/);
 });
 
-test("badge-safe toolbar icons reserve the 1, 28, and 99+ Chrome overlay regions", () => {
-  const variants = [
-    { name: "one", file: (size) => `action1-${size}.png`, text: "1" },
-    { name: "two", file: (size) => `action2-${size}.png`, text: "28" },
-    { name: "wide", file: (size) => `action${size}.png`, text: "99+" }
-  ];
-  for (const [sizeText, spec] of Object.entries(actionSpecs)) {
-    const size = Number(sizeText);
-    for (const variant of variants) {
-      const decoded = decodeRgbaPng(path.join(root, "icons", variant.file(size)));
-      assert.equal(decoded.width, size);
-      assert.equal(decoded.height, size);
-      const region = { text: variant.text, startX: badgeStarts[variant.name][size] };
-      for (let y = spec.safeY; y < size; y += 1) {
-        for (let x = region.startX; x < size; x += 1) {
-          assert.equal(
-            alphaAt(decoded, x, y),
-            0,
-            `${variant.file(size)} ${region.text} badge pixel ${x},${y}`
-          );
-        }
-      }
-    }
+test("all native-badge text variants retain the same unshrunk toolbar identity", () => {
+  for (const size of actionSizes) {
+    const files = [
+      path.join(root, "icons", `action${size}.png`),
+      path.join(root, "icons", `action1-${size}.png`),
+      path.join(root, "icons", `action2-${size}.png`)
+    ];
+    assert.equal(sha256(files[0]), sha256(files[1]), `one-character ${size}px variant`);
+    assert.equal(sha256(files[0]), sha256(files[2]), `two-character ${size}px variant`);
+
+    const decoded = decodeRgbaPng(files[0]);
+    const bounds = alphaBounds(decoded);
+    assert.ok(bounds.width >= Math.floor(size * 0.94), `action${size}.png width ${bounds.width}`);
+    assert.ok(bounds.height >= Math.floor(size * 0.94), `action${size}.png height ${bounds.height}`);
+    assert.ok(bounds.strong >= Math.floor(size * size * 0.62), `action${size}.png strong pixels ${bounds.strong}`);
+
+    const interior = Math.floor(size * 0.75);
+    assert.ok(alphaAt(decoded, interior, interior) >= 224, `action${size}.png must not contain a badge notch`);
   }
 });
 
-test("badge-safe toolbar icons maximize effective bounds and retain strong brand pixels", () => {
-  const palette = [
-    [16, 27, 78, 255],
-    [255, 255, 255, 255],
-    [96, 165, 250, 255],
-    [34, 211, 238, 255],
-    [196, 139, 250, 255]
-  ];
-  for (const size of Object.keys(actionSpecs).map(Number)) {
-    for (const filename of [`action1-${size}.png`, `action2-${size}.png`, `action${size}.png`]) {
-      const decoded = decodeRgbaPng(path.join(root, "icons", filename));
-      const bounds = alphaBounds(decoded);
-      assert.ok(bounds.width >= Math.floor(size * 0.88), `${filename} width ${bounds.width}`);
-      assert.ok(bounds.height >= Math.floor(size * 0.88), `${filename} height ${bounds.height}`);
-      assert.ok(bounds.strong >= Math.floor(size * size * 0.24), `${filename} strong pixels ${bounds.strong}`);
-      for (const color of palette) {
-        const smallIconTolerance = size <= 20 ? 56 : 36;
-        assert.ok(
-          countNearColor(decoded, color, smallIconTolerance) > 0,
-          `${filename} should retain ${color.join(",")}`
-        );
-      }
-    }
+test("toolbar icons retain the restrained publishing palette at every declared size", () => {
+  for (const size of actionSizes) {
+    const decoded = decodeRgbaPng(path.join(root, "icons", `action${size}.png`));
+    const tolerance = size <= 20 ? 48 : 28;
+    assert.ok(countNearColor(decoded, palette.ink, tolerance) > 0, `${size}px ink`);
+    assert.ok(countNearColor(decoded, palette.paper, tolerance) > 0, `${size}px paper`);
+    assert.ok(countNearColor(decoded, palette.cobalt, tolerance) > 0, `${size}px cobalt`);
   }
 });
 
-test("full brand icons keep exact declared dimensions", () => {
-  for (const size of [16, 20, 24, 32, 48, 128]) {
+test("full brand icons keep exact dimensions, normal optical size, and all identity colors", () => {
+  for (const size of fullSizes) {
     const decoded = decodeRgbaPng(path.join(root, "icons", `icon${size}.png`));
     assert.equal(decoded.width, size);
     assert.equal(decoded.height, size);
+
+    const bounds = alphaBounds(decoded);
+    assert.ok(bounds.width >= Math.floor(size * 0.9), `icon${size}.png width ${bounds.width}`);
+    assert.ok(bounds.height >= Math.floor(size * 0.9), `icon${size}.png height ${bounds.height}`);
+
+    const tolerance = size <= 20 ? 48 : 28;
+    assert.ok(countNearColor(decoded, palette.ink, tolerance) > 0, `${size}px ink`);
+    assert.ok(countNearColor(decoded, palette.paper, tolerance) > 0, `${size}px paper`);
+    assert.ok(countNearColor(decoded, palette.cobalt, tolerance) > 0, `${size}px cobalt`);
   }
+});
+
+test("vector master carries the same monogram and statistics geometry", () => {
+  const svg = fs.readFileSync(path.join(root, "icons", "usage-counter-mark.svg"), "utf8");
+  assert.match(svg, /#121214/);
+  assert.match(svg, /#F7F4EC/);
+  assert.match(svg, /#1818FF/);
+  assert.match(svg, /<circle[^>]+stroke="#F7F4EC"/);
+  assert.equal((svg.match(/fill="#1818FF"/g) || []).length, 3);
 });
