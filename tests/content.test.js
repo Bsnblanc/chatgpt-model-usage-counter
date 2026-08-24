@@ -6,17 +6,35 @@ const vm = require("node:vm");
 const detector = require("../src/detector");
 const modelCatalog = require("../src/model-catalog");
 const conversationSource = require("../src/conversation-source");
+const background = require("../src/background");
 
 test("account-history reads use one worker and reserve a 1000 ms request-start gap", () => {
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
 
   assert.match(script, /ACCOUNT_REQUEST_MAX_CONCURRENCY\s*=\s*1/);
   assert.match(script, /ACCOUNT_REQUEST_MIN_GAP_MS\s*=\s*1000/);
+  assert.match(script, /ACCOUNT_REQUEST_FETCH_TIMEOUT_MS\s*=\s*45\s*\*\s*1000/);
+  assert.match(script, /controller\.abort\(\)/);
+  assert.match(script, /error\.code\s*=\s*"account-request-timeout"/);
+  assert.match(
+    script,
+    /scheduledCatalogFetch[\s\S]{0,300}?accountFetchWithTimeout\(fetch,\s*url,\s*options\)/
+  );
+  assert.match(
+    script,
+    /scheduledSessionFetch[\s\S]{0,500}?accountFetchWithTimeout\(window\.fetch,\s*url,\s*options\)/
+  );
+  assert.match(
+    script,
+    /startAuthorizedFetch[\s\S]{0,1200}?accountFetchWithTimeout\(window\.fetch,\s*parsedUrl\.href,\s*options\)/
+  );
   assert.match(script, /concurrency:\s*1,\s*[\s\S]{0,500}?requestGapMs:\s*ACCOUNT_REQUEST_MIN_GAP_MS/);
-  assert.match(script, /ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION\s*=\s*800/);
-  assert.match(script, /ACCOUNT_HISTORY_MAX_OPERATION_MS\s*=\s*10\s*\*\s*60\s*\*\s*1000/);
-  assert.match(script, /maxIndexPagesPerScope:\s*6/);
-  assert.match(script, /maxConversationsPerOperation:\s*500/);
+  assert.match(script, /ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION\s*=\s*60/);
+  assert.match(script, /ACCOUNT_HISTORY_MAX_OPERATION_MS\s*=\s*90\s*\*\s*1000/);
+  assert.match(script, /ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION\s*=\s*50/);
+  assert.match(script, /ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE\s*=\s*6/);
+  assert.match(script, /maxIndexPagesPerScope:\s*ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE/);
+  assert.match(script, /maxConversationsPerOperation:\s*ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION/);
   assert.match(script, /maxMessagePagesPerConversation:\s*50/);
   assert.match(script, /maxMessagesPerConversation:\s*10000/);
 });
@@ -97,6 +115,139 @@ test("account-history requests stay paced after concurrent workers share a delay
     requestStarts[1] - requestStarts[0] >= 900,
     `actual request gap was ${requestStarts[1] - requestStarts[0]} ms`
   );
+});
+
+test("a hung account fetch aborts before permit expiry and releases the permit only after fetch settles", async () => {
+  const listeners = {};
+  const runtimeMessages = [];
+  let abortCount = 0;
+  let accountTimeout = null;
+  let fetchReject = null;
+  let fetchStarted = false;
+  let fetchSettled = false;
+  let fetchCalls = 0;
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: { getAttribute() { return null; }, setAttribute() {} },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
+      ChatGPTConversationSource: {
+        async listAccountConversations(options) {
+          await options.fetchImpl("https://chatgpt.com/backend-api/conversations/hung-0001");
+          return { conversations: [], complete: true, warnings: [] };
+        }
+      },
+      fetch(_url, options) {
+        fetchCalls += 1;
+        fetchStarted = true;
+        return new Promise((_resolve, reject) => {
+          fetchReject = reject;
+          options.signal.addEventListener("abort", () => {
+            abortCount += 1;
+          }, { once: true });
+        });
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/",
+      origin: "https://chatgpt.com",
+      pathname: "/"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        id: "extension-test-id",
+        sendMessage(message, callback) {
+          runtimeMessages.push({
+            type: message.type,
+            fetchSettled
+          });
+          if (message.type === "account.request.acquire") {
+            if (callback) callback({ ok: true, granted: true, permitId: "permit-hung-1" });
+            return;
+          }
+          if (message.type === "account.request.complete") {
+            if (callback) callback({ ok: true, released: true });
+            return;
+          }
+          if (callback) callback({ ok: true });
+        },
+        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
+      }
+    },
+    Headers,
+    AbortController,
+    Date,
+    Math,
+    String,
+    Number,
+    Promise,
+    setTimeout(fn, delay) {
+      if (Number(delay) === 45 * 1000) {
+        accountTimeout = fn;
+        return "account-timeout";
+      }
+      return setTimeout(fn, delay);
+    },
+    clearTimeout(timerId) {
+      if (timerId === "account-timeout") {
+        accountTimeout = null;
+        return;
+      }
+      clearTimeout(timerId);
+    }
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+
+  const listPromise = context.window.__chatgptUsageListConversations();
+  while (!fetchStarted) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(fetchCalls, 1);
+  assert.equal(typeof accountTimeout, "function");
+  assert.equal(
+    runtimeMessages.filter((message) => message.type === "account.request.complete").length,
+    0,
+    "the global permit remains held while the real fetch is still pending"
+  );
+
+  accountTimeout();
+  assert.equal(abortCount, 1, "the timeout must physically abort the hung fetch");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    runtimeMessages.filter((message) => message.type === "account.request.complete").length,
+    0,
+    "calling abort alone must not release the permit before fetch settles"
+  );
+
+  fetchSettled = true;
+  const abortError = new Error("aborted");
+  abortError.name = "AbortError";
+  fetchReject(abortError);
+  await assert.rejects(
+    listPromise,
+    (error) => Boolean(
+      error &&
+      error.code === "account-request-timeout" &&
+      error.stopOperation === true &&
+      error.incomplete === true
+    )
+  );
+  const completions = runtimeMessages.filter((message) => message.type === "account.request.complete");
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0].fetchSettled, true, "permit completion is sent only after the fetch promise settles");
+  assert.equal(fetchCalls, 1, "a timeout marked stopOperation must not be retried");
 });
 
 test("cancelling and releasing an account operation invalidates delayed request slots", async () => {
@@ -228,7 +379,7 @@ test("operation runtime budget stops with an explicit incomplete result before t
           };
         }
         historyFetches += 1;
-        now += 10 * 60 * 1000 + 1;
+        now += 90 * 1000 + 1;
         return { ok: true, status: 200, json: async () => ({}) };
       }
     },
@@ -272,6 +423,195 @@ test("operation runtime budget stops with an explicit incomplete result before t
 
   assert.equal(sessionFetches, 1);
   assert.equal(historyFetches, 1, "the request after the runtime budget must never reach ChatGPT");
+});
+
+test("60-request account-operation cap stops before the next real ChatGPT request starts", async () => {
+  const listeners = {};
+  let now = 0;
+  let sessionFetches = 0;
+  let historyFetches = 0;
+  let timerId = 0;
+  class FakeDate extends Date {
+    constructor(...args) {
+      super(...(args.length ? args : [now]));
+    }
+    static now() {
+      return now;
+    }
+  }
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: { getAttribute() { return null; }, setAttribute() {} },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
+      ChatGPTConversationSource: {
+        async listAccountConversations(options) {
+          for (let index = 0; index < 61; index += 1) {
+            await options.fetchImpl(`https://chatgpt.com/backend-api/conversations/request-${String(index).padStart(4, "0")}`);
+          }
+          return { conversations: [], complete: true, warnings: [] };
+        }
+      },
+      async fetch(url) {
+        if (url === "/api/auth/session") {
+          sessionFetches += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              accessToken: "request-budget-token",
+              account: { id: "request-budget-account" }
+            })
+          };
+        }
+        historyFetches += 1;
+        return { ok: true, status: 200, json: async () => ({}) };
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/",
+      origin: "https://chatgpt.com",
+      pathname: "/"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
+        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
+      }
+    },
+    Headers,
+    Date: FakeDate,
+    Math,
+    String,
+    Number,
+    Promise,
+    setTimeout(fn, delay) {
+      timerId += 1;
+      if (Number(delay) <= 1000) {
+        now += Math.max(0, Number(delay) || 0);
+        Promise.resolve().then(fn);
+      }
+      return timerId;
+    },
+    clearTimeout() {}
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  await assert.rejects(
+    context.window.__chatgptUsageListConversations(),
+    (error) => error &&
+      error.stopOperation === true &&
+      error.incomplete === true &&
+      error.code === "account-request-limit"
+  );
+
+  assert.equal(sessionFetches, 1);
+  assert.equal(historyFetches, 59, "the session read plus 59 history reads consume the 60-request cap");
+  assert.ok(now < 90 * 1000, "the request-count cap must stop before the runtime cap");
+});
+
+test("conversation cap is enforced across multiple selected-export batches without requesting overflow ids", async () => {
+  const listeners = {};
+  const batches = [];
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    documentElement: { getAttribute() { return null; }, setAttribute() {} },
+    addEventListener(type, listener) { listeners[type] = listener; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; }
+  };
+  const context = {
+    window: {
+      ChatGPTUsageDetector: detector,
+      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
+      ChatGPTConversationSource: {
+        async collectConversations(ids) {
+          const received = Array.from(ids);
+          batches.push(received);
+          return {
+            conversations: received.map((id) => ({ id, messages: [{ id: `${id}-message` }] })),
+            failures: [],
+            warnings: [],
+            requestedCount: received.length,
+            complete: true
+          };
+        }
+      },
+      fetch() {
+        return Promise.reject(new Error("the source stub does not use account fetch"));
+      }
+    },
+    document,
+    location: {
+      href: "https://chatgpt.com/c/current-0000",
+      origin: "https://chatgpt.com",
+      pathname: "/c/current-0000"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
+        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
+      }
+    },
+    Headers,
+    Date,
+    Math,
+    String,
+    Number,
+    Object,
+    Promise,
+    setTimeout,
+    clearTimeout
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+  const firstIds = Array.from({ length: 40 }, (_, index) => `first-${String(index).padStart(4, "0")}`);
+  const secondIds = Array.from({ length: 20 }, (_, index) => `second-${String(index).padStart(4, "0")}`);
+  const thirdIds = Array.from({ length: 3 }, (_, index) => `third-${String(index).padStart(4, "0")}`);
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  context.window.__chatgptUsageBeginAccountOperation();
+  const first = await context.window.__chatgptUsageCollectMany(firstIds);
+  const second = await context.window.__chatgptUsageCollectMany(secondIds);
+  const third = await context.window.__chatgptUsageCollectMany(thirdIds);
+
+  assert.equal(batches.length, 2, "a fully rejected batch must not call the account source");
+  assert.deepEqual(batches.map((batch) => batch.length), [40, 10]);
+  assert.equal(first.complete, true);
+  assert.equal(first.attemptedCount, 40);
+  assert.equal(second.complete, false);
+  assert.equal(second.incomplete, true);
+  assert.equal(second.requestedCount, 20);
+  assert.equal(second.attemptedCount, 10);
+  assert.equal(second.conversations.length, 10);
+  assert.deepEqual(Array.from(second.failures, (failure) => failure.id), secondIds.slice(10));
+  assert.equal(second.failures.every((failure) => failure.code === "conversation-count-limit"), true);
+  assert.equal(second.warnings.some((warning) => warning.code === "conversation-count-limit"), true);
+  assert.equal(third.complete, false);
+  assert.equal(third.attemptedCount, 0);
+  assert.equal(third.failures.length, 3);
+  assert.equal(third.failures.every((failure) => failure.code === "conversation-count-limit"), true);
+
+  const messageResult = await new Promise((resolve) => {
+    listeners.runtimeMessage({ type: "conversation.collectMany", ids: thirdIds }, {}, resolve);
+  });
+  assert.equal(messageResult.ok, true);
+  assert.equal(messageResult.incomplete, true);
+  assert.equal(messageResult.attemptedCount, 0);
+  assert.equal(messageResult.code, "conversation-count-limit");
 });
 
 test("final 429 stops later ids and DOM navigation while credentials stay out of messages and storage", async () => {
@@ -361,6 +701,7 @@ test("final 429 stops later ids and DOM navigation while credentials stay out of
       }
     },
     Headers,
+    AbortController,
     URL,
     Date,
     Math,
@@ -771,6 +1112,17 @@ function createPanelDocument(options = {}) {
 function runPanelContentScript(document, options = {}) {
   const messages = [];
   const storageListeners = [];
+  const runtimeListeners = [];
+  const documentListeners = [];
+  const windowListeners = [];
+  const intervals = [];
+  if (options.trackRegistrations && typeof document.addEventListener === "function") {
+    const addDocumentListener = document.addEventListener;
+    document.addEventListener = function trackDocumentListener(type, listener, listenerOptions) {
+      documentListeners.push({ type, listener, options: listenerOptions });
+      return addDocumentListener.call(this, type, listener, listenerOptions);
+    };
+  }
   const location = {
     href: options.href || "https://chatgpt.com/c/test",
     pathname: new URL(options.href || "https://chatgpt.com/c/test").pathname,
@@ -788,6 +1140,11 @@ function runPanelContentScript(document, options = {}) {
         init() {
           return { reload() {} };
         }
+      },
+      addEventListener(type, listener, listenerOptions) {
+        if (options.trackRegistrations) {
+          windowListeners.push({ type, listener, options: listenerOptions });
+        }
       }
     },
     document,
@@ -802,14 +1159,22 @@ function runPanelContentScript(document, options = {}) {
             ? options.onRuntimeMessage(message)
             : { ok: true };
           if (callback) callback(response);
-        }
+        },
+        onMessage: options.trackRegistrations ? {
+          addListener(listener) {
+            runtimeListeners.push(listener);
+          }
+        } : undefined
       },
-      storage: options.storageItems ? {
+      storage: options.storageItems || options.trackRegistrations ? {
         local: {
           get(keys, callback) {
             const result = {};
             (Array.isArray(keys) ? keys : [keys]).forEach((key) => {
-              if (Object.prototype.hasOwnProperty.call(options.storageItems, key)) {
+              if (
+                options.storageItems &&
+                Object.prototype.hasOwnProperty.call(options.storageItems, key)
+              ) {
                 result[key] = options.storageItems[key];
               }
             });
@@ -825,8 +1190,14 @@ function runPanelContentScript(document, options = {}) {
     },
     getComputedStyle: options.getComputedStyle,
     MutationObserver: options.MutationObserver,
-    setInterval: options.setInterval,
+    setTimeout: options.setTimeout || setTimeout,
+    clearTimeout: options.clearTimeout || clearTimeout,
+    setInterval: options.trackRegistrations ? function trackInterval(listener, delay) {
+      intervals.push({ listener, delay });
+      return intervals.length;
+    } : options.setInterval,
     fetch: options.fetch,
+    AbortController,
     Date,
     Math,
     String,
@@ -838,7 +1209,18 @@ function runPanelContentScript(document, options = {}) {
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
   vm.createContext(context);
   vm.runInContext(script, context);
-  return { context, messages, storageListeners };
+  return {
+    context,
+    messages,
+    registrations: {
+      documentListeners,
+      intervals,
+      runtimeListeners,
+      storageListeners,
+      windowListeners
+    },
+    storageListeners
+  };
 }
 
 function usageMessages(messages) {
@@ -1022,6 +1404,49 @@ test("page load makes no model-directory request and opening the statistics pane
   );
 });
 
+test("a failed hover-open model catalog read keeps the five-minute retry cooldown", async () => {
+  const document = createPanelDocument({ titleBar: true });
+  let modelFetches = 0;
+  const { messages } = runPanelContentScript(document, {
+    modelCatalog,
+    fetch: async (url) => {
+      if (String(url).includes("/backend-api/models")) {
+        modelFetches += 1;
+        throw new Error("temporary-network-failure");
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    onRuntimeMessage(message) {
+      if (message.type === "usage.catalog.get") {
+        return { ok: true, catalog: null };
+      }
+      if (message.type === "usage.catalog.refresh.claim") {
+        return { ok: true, claimed: true };
+      }
+      return { ok: true };
+    }
+  });
+
+  const host = document.getElementById("chatgpt-model-usage-counter-panel-host");
+  const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
+  host.listeners.mouseenter();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  toggle.listeners.click();
+  host.listeners.mouseenter();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(modelFetches, 1);
+  assert.equal(
+    messages.filter((message) => message.type === "usage.catalog.refresh.claim").length,
+    1
+  );
+  assert.equal(
+    messages.filter((message) => message.type === "usage.catalog.refresh.release").length,
+    0
+  );
+});
+
 test("an unmapped response stays passive until the user opens the statistics panel", async () => {
   const document = createPanelDocument({ titleBar: true });
   const modelButton = document.querySelector('[data-testid="model-switcher-dropdown-button"]');
@@ -1116,6 +1541,59 @@ test("usage panel re-attaches its entry after ChatGPT re-renders the title bar (
   // 触发 DOM 变化观察者:入口必须被重新挂回去,而不是一次性 disconnect 后一去不返。
   observers.forEach((cb) => { try { cb([], {}); } catch (_) {} });
   assert.equal(host.parentNode, document.titleBar);
+});
+
+test("reinjection never starts a second active content-script instance while the first observer owns remounting", () => {
+  const document = createPanelDocument({ titleBar: true });
+  let observerCount = 0;
+  const { context, registrations } = runPanelContentScript(document, {
+    trackRegistrations: true,
+    MutationObserver: class {
+      constructor() {
+        observerCount += 1;
+      }
+      observe() {}
+      disconnect() {}
+    }
+  });
+  const registrationCounts = () => ({
+    mutationObservers: observerCount,
+    runtimeMessageListeners: registrations.runtimeListeners.length,
+    storageChangeListeners: registrations.storageListeners.length,
+    documentListeners: registrations.documentListeners.length,
+    windowListeners: registrations.windowListeners.length,
+    intervals: registrations.intervals.length
+  });
+  const initialCounts = registrationCounts();
+  const host = document.getElementById("chatgpt-model-usage-counter-panel-host");
+  host.parentNode.children = host.parentNode.children.filter((child) => child !== host);
+  host.parentNode = null;
+  host.parentElement = null;
+
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+  vm.runInContext(script, context);
+
+  assert.deepEqual(
+    initialCounts,
+    {
+      mutationObservers: 2,
+      runtimeMessageListeners: 1,
+      storageChangeListeners: 1,
+      documentListeners: 9,
+      windowListeners: 1,
+      intervals: 1
+    },
+    "one active instance owns the complete observer, listener, and interval set"
+  );
+  assert.deepEqual(
+    registrationCounts(),
+    initialCounts,
+    "reinjection must not duplicate any observer, runtime/storage listener, DOM listener, or interval"
+  );
+  assert.equal(
+    document.documentElement.getAttribute("data-chatgpt-model-usage-content-skip"),
+    "active-instance"
+  );
 });
 
 test("usage panel proactively flags context loss after the extension is reloaded", () => {
@@ -1310,8 +1788,8 @@ test("usage panel opens as a single-scroll dashboard surface", () => {
   const host = document.getElementById("chatgpt-model-usage-counter-panel-host");
   const style = document.getElementById("chatgpt-model-usage-counter-panel-style").textContent;
 
-  assert.match(style, /#chatgpt-model-usage-counter-panel\{[^}]*width:min\(400px,calc\(100vw - 24px\)\)/);
-  assert.match(style, /#chatgpt-model-usage-counter-panel\{[^}]*height:min\(560px,calc\(100vh - 76px\)\)/);
+  assert.match(style, /#chatgpt-model-usage-counter-panel\{[^}]*width:min\(430px,calc\(100vw - 24px\)\)/);
+  assert.match(style, /#chatgpt-model-usage-counter-panel\{[^}]*height:min\(600px,calc\(100vh - 76px\)\)/);
   assert.match(style, /#chatgpt-model-usage-counter-panel\{[^}]*overflow:hidden/);
   assert.match(style, /#chatgpt-model-usage-counter-panel-body\{[^}]*height:100%;[^}]*padding:0;[^}]*overflow:hidden/);
   assert.doesNotMatch(style, /#chatgpt-model-usage-counter-panel\{[^}]*overflow:auto/);
@@ -1453,7 +1931,8 @@ test("content script sends one usage.increment message for a send click", () => 
   assert.equal(usage.length, 1);
   assert.equal(usage[0].type, "usage.increment");
   assert.equal(usage[0].payload.model, "gpt-4o-mini");
-  assert.equal(usage[0].payload.chatgptModel, "gpt-4o-mini");
+  assert.equal(usage[0].payload.requestModel, "");
+  assert.equal(usage[0].payload.chatgptModel, "");
   assert.equal(usage[0].payload.modelObservedSource, "message-dom:dom");
   assert.equal(usage[0].payload.source, "send-button");
   assert.equal(usage[0].payload.promptLength, "Summarize this conversation.".length);
@@ -1601,10 +2080,11 @@ test("generated image output adds the image feature while the unavailable respon
   assert.equal(outcomes[0].payload.featureObservedSource, "message-dom:feature:image-generation");
 });
 
-test("assistant response flushes a pending increment without relying on a throttled background-tab timer", () => {
+test("a final response retries one rejected timer flush as a response-only event", () => {
   const listeners = {};
   const messages = [];
   const timers = [];
+  let stats = background.createEmptyStats();
   let mutationCallback = null;
   const modelButton = new FakeElement({
     innerText: "GPT-5.6 Sol",
@@ -1649,11 +2129,40 @@ test("assistant response flushes a pending increment without relying on a thrott
         lastError: null,
         sendMessage(message, callback) {
           messages.push(message);
-          if (callback) {
-            callback(message.type === "usage.increment"
-              ? { ok: true, recorded: true, event: { model: message.payload.model }, stats: { totals: {} } }
-              : { ok: true, updated: true });
+          if (message.type === "usage.increment") {
+            const before = background.totalCount(stats);
+            stats = background.applyIncrement(
+              stats,
+              message.payload,
+              new Date(message.payload.submittedAt)
+            );
+            const event = stats.events.find(
+              (item) => item.submissionId === message.payload.submissionId
+            ) || null;
+            callback({
+              ok: true,
+              recorded: background.totalCount(stats) > before,
+              duplicate: false,
+              event,
+              stats
+            });
+            return;
           }
+          if (message.type === "usage.response") {
+            const before = JSON.stringify(stats.events);
+            stats = background.applyResponseObservation(
+              stats,
+              message.payload,
+              new Date(message.payload.observedAt)
+            );
+            callback({
+              ok: true,
+              updated: JSON.stringify(stats.events) !== before,
+              stats
+            });
+            return;
+          }
+          if (callback) callback({ ok: true });
         }
       }
     },
@@ -1680,6 +2189,10 @@ test("assistant response flushes a pending increment without relying on a thrott
   listeners.click({ target: sendButton });
 
   assert.equal(usageMessages(messages).length, 0, "public-only selection waits for exact request evidence");
+  assert.equal(timers.length, 1);
+  timers[0].fn();
+  assert.equal(usageMessages(messages).length, 1, "the timer makes one request-evidence attempt");
+  assert.equal(background.totalCount(stats), 0, "an untrusted DOM selection alone is not counted");
   const finalTurn = new FakeElement({
     tagName: "SECTION",
     attributes: { "data-turn": "assistant", "data-turn-id": "delayed-final-turn" }
@@ -1698,11 +2211,343 @@ test("assistant response flushes a pending increment without relying on a thrott
 
   const usage = usageMessages(messages);
   const responses = messages.filter((message) => message.type === "usage.response");
-  assert.equal(usage.length, 1);
+  assert.equal(usage.length, 2);
+  assert.equal(usage[0].payload.submissionId, usage[1].payload.submissionId);
+  assert.equal(usage[0].payload.responseModel, "");
+  assert.equal(responses.length, 0, "the response-first race is stored atomically in the one increment");
+  assert.equal(usage[1].payload.requestModel, "");
+  assert.equal(usage[1].payload.responseModel, "gpt-5-6-thinking");
+  assert.equal(usage[1].payload.modelIdentitySource, "response-model");
+  assert.equal(usage[1].payload.responseObservedSource, "message-dom:model-slug");
+  assert.equal(usage[1].payload.responseMessageId, "assistant-delayed-final");
+  assert.equal(background.totalCount(stats), 1);
+  assert.equal(stats.events.length, 1);
+  assert.equal(stats.events[0].requestModel, "");
+  assert.equal(stats.events[0].requestModelEvidence, "unavailable");
+  assert.equal(stats.events[0].responseModel, "gpt-5-6-thinking");
+  assert.equal(stats.events[0].responseMessageId, "assistant-delayed-final");
+});
+
+test("a final response arriving before the increment callback updates the same submission", () => {
+  const messages = [];
+  let incrementCallback = null;
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    body: new FakeElement({ tagName: "BODY" }),
+    documentElement: { setAttribute() {}, getAttribute() { return null; } },
+    addEventListener() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getElementById() { return null; }
+  };
+  const context = {
+    window: { ChatGPTUsageDetector: detector },
+    document,
+    location: {
+      href: "https://chatgpt.com/c/increment-callback-race",
+      pathname: "/c/increment-callback-race"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          messages.push(message);
+          if (message.type === "usage.increment") {
+            incrementCallback = callback;
+            return;
+          }
+          if (callback) callback({ ok: true, updated: true });
+        }
+      }
+    },
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    Date,
+    Math,
+    String,
+    Number,
+    Set,
+    Map
+  };
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+  const script = source.replace(
+    /\}\)\(\);\s*$/,
+    [
+      "window.__usageIncrementRaceTest = {",
+      "  queue: queueSubmission,",
+      "  finish: finishPendingSubmission,",
+      "  send: sendAssistantOutcomeObservation",
+      "};",
+      "})();"
+    ].join("\n")
+  );
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  const api = context.window.__usageIncrementRaceTest;
+  const submittedAt = Date.now();
+  api.queue(
+    "send-button",
+    "callback race",
+    {
+      label: "GPT-5.6 Sol",
+      apiModel: "gpt-5-6-thinking",
+      parameters: { model: "gpt-5-6-thinking" },
+      selectedPublicModel: "GPT-5.6 Sol",
+      publicModel: "GPT-5.6 Sol",
+      selectedPublicModelSource: "selector-dom",
+      observedSource: "message-dom:dom"
+    },
+    submittedAt,
+    [],
+    "chat",
+    "user-callback-race"
+  );
+  api.finish();
+
+  const increments = usageMessages(messages);
+  assert.equal(increments.length, 1);
+  assert.equal(typeof incrementCallback, "function");
+  assert.equal(
+    api.send(
+      "gpt-5-6-thinking",
+      [],
+      "message-dom:model-slug",
+      submittedAt + 100,
+      "assistant-callback-race",
+      "user-callback-race"
+    ),
+    true
+  );
+  assert.equal(
+    messages.filter((message) => message.type === "usage.response").length,
+    0,
+    "the response waits while the first increment callback is outstanding"
+  );
+
+  incrementCallback({
+    ok: true,
+    recorded: true,
+    event: {
+      submissionId: increments[0].payload.submissionId,
+      conversationId: "increment-callback-race",
+      requestMessageId: "user-callback-race",
+      model: "GPT-5.6 Sol"
+    },
+    stats: { totals: { "GPT-5.6 Sol": 1 } }
+  });
+
+  const responses = messages.filter((message) => message.type === "usage.response");
   assert.equal(responses.length, 1);
-  assert.equal(responses[0].payload.submissionId, usage[0].payload.submissionId);
+  assert.equal(responses[0].payload.submissionId, increments[0].payload.submissionId);
+  assert.equal(responses[0].payload.requestMessageId, "user-callback-race");
   assert.equal(responses[0].payload.responseModel, "gpt-5-6-thinking");
-  assert.equal(responses[0].payload.responseMessageId, "assistant-delayed-final");
+  assert.equal(responses[0].payload.responseMessageId, "assistant-callback-race");
+});
+
+test("regeneration binds the latest user message id and the final response chooses the new submission", () => {
+  const messages = [];
+  const modelButton = new FakeElement({
+    innerText: "GPT-5.6 Sol",
+    attributes: {
+      "data-testid": "model-switcher-dropdown-button",
+      "aria-haspopup": "menu"
+    }
+  });
+  const userMessage = new FakeElement({
+    tagName: "DIV",
+    textContent: "Original user prompt",
+    attributes: {
+      "data-message-author-role": "user",
+      "data-message-id": "user-regenerate"
+    }
+  });
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    body: new FakeElement({ tagName: "BODY" }),
+    documentElement: { setAttribute() {}, getAttribute() { return null; } },
+    addEventListener() {},
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector.includes("model-switcher")) return [modelButton];
+      if (selector.includes('data-message-author-role="user"')) return [userMessage];
+      if (selector.includes("button") || selector.includes('[role="button"]')) return [modelButton];
+      return [];
+    },
+    getElementById() { return null; }
+  };
+  const context = {
+    window: { ChatGPTUsageDetector: detector },
+    document,
+    location: {
+      href: "https://chatgpt.com/c/regeneration-linkage",
+      pathname: "/c/regeneration-linkage"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message) {
+          messages.push(message);
+        }
+      }
+    },
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    Date,
+    Math,
+    String,
+    Number,
+    Set,
+    Map
+  };
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+  const script = source.replace(
+    /\}\)\(\);\s*$/,
+    [
+      "window.__usageRegenerationTest = {",
+      "  remember: rememberPendingResponseObservation,",
+      "  regenerate: recordRegeneration,",
+      "  send: sendAssistantOutcomeObservation,",
+      "  list: function () { return pendingResponseObservations; }",
+      "};",
+      "})();"
+    ].join("\n")
+  );
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  const api = context.window.__usageRegenerationTest;
+
+  api.remember(
+    "older-original-submission",
+    Date.now() - 100,
+    context.location.href,
+    "user-regenerate"
+  );
+  api.regenerate("regenerate");
+  const pending = api.list();
+  assert.equal(pending.length, 2);
+  const newest = pending[pending.length - 1];
+  assert.equal(newest.requestMessageId, "user-regenerate");
+  assert.notEqual(newest.submissionId, "older-original-submission");
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(newest.submission || {}, "promptText"),
+    false,
+    "pending retries retain only a prompt hash and length, never the full prompt"
+  );
+  assert.match(String(newest.submission && newest.submission.promptHash), /^[0-9a-f]+$/);
+  assert.equal(
+    newest.submission && newest.submission.promptLength,
+    "__regenerate__:regeneration-linkage".length,
+    "regeneration retries retain only the synthetic operation identity length, not the user's prompt"
+  );
+
+  assert.equal(
+    api.send(
+      "gpt-5-6-thinking",
+      [],
+      "message-dom:model-slug",
+      Date.now(),
+      "assistant-regenerated",
+      "user-regenerate"
+    ),
+    true
+  );
+  assert.equal(pending[0].responseCandidate, null);
+  assert.equal(newest.responseCandidate.model, "gpt-5-6-thinking");
+  const increments = usageMessages(messages);
+  assert.equal(increments.length, 1);
+  assert.equal(increments[0].payload.submissionId, newest.submissionId);
+  assert.equal(increments[0].payload.requestMessageId, "user-regenerate");
+  assert.equal(increments[0].payload.responseModel, "gpt-5-6-thinking");
+});
+
+test("an explicit unmatched request message id never falls back to an older same-conversation submission", () => {
+  const messages = [];
+  const document = {
+    title: "ChatGPT",
+    readyState: "loading",
+    body: new FakeElement({ tagName: "BODY" }),
+    documentElement: { setAttribute() {}, getAttribute() { return null; } },
+    addEventListener() {},
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getElementById() { return null; }
+  };
+  const context = {
+    window: { ChatGPTUsageDetector: detector },
+    document,
+    location: {
+      href: "https://chatgpt.com/c/exact-response-linkage",
+      pathname: "/c/exact-response-linkage"
+    },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          messages.push(message);
+          if (callback) callback({ ok: true, updated: true });
+        }
+      }
+    },
+    Date,
+    Math,
+    String,
+    Number,
+    Set,
+    Map
+  };
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
+  const script = source.replace(
+    /\}\)\(\);\s*$/,
+    [
+      "window.__usageResponseLinkageTest = {",
+      "  remember: rememberPendingResponseObservation,",
+      "  find: pendingResponseObservationById,",
+      "  markRecorded: markPendingResponseRecorded,",
+      "  send: sendAssistantOutcomeObservation",
+      "};",
+      "})();"
+    ].join("\n")
+  );
+
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  const api = context.window.__usageResponseLinkageTest;
+
+  api.remember("older-submission", 1_000, context.location.href, "user-older");
+  api.markRecorded("older-submission");
+  assert.equal(
+    api.send(
+      "gpt-5-6-thinking",
+      [],
+      "message-dom:model-slug",
+      1_100,
+      "assistant-older",
+      "user-older"
+    ),
+    true
+  );
+  assert.equal(api.find("older-submission").completed, true);
+
+  api.remember("current-submission", 2_000, context.location.href, "user-current");
+  assert.equal(api.find("older-submission"), null, "a completed older entry is cleaned before the new submission");
+  assert.ok(api.find("current-submission"));
+
+  const before = messages.length;
+  assert.equal(
+    api.send(
+      "gpt-5-6-pro",
+      [],
+      "message-dom:model-slug",
+      2_100,
+      "assistant-unmatched",
+      "user-not-present"
+    ),
+    false
+  );
+  assert.equal(messages.length, before);
+  assert.equal(api.find("current-submission").responseCandidate, null);
 });
 
 test("content startup passively recovers a stored pending event from exact visible user and assistant message ids", async () => {
@@ -2002,7 +2847,9 @@ test("content script records Enter submission even when send button markup chang
   const usage = usageMessages(messages);
   assert.equal(usage.length, 1);
   assert.equal(usage[0].payload.model, "gpt-5-thinking");
-  assert.equal(usage[0].payload.chatgptModel, "gpt-5-thinking");
+  assert.equal(usage[0].payload.requestModel, "");
+  assert.equal(usage[0].payload.chatgptModel, "");
+  assert.deepEqual(Object.keys(usage[0].payload.modelParameters), []);
   assert.equal(usage[0].payload.modelMode, "thinking");
   assert.equal(usage[0].payload.modelObservedSource, "message-dom:dom");
   assert.equal(usage[0].payload.source, "enter-key");
@@ -2132,7 +2979,8 @@ test("content script sends DOM model when visible model switcher detected", () =
   assert.equal(usage.length, 1);
   assert.equal(usage[0].payload.model, "gpt-5-thinking");
   assert.equal(usage[0].payload.modelObservedSource, "message-dom:dom");
-  assert.equal(usage[0].payload.modelParameters.model, "gpt-5-thinking");
+  assert.equal(usage[0].payload.requestModel, "");
+  assert.equal(usage[0].payload.modelParameters.model, undefined);
   assert.equal(usage[0].payload.selectedPublicMode, "thinking");
   assert.equal(usage[0].payload.selectedPublicModeLabel, "Thinking");
   assert.equal(usage[0].payload.selectedPublicModeSource, "selector-dom:model-control");
@@ -2210,10 +3058,11 @@ test("visible selected Search control is not stored without exact request eviden
   const usage = usageMessages(messages);
   assert.equal(usage.length, 1);
   assert.equal(usage[0].payload.model, "gpt-5-thinking");
-  assert.equal(usage[0].payload.chatgptModel, "gpt-5-thinking");
+  assert.equal(usage[0].payload.requestModel, "");
+  assert.equal(usage[0].payload.chatgptModel, "");
   assert.equal(usage[0].payload.modelObservedSource, "message-dom:dom");
   assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
-  assert.equal(usage[0].payload.modelParameters.model, "gpt-5-thinking");
+  assert.equal(usage[0].payload.modelParameters.model, undefined);
   assert.equal(usage[0].payload.modelParameters.web_search, undefined);
 });
 

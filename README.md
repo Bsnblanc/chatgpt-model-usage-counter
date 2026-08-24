@@ -47,13 +47,13 @@
 | **折线图** | 显示当前日期、来源、模式和可见模型范围内的每日趋势 |
 | **两级环形图** | 第一级显示所选范围的模型构成；点击模型切换到第二级思考强度构成，并可返回模型占比 |
 | **主题** | 支持跟随系统、浅色和深色；手动主题不依赖 ChatGPT 页面主题 |
-| **共享入口状态** | 页面右上角入口和 Chrome 工具栏弹窗共享语言、主面板、日期、Chat/Work、Basic/Advanced、图表类型、主题、区块显示和两种模式各自的模型可见选择 |
+| **共享入口状态** | 页面右上角入口和 Chrome 工具栏弹窗共享语言、主面板、日期、Chat/Work、Basic/Advanced、主题、折线图/环形图/文字统计显示和两种模式各自的模型可见选择 |
 | **动态角标** | 工具栏角标使用与面板相同的日期范围、Chat/Work、Basic/Advanced 和当前可见模型；显式清空模型时计数为 0 且不显示数字，服务异常时改用 `!` 或 `?` |
 | **逐项选择导出** | 导出列表提供每段对话的复选框、搜索、全选、清空和项目整组选取；当前对话首次加载时排在首位并默认勾选 |
 | **项目目录** | 项目名称只通过明确的项目 ID 与名称证据绑定；名称未知时仍按稳定 ID 分组并显示“未知项目” |
 | **五种对话格式** | 支持 JSON、Markdown、PDF、PNG、DOCX；单选直接下载一个文件，多选下载一个 ZIP，每段对话一个文件并附 `_export-report.json` |
 | **统计数据管理** | 设置中可导出可恢复的统计备份 JSON、用于查看的记录 CSV，并导入受支持的备份 JSON；导入会确认后替换当前全部统计记录，不导入界面设置 |
-| **账号请求保护** | 账号目录和对话读取由用户操作触发；所有标签页共用单请求调度，真实请求起始时间至少间隔 1 秒，并遵守限流、时长和读取数量上限 |
+| **账号请求保护** | 账号目录和对话读取由用户操作触发；所有标签页共用单请求调度，真实请求起始时间至少间隔 1 秒；单次操作最多 50 个对话、60 个请求和 90 秒 |
 | **本地处理** | 统计、备份、CSV 和对话导出都在浏览器本地生成，不上传到发布者服务器 |
 
 ### 安装
@@ -98,13 +98,13 @@ The extension records ChatGPT web submissions, model relationships, and related 
 | **Line chart** | Shows daily trends for the active date, source, mode, and visible-model filters |
 | **Two-level donut chart** | Level one shows model composition; selecting a model drills into its reasoning-effort composition and provides a return action |
 | **Theme** | Supports System, Light, and Dark; a manual theme does not inherit the ChatGPT page theme |
-| **Shared entry state** | The in-page entry and toolbar popup share language, main view, dates, Chat/Work, Basic/Advanced, chart type, theme, section visibility, and separate visible-model choices for both modes |
+| **Shared entry state** | The in-page entry and toolbar popup share language, main view, dates, Chat/Work, Basic/Advanced, theme, independent line/donut/text visibility, and separate visible-model choices for both modes |
 | **Dynamic badge** | The toolbar badge follows the same date range, Chat/Work source, Basic/Advanced mode, and visible models as the panel; an explicit empty model selection counts as zero, while abnormal service status uses `!` or `?` |
 | **Explicit conversation selection** | The export list has one checkbox per conversation plus search, Select all, Clear, and project-group selection; the current chat appears first and is checked only on the initial list load |
 | **Project directories** | Project names require explicit project-ID-to-name evidence; an unresolved project stays grouped by stable ID and is displayed as Unknown project |
 | **Five conversation formats** | JSON, Markdown, PDF, PNG, and DOCX; one selection downloads one file, while multiple selections download one ZIP with one file per conversation and `_export-report.json` |
 | **Statistics data tools** | Settings can export a restorable Backup JSON, export a readable Records CSV, and import a supported backup; import confirms and replaces all current statistics without importing UI settings |
-| **Account-request safeguards** | Account catalog and conversation reads require user action; every tab shares one request scheduler with at least one second between actual request starts plus throttling, duration, and item limits |
+| **Account-request safeguards** | Account catalog and conversation reads require user action; every tab shares one request scheduler with at least one second between actual request starts; one operation is capped at 50 conversations, 60 requests, and 90 seconds |
 | **Local processing** | Statistics, backups, CSV files, and conversation exports are generated locally and are not uploaded to a publisher server |
 
 ### Install

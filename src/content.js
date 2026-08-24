@@ -28,32 +28,17 @@
     var existingHost = typeof document.getElementById === "function"
       ? document.getElementById("chatgpt-model-usage-counter-panel-host")
       : null;
-    var startedAt = Number(window.__chatgptModelUsageCounterStartedAt) || 0;
-    if (existingHost || (startedAt && Date.now() - startedAt < 3000)) {
-      if (document.documentElement && typeof document.documentElement.setAttribute === "function") {
-        document.documentElement.setAttribute(
-          "data-chatgpt-model-usage-content-skip",
-          existingHost ? "already-loaded" : "initializing"
-        );
-      }
-      return;
-    }
-
     if (document.documentElement && typeof document.documentElement.setAttribute === "function") {
-      document.documentElement.setAttribute("data-chatgpt-model-usage-content-stale-flag", "recovered");
+      document.documentElement.setAttribute(
+        "data-chatgpt-model-usage-content-skip",
+        existingHost ? "already-loaded" : "active-instance"
+      );
     }
+    return;
   }
   window.__chatgptModelUsageCounterStartedAt = Date.now();
   if (document.documentElement && typeof document.documentElement.setAttribute === "function") {
     document.documentElement.setAttribute("data-chatgpt-model-usage-content-stage", "loading");
-  }
-
-  if (window.__chatgptModelUsageCounterLoaded) {
-    window.__chatgptModelUsageCounterLoaded = false;
-  }
-
-  if (window.__chatgptModelUsageCounterLoaded) {
-    return;
   }
   window.__chatgptModelUsageCounterLoaded = true;
   if (document.documentElement && typeof document.documentElement.setAttribute === "function") {
@@ -95,8 +80,11 @@
   var ACCOUNT_REQUEST_MIN_GAP_MS = 1000;
   var ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS = 60 * 1000;
   var ACCOUNT_REQUEST_DEFAULT_429_WAIT_MS = 30 * 1000;
-  var ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION = 800;
-  var ACCOUNT_HISTORY_MAX_OPERATION_MS = 10 * 60 * 1000;
+  var ACCOUNT_REQUEST_FETCH_TIMEOUT_MS = 45 * 1000;
+  var ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION = 60;
+  var ACCOUNT_HISTORY_MAX_OPERATION_MS = 90 * 1000;
+  var ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION = 50;
+  var ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE = 6;
   var accountRequestQueue = [];
   var accountRequestActiveCount = 0;
   var accountRequestNextStartAt = 0;
@@ -195,6 +183,87 @@
     error.stopOperation = true;
     error.retryAfterMs = Math.max(0, Number(delayMs) || 0);
     return error;
+  }
+
+  function accountRequestTimeoutError() {
+    var error = new Error("ChatGPT account request timed out and was stopped.");
+    error.code = "account-request-timeout";
+    error.stopOperation = true;
+    error.incomplete = true;
+    return error;
+  }
+
+  function accountFetchWithTimeout(fetchImpl, url, init) {
+    if (typeof fetchImpl !== "function") {
+      return Promise.reject(new Error("ChatGPT account request transport is unavailable."));
+    }
+    var controller = typeof AbortController === "function"
+      ? new AbortController()
+      : null;
+    if (!controller) {
+      if (!initialRuntimeId) {
+        return Promise.resolve().then(function startTestOrLegacyFetch() {
+          return fetchImpl(url, init);
+        });
+      }
+      // Real supported browsers provide AbortController. Refuse to start an
+      // account request when it cannot be physically stopped before the
+      // background permit lease expires.
+      return Promise.reject(accountRequestTimeoutError());
+    }
+    var options = Object.assign({}, init || {});
+    var upstreamSignal = options.signal;
+    var upstreamAbort = null;
+    if (upstreamSignal && upstreamSignal.aborted) {
+      controller.abort();
+    } else if (upstreamSignal && typeof upstreamSignal.addEventListener === "function") {
+      upstreamAbort = function abortFromCaller() {
+        controller.abort();
+      };
+      upstreamSignal.addEventListener("abort", upstreamAbort, { once: true });
+    }
+    options.signal = controller.signal;
+    return new Promise(function runTimedAccountFetch(resolve, reject) {
+      var settled = false;
+      var timedOut = false;
+      var timer = setTimeout(function stopHungAccountFetch() {
+        if (settled) {
+          return;
+        }
+        timedOut = true;
+        try { controller.abort(); } catch (_) {}
+      }, ACCOUNT_REQUEST_FETCH_TIMEOUT_MS);
+      var finish = function finish(callback, value) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (
+          upstreamSignal &&
+          upstreamAbort &&
+          typeof upstreamSignal.removeEventListener === "function"
+        ) {
+          upstreamSignal.removeEventListener("abort", upstreamAbort);
+        }
+        callback(value);
+      };
+      Promise.resolve().then(function startFetch() {
+        return fetchImpl(url, options);
+      }).then(function fetched(response) {
+        if (timedOut) {
+          finish(reject, accountRequestTimeoutError());
+          return;
+        }
+        finish(resolve, response);
+      }, function fetchFailed(error) {
+        if (timedOut) {
+          finish(reject, accountRequestTimeoutError());
+          return;
+        }
+        finish(reject, error);
+      });
+    });
   }
 
   function globalAccountRequestBlockedError(response) {
@@ -477,7 +546,7 @@
       var source = window.ChatGPTConversationSource;
       var scheduledFetch = function scheduledCatalogFetch(url, options) {
         return scheduleAccountRequest(function startCatalogFetch() {
-          return fetch(url, options);
+          return accountFetchWithTimeout(fetch, url, options);
         });
       };
       var catalogRequest = source && typeof source.requestJson === "function"
@@ -517,12 +586,8 @@
         return catalog;
       });
     }).catch(function catalogFailed(error) {
-      delete runtimeModelCatalogRefreshAttempts[refreshKey];
-      runtimeMessage({
-        type: "usage.catalog.refresh.release",
-        reason: String(reason || "panel-open").slice(0, 32),
-        unknownSlug: canonicalRequestModelSlug(unknownSlug || "")
-      });
+      // Keep the local and cross-tab five-minute claim after failures. A hover
+      // must not turn 401/403/5xx or network errors into repeated account reads.
       setDiagnostic("model-catalog-status", "error:" + String((error && error.message) || error || "unknown").slice(0, 80));
       return null;
     }).then(function allowFutureRefresh(result) {
@@ -551,6 +616,21 @@
     }
 
     return (hash >>> 0).toString(16);
+  }
+
+  function promptIdentity(value) {
+    if (value && typeof value === "object") {
+      var storedHash = String(value.hash || "").slice(0, 64);
+      var storedLength = Math.max(0, Math.floor(Number(value.length) || 0));
+      if (storedHash) {
+        return { hash: storedHash, length: storedLength };
+      }
+    }
+    var text = String(value || "");
+    return {
+      hash: hashText(text),
+      length: text.length
+    };
   }
 
   function getElementText(element) {
@@ -643,7 +723,7 @@
   }
 
   function isDuplicate(model, promptText, now) {
-    var key = model + ":" + hashText(promptText);
+    var key = model + ":" + promptIdentity(promptText).hash;
     if (lastSubmission && lastSubmission.key === key && now - lastSubmission.time < DEDUPE_WINDOW_MS) {
       return true;
     }
@@ -1283,6 +1363,10 @@
     }
     if (/^message-dom:model-slug/i.test(String(source || ""))) {
       info.responseModel = canonicalRequestModelSlug(value);
+      // A final assistant model_slug proves only the actual response model.
+      // Keeping it in the request-observation slot lets a response-first race
+      // fabricate requestModel from responseModel.
+      return info;
     }
     info.usageFeatures = normalizeUsageFeatures(observedFeatures);
     lastObservedModelInfo = info;
@@ -1448,6 +1532,7 @@
     }
     removePendingResponseObservation(submissionId);
     prunePendingResponseObservations(submittedAt);
+    clearOlderPendingResponsesForConversation(submittedAt);
     pendingResponseObservations.push({
       submissionId: submissionId,
       submittedAt: Number(submittedAt || Date.now()),
@@ -1456,6 +1541,10 @@
       requestMessageId: sanitizeMessageId(requestMessageId),
       recorded: false,
       sending: false,
+      incrementSending: false,
+      incrementAttempts: 0,
+      completed: false,
+      submission: null,
       responseCandidate: null
     });
   }
@@ -1473,7 +1562,11 @@
   function clearOlderPendingResponsesForConversation(submittedAt) {
     var conversationId = conversationIdFromCurrentLocation();
     pendingResponseObservations = pendingResponseObservations.filter(function keep(item) {
-      return item.conversationId !== conversationId || Number(item.submittedAt || 0) > Number(submittedAt || 0);
+      return (
+        item.conversationId !== conversationId ||
+        !item.completed ||
+        Number(item.submittedAt || 0) > Number(submittedAt || 0)
+      );
     });
   }
 
@@ -1514,6 +1607,7 @@
         if (pending.responseCandidate === candidate) {
           pending.responseCandidate = null;
         }
+        pending.completed = true;
         setDiagnostic("last-response-status", response.updated ? "updated" : "unchanged");
         if (candidate.model) {
           setDiagnostic("last-response-model", candidate.model);
@@ -1536,8 +1630,33 @@
       return false;
     }
     pending.recorded = true;
+    pending.incrementSending = false;
     dispatchPendingResponseObservation(pending);
     return true;
+  }
+
+  function retryPendingUsageIncrement(pending) {
+    if (
+      !pending ||
+      pending.recorded ||
+      pending.incrementSending ||
+      Number(pending.incrementAttempts || 0) >= 2 ||
+      !pending.responseCandidate ||
+      !pending.submission
+    ) {
+      return false;
+    }
+    var item = pending.submission;
+    return sendUsage(
+      item.source,
+      { hash: item.promptHash, length: item.promptLength },
+      item.domModelInfo,
+      item.time,
+      item.usageFeatures,
+      item.submissionId,
+      item.sourceMode,
+      true
+    );
   }
 
   function sendAssistantOutcomeObservation(
@@ -1567,8 +1686,10 @@
           break;
         }
       }
-    }
-    if (matchIndex < 0) {
+      if (matchIndex < 0) {
+        return false;
+      }
+    } else {
       for (var index = pendingResponseObservations.length - 1; index >= 0; index -= 1) {
         var pendingConversationId = pendingResponseObservations[index].conversationId;
         if (
@@ -1606,7 +1727,11 @@
       responseMessageId: String(responseMessageId || "").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 160),
       observedAt: Number(observedAt || Date.now())
     };
-    dispatchPendingResponseObservation(pending);
+    if (pending.recorded) {
+      dispatchPendingResponseObservation(pending);
+    } else {
+      retryPendingUsageIncrement(pending);
+    }
     return true;
   }
 
@@ -1621,43 +1746,68 @@
     );
   }
 
-  function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures, submissionId, sourceMode) {
+  function sendUsage(source, promptText, modelInfo, now, pendingUsageFeatures, submissionId, sourceMode, isRetry) {
+    var submittedPrompt = promptIdentity(promptText);
     var resolved = hasResolvedModel(modelInfo);
+    var exactRequest = resolved && isExactRequestModelSource(modelInfo.observedSource);
+    var hasSelection = hasSubmittedPublicSelection(modelInfo);
     var model = resolved ? modelInfo.label : "";
-    var apiModel = resolved ? modelInfo.apiModel : "";
-    var chatgptModel = resolved ? modelInfo.chatgptModel || "" : "";
+    var apiModel = exactRequest ? modelInfo.apiModel : "";
+    var chatgptModel = exactRequest ? modelInfo.chatgptModel || "" : "";
     var modelMode = resolved ? modelInfo.mode || "" : "";
-    var modelParameters = resolved ? modelInfo.parameters : {};
-    var publicModel = resolved ? modelInfo.selectedPublicModel || modelInfo.publicModel || "" : "";
-    var selectedPublicModelSource = resolved
+    var modelParameters = exactRequest ? modelInfo.parameters : {};
+    var publicModel = resolved || hasSelection
+      ? modelInfo.selectedPublicModel || modelInfo.publicModel || ""
+      : "";
+    var selectedPublicModelSource = resolved || hasSelection
       ? modelInfo.selectedPublicModelSource || (publicModel ? "selector-dom" : "")
       : "";
-    var selectedPublicModeMetadata = resolved
+    var selectedPublicModeMetadata = resolved || hasSelection
       ? submittedPublicModeMetadata(modelInfo)
       : submittedPublicModeMetadata(null);
-    var requestModel = resolved ? modelInfo.requestModel || modelParameters.model || apiModel : "";
+    var requestModel = exactRequest
+      ? modelInfo.requestModel || modelParameters.model || apiModel
+      : "";
     rememberRuntimeModelSlug(requestModel);
     var pendingResponse = pendingResponseObservationById(submissionId);
+    if (pendingResponse && pendingResponse.incrementSending) {
+      return false;
+    }
+    var responseCandidate = pendingResponse && pendingResponse.responseCandidate
+      ? pendingResponse.responseCandidate
+      : null;
     var requestMessageId = sanitizeMessageId(
       (pendingResponse && pendingResponse.requestMessageId) ||
       (modelInfo && modelInfo.requestMessageId)
     );
-    // A submit-time observation proves the request route, not the final
-    // assistant model. The latter is written only by usage.response after the
-    // final content-bearing assistant message exposes metadata.model_slug.
-    var responseModel = "";
+    var responseModel = responseCandidate &&
+      isActualRequestModelSlug(responseCandidate.model)
+      ? canonicalRequestModelSlug(responseCandidate.model)
+      : "";
+    var responseObservedAt = responseModel
+      ? new Date(Number(responseCandidate.observedAt || now)).toISOString()
+      : "";
+    var responseObservedSource = responseModel
+      ? String(responseCandidate.modelObservedSource || "message-dom:model-slug").slice(0, 64)
+      : "";
+    var responseMessageId = responseModel
+      ? sanitizeMessageId(responseCandidate.responseMessageId)
+      : "";
     var observedSource = resolved ? modelInfo.observedSource || "page" : "pending-webRequest";
-    var usageFeatures = resolved ? normalizeUsageFeatures(modelInfo.usageFeatures) : normalizeUsageFeatures(pendingUsageFeatures);
-    var duplicateKey = model || "pending-webRequest";
-    if (isDuplicate(duplicateKey, promptText, now)) {
+    var usageFeatures = normalizeUsageFeatures([].concat(
+      exactRequest ? modelInfo.usageFeatures || [] : pendingUsageFeatures || [],
+      responseCandidate && responseCandidate.usageFeatures || []
+    ));
+    var duplicateKey = model || responseModel || "pending-webRequest";
+    if (!isRetry && isDuplicate(duplicateKey, promptText, now)) {
       removePendingResponseObservation(submissionId);
       return false;
     }
-    if (source !== "message-dom" && lastComposerSnapshot && lastComposerSnapshot.hash === hashText(promptText)) {
+    if (source !== "message-dom" && lastComposerSnapshot && lastComposerSnapshot.hash === submittedPrompt.hash) {
       lastComposerSnapshot = null;
     }
     if (source !== "message-dom") {
-      lastDirectSubmission = { hash: hashText(promptText), time: now };
+      lastDirectSubmission = { hash: submittedPrompt.hash, time: now };
     }
 
     var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
@@ -1681,6 +1831,10 @@
       setDiagnostic("last-record-parameters", "");
     }
     setDiagnostic("last-record-source", source);
+    if (pendingResponse) {
+      pendingResponse.incrementSending = true;
+      pendingResponse.incrementAttempts = Number(pendingResponse.incrementAttempts || 0) + 1;
+    }
     try {
     runtime.sendMessage(
       {
@@ -1697,6 +1851,10 @@
           chatgptModel: chatgptModel,
           requestModel: requestModel,
           responseModel: responseModel,
+          responseObservedAt: responseObservedAt,
+          responseObservedSource: responseObservedSource,
+          responseMessageId: responseMessageId,
+          modelIdentitySource: responseModel ? "response-model" : "request-model",
           modelMode: modelMode,
           modelParameters: modelParameters,
           runtimeModelCatalog: runtimeModelCatalog,
@@ -1709,11 +1867,15 @@
           pageUrl: location.href,
           pageTitle: document.title,
           submittedAt: new Date(now).toISOString(),
-          promptHash: hashText(promptText),
-          promptLength: promptText.length
+          promptHash: submittedPrompt.hash,
+          promptLength: submittedPrompt.length
         }
       },
       function recordResponse(response) {
+        var pending = pendingResponseObservationById(submissionId);
+        if (pending) {
+          pending.incrementSending = false;
+        }
         if (runtime.lastError) {
           removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "error:" + runtime.lastError.message);
@@ -1729,19 +1891,30 @@
         }
 
         if (!response.recorded && response.duplicate) {
-          removePendingResponseObservation(submissionId);
+          if (pending && response.event) {
+            pending.requestMessageId = sanitizeMessageId(
+              response.event.requestMessageId || pending.requestMessageId
+            );
+            pending.conversationId = String(
+              response.event.conversationId || pending.conversationId || ""
+            ).slice(0, 128);
+            pending.recorded = true;
+            pending.submission = null;
+            dispatchPendingResponseObservation(pending);
+          } else {
+            removePendingResponseObservation(submissionId);
+          }
           setDiagnostic("last-record-status", "duplicate");
           return;
         }
 
         if (!response.recorded) {
-          removePendingResponseObservation(submissionId);
           setDiagnostic("last-record-status", "blocked:no-request-model");
+          retryPendingUsageIncrement(pending);
           return;
         }
 
         var event = response.event || {};
-        var pending = pendingResponseObservationById(submissionId);
         if (pending) {
           pending.requestMessageId = sanitizeMessageId(
             event.requestMessageId || pending.requestMessageId
@@ -1749,6 +1922,14 @@
           pending.conversationId = String(
             event.conversationId || pending.conversationId || ""
           ).slice(0, 128);
+          if (
+            responseModel &&
+            pending.responseCandidate === responseCandidate
+          ) {
+            pending.responseCandidate = null;
+            pending.completed = true;
+          }
+          pending.submission = null;
         }
         markPendingResponseRecorded(submissionId);
         if (event.model) {
@@ -1772,6 +1953,9 @@
       }
     );
     } catch (sendError) {
+      if (pendingResponse) {
+        pendingResponse.incrementSending = false;
+      }
       var sendErrorMessage = sendError && sendError.message ? sendError.message : "send-failed";
       removePendingResponseObservation(submissionId);
       setDiagnostic("last-record-status", "error:" + sendErrorMessage);
@@ -1831,6 +2015,9 @@
         modelInfo.selectedPublicModeLabel = submittedMode.selectedPublicModeLabel;
         modelInfo.selectedPublicModeSource = submittedMode.selectedPublicModeSource;
       }
+      if (!modelInfo && selectorInfo) {
+        modelInfo = selectorInfo;
+      }
       // Only exact request fields can prove a used feature. Visible composer
       // controls remain diagnostics and never become stored usage evidence.
       if (hasResolvedModel(modelInfo)) {
@@ -1838,7 +2025,15 @@
           ? normalizeUsageFeatures(observed.usageFeatures)
           : [];
       }
-      sendUsage(item.source, item.promptText, modelInfo, item.time, [], item.submissionId, item.sourceMode);
+      sendUsage(
+        item.source,
+        { hash: item.promptHash, length: item.promptLength },
+        modelInfo,
+        item.time,
+        [],
+        item.submissionId,
+        item.sourceMode
+      );
     });
     return true;
   }
@@ -1893,16 +2088,22 @@
       location.href,
       requestMessageId
     );
-    pendingSubmissions.push({
+    var submission = {
       submissionId: submissionId,
       source: source,
-      promptText: promptText,
+      promptHash: hash,
+      promptLength: promptText.length,
       domModelInfo: hasResolvedModel(domModelInfo) || hasSubmittedPublicSelection(domModelInfo) ? domModelInfo : null,
       usageFeatures: normalizeUsageFeatures(usageFeatures),
       sourceMode: normalizeSourceMode(sourceMode),
       time: now,
       hash: hash
-    });
+    };
+    pendingSubmissions.push(submission);
+    var pendingResponse = pendingResponseObservationById(submissionId);
+    if (pendingResponse) {
+      pendingResponse.submission = submission;
+    }
     schedulePendingSubmissionFlush();
   }
 
@@ -1926,6 +2127,14 @@
 
   function recordRegeneration(source) {
     var now = Date.now();
+    var messages = collectUserMessages();
+    var requestMessageId = "";
+    for (var index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index] && messages[index].messageId) {
+        requestMessageId = sanitizeMessageId(messages[index].messageId);
+        break;
+      }
+    }
     queueSubmission(
       source,
       "__regenerate__:" + (conversationIdFromCurrentLocation() || "new"),
@@ -1933,7 +2142,7 @@
       now,
       [],
       readSourceMode(),
-      ""
+      requestMessageId
     );
   }
 
@@ -2230,13 +2439,13 @@
       return false;
     }
     var observedAt = Date.now();
-    rememberObservedModel(
+    rememberRuntimeModelSlug(message.model);
+    var queued = sendResponseObservation(
       message.model,
       "message-dom:model-slug",
       observedAt,
-      false,
-      { model: message.model },
-      []
+      message.messageId,
+      message.requestMessageId
     );
     // Background tabs can throttle the delayed submission timer for minutes.
     // A final assistant message proves that the request has already reached
@@ -2244,13 +2453,7 @@
     // Flush the still-pending increment synchronously, then reconcile this
     // exact response against the same submission without adding a second use.
     flushPendingSubmission();
-    return sendResponseObservation(
-      message.model,
-      "message-dom:model-slug",
-      observedAt,
-      message.messageId,
-      message.requestMessageId
-    );
+    return queued;
   }
 
   function scanNewAssistantModelMessages() {
@@ -2536,7 +2739,7 @@
       "#chatgpt-model-usage-counter-panel-host.is-fallback #chatgpt-model-usage-counter-panel-toggle{width:28px;height:28px;padding:0;border-color:var(--usage-border-control,#d1d5db);background:var(--usage-surface-panel,#fff);color:var(--usage-text-primary,#111827);box-shadow:0 6px 18px var(--usage-shadow-export,rgba(15,23,42,.16));font-size:0}",
       "#chatgpt-model-usage-counter-panel-host.is-fallback #chatgpt-model-usage-counter-panel-toggle::after{content:'U';font-size:12px;font-weight:700}",
       // 统计入口不再随 OpenAI 状态变色(用户:不要那个奶油色/警告样式);状态提示保留在面板状态页与工具栏角标。
-      "#chatgpt-model-usage-counter-panel{position:fixed;z-index:2147483647;top:52px;right:12px;box-sizing:border-box;width:min(400px,calc(100vw - 24px));height:min(560px,calc(100vh - 76px));overflow:hidden;border:1px solid var(--usage-border-panel,rgba(24,32,28,.14));border-radius:8px;background:var(--usage-surface-panel,#fbfcfa);color:var(--usage-text-primary,#18201c);box-shadow:0 18px 42px var(--usage-shadow-export,rgba(24,32,28,.14))}",
+      "#chatgpt-model-usage-counter-panel{position:fixed;z-index:2147483647;top:52px;right:12px;box-sizing:border-box;width:min(430px,calc(100vw - 24px));height:min(600px,calc(100vh - 76px));overflow:hidden;border:1px solid var(--usage-border-panel,rgba(24,32,28,.14));border-radius:8px;background:var(--usage-surface-panel,#fbfcfa);color:var(--usage-text-primary,#18201c);box-shadow:0 18px 42px var(--usage-shadow-export,rgba(24,32,28,.14))}",
       "#chatgpt-model-usage-counter-panel-body{height:100%;padding:0;overflow:hidden}",
       "@media (max-width:720px){#chatgpt-model-usage-counter-panel{left:10px;right:10px;top:48px;width:auto;height:calc(100vh - 64px)}}"
     ].join("");
@@ -2551,6 +2754,7 @@
     var currentPanelThemeMode = "system";
     var currentStatusRecord = null;
     var lastMountedLocation = "";
+    var panelCloseTimer = null;
 
     function hasDarkClass(element) {
       return Boolean(element && /(^|\s)dark(\s|$)/i.test(String(element.className || "")));
@@ -3119,6 +3323,10 @@
     }
 
     function openPanel() {
+      if (panelCloseTimer) {
+        clearTimeout(panelCloseTimer);
+        panelCloseTimer = null;
+      }
       panel.hidden = false;
       toggleButton.setAttribute("aria-expanded", "true");
       reconcileStoredPendingResponses(true);
@@ -3141,8 +3349,50 @@
     }
 
     function closePanel() {
+      if (panelCloseTimer) {
+        clearTimeout(panelCloseTimer);
+        panelCloseTimer = null;
+      }
       panel.hidden = true;
       toggleButton.setAttribute("aria-expanded", "false");
+    }
+
+    function schedulePanelClose(event) {
+      var nextTarget = event && event.relatedTarget;
+      if (
+        nextTarget &&
+        (
+          (typeof panel.contains === "function" && panel.contains(nextTarget)) ||
+          (typeof host.contains === "function" && host.contains(nextTarget))
+        )
+      ) {
+        return;
+      }
+      if (panelCloseTimer) {
+        clearTimeout(panelCloseTimer);
+      }
+      panelCloseTimer = setTimeout(function closeAfterPointerLeavesEntryAndPanel() {
+        panelCloseTimer = null;
+        try {
+          if (
+            (typeof panel.matches === "function" && panel.matches(":hover")) ||
+            (typeof host.matches === "function" && host.matches(":hover"))
+          ) {
+            return;
+          }
+        } catch (_) {}
+        closePanel();
+      }, 180);
+    }
+
+    function keepPanelOpenOnHover() {
+      if (panelCloseTimer) {
+        clearTimeout(panelCloseTimer);
+        panelCloseTimer = null;
+      }
+      if (panel.hidden && !extensionContextLost && !extensionContextSeemsLost()) {
+        openPanel();
+      }
     }
 
     attachHost();
@@ -3150,6 +3400,11 @@
     // 始终观察并在入口掉了时重挂(过去只在初次落到 fallback 才观察,导致已嵌入标题栏的入口
     // 在 ChatGPT 重渲染标题栏后——尤其多对话导出逐个切换对话时——掉了就再也回不来)。
     observePanelMount();
+
+    host.addEventListener("mouseenter", keepPanelOpenOnHover);
+    host.addEventListener("mouseleave", schedulePanelClose);
+    panel.addEventListener("mouseenter", keepPanelOpenOnHover);
+    panel.addEventListener("mouseleave", schedulePanelClose);
 
     toggleButton.addEventListener("click", function toggle() {
       if (extensionContextLost || extensionContextSeemsLost()) {
@@ -3163,8 +3418,7 @@
         openPanel();
         return;
       }
-      panel.hidden = true;
-      toggleButton.setAttribute("aria-expanded", "false");
+      closePanel();
     });
   }
 
@@ -4071,6 +4325,8 @@
           generation: Number(generation),
           startedAt: Date.now(),
           requestCount: 0,
+          conversationIds: Object.create(null),
+          conversationCount: 0,
           stopError: null
         };
       }
@@ -4080,7 +4336,7 @@
       if (Date.now() - accountHistoryOperationBudget.startedAt >= ACCOUNT_HISTORY_MAX_OPERATION_MS) {
         throw accountHistoryLimitError(
           "account-operation-time-limit",
-          "ChatGPT account reading stopped after 10 minutes; remaining account data was not read.",
+          "ChatGPT account reading stopped after 90 seconds; remaining account data was not read.",
           generation
         );
       }
@@ -4102,6 +4358,30 @@
       return budget.requestCount;
     }
 
+    function reserveAccountHistoryConversations(ids, generation) {
+      var budget = ensureAccountHistoryBudget(generation);
+      var accepted = [];
+      var rejected = [];
+      uniqueIds(ids).forEach(function reserve(id) {
+        if (budget.conversationIds[id]) {
+          accepted.push(id);
+          return;
+        }
+        if (budget.conversationCount >= ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION) {
+          rejected.push(id);
+          return;
+        }
+        budget.conversationIds[id] = true;
+        budget.conversationCount += 1;
+        accepted.push(id);
+      });
+      return {
+        accepted: accepted,
+        rejected: rejected,
+        limit: ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION
+      };
+    }
+
     function beginAccountHistoryOperation() {
       accountHistoryOperationGeneration += 1;
       accountHistoryCancelled = false;
@@ -4110,6 +4390,8 @@
         generation: accountHistoryOperationGeneration,
         startedAt: Date.now(),
         requestCount: 0,
+        conversationIds: Object.create(null),
+        conversationCount: 0,
         stopError: null
       };
       return true;
@@ -4157,7 +4439,7 @@
             throw accountHistoryOperationError(generation);
           }
           reserveAccountHistoryRequest(generation);
-          return window.fetch(url, options);
+          return accountFetchWithTimeout(window.fetch, url, options);
         });
       };
       var sessionRequest = source && typeof source.requestJson === "function"
@@ -4264,7 +4546,7 @@
           options.method = "GET";
           options.credentials = "include";
           options.cache = "no-store";
-          return window.fetch(parsedUrl.href, options);
+          return accountFetchWithTimeout(window.fetch, parsedUrl.href, options);
         });
       }).then(function refreshExpiredSession(response) {
         if (!accountHistoryOperationIsActive(operationGeneration)) {
@@ -4292,8 +4574,8 @@
           includeArchived: true,
           pageSize: 100,
           concurrency: 1,
-          maxIndexPagesPerScope: 6,
-          maxConversationsPerOperation: 500,
+          maxIndexPagesPerScope: ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE,
+          maxConversationsPerOperation: ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION,
           maxMessagePagesPerConversation: 50,
           maxMessagesPerConversation: 10000,
           // The shared content-script scheduler owns the actual network start
@@ -4547,11 +4829,86 @@
 
     function collectSelectedConversations(ids, perDelayMs) {
       var targets = uniqueIds(ids);
+      var generation = accountHistoryOperationGeneration;
+      var reservation = reserveAccountHistoryConversations(targets, generation);
+      var accepted = reservation.accepted;
+      var rejected = reservation.rejected;
       var account = accountSourceOptions();
-      var primary = account
-        ? account.source.collectConversations(targets, account.options)
-        : Promise.reject(new Error("Account history access is unavailable."));
-      return collectWithDomFallback(targets, primary, perDelayMs);
+      var primary;
+      if (!accepted.length) {
+        primary = Promise.resolve({
+          conversations: [],
+          failures: [],
+          warnings: [],
+          requestedCount: 0,
+          attemptedCount: 0,
+          complete: true
+        });
+      } else {
+        primary = account
+          ? account.source.collectConversations(accepted, account.options)
+          : Promise.reject(new Error("Account history access is unavailable."));
+      }
+      return collectWithDomFallback(accepted, primary, perDelayMs).then(function includeRejected(result) {
+        if (!rejected.length) {
+          return Object.assign({}, result, {
+            requestedCount: targets.length,
+            attemptedCount: accepted.length
+          });
+        }
+        var rejectionMessage = "Conversation was not requested because the account operation limit of " +
+          reservation.limit +
+          " conversations was reached.";
+        var conversationsById = Object.create(null);
+        var failuresById = Object.create(null);
+        (result.conversations || []).forEach(function rememberConversation(conversation) {
+          if (conversation && conversation.id) {
+            conversationsById[conversation.id] = conversation;
+          }
+        });
+        (result.failures || []).forEach(function rememberFailure(failure) {
+          if (failure && failure.id) {
+            failuresById[failure.id] = failure;
+          }
+        });
+        rejected.forEach(function rememberRejected(id) {
+          failuresById[id] = {
+            id: id,
+            code: "conversation-count-limit",
+            error: rejectionMessage
+          };
+        });
+        return {
+          conversations: targets.reduce(function orderedConversations(out, id) {
+            if (conversationsById[id]) {
+              out.push(conversationsById[id]);
+            }
+            return out;
+          }, []),
+          failures: targets.reduce(function orderedFailures(out, id) {
+            if (failuresById[id]) {
+              out.push(failuresById[id]);
+            }
+            return out;
+          }, []),
+          warnings: (result.warnings || []).concat([{
+            scope: "account-details",
+            code: "conversation-count-limit",
+            error: "ChatGPT account reading was limited to " +
+              reservation.limit +
+              " selected conversations for this operation; " +
+              rejected.length +
+              " remaining conversation" +
+              (rejected.length === 1 ? " was" : "s were") +
+              " not requested."
+          }]),
+          requestedCount: targets.length,
+          attemptedCount: accepted.length,
+          complete: false,
+          incomplete: true,
+          code: "conversation-count-limit"
+        };
+      });
     }
 
     // 暴露给同一隔离世界里的页面内面板直接调用；弹窗面板走 chrome.tabs 消息。
@@ -4587,6 +4944,7 @@
               conversations: result.conversations,
               total: result.total,
               complete: result.complete,
+              incomplete: Boolean(result.incomplete || result.complete === false),
               source: result.source,
               warnings: result.warnings,
               stopped: Boolean(result.stopped),
@@ -4607,7 +4965,9 @@
               failures: result.failures,
               warnings: result.warnings || [],
               requestedCount: result.requestedCount,
+              attemptedCount: result.attemptedCount,
               complete: result.complete,
+              incomplete: Boolean(result.incomplete || result.complete === false),
               stopped: Boolean(result.stopped || result.stopOperation),
               code: String(result.code || "")
             });

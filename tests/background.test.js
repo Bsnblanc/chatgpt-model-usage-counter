@@ -55,6 +55,21 @@ test("account request coordinator exports the enforced single-request safety lim
   assert.equal(background.ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS, 60000);
 });
 
+test("ordinary ChatGPT tab metadata updates do not reinject the full content-script stack", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
+  const listener = source.match(
+    /addChromeListener\(chrome\.tabs && chrome\.tabs\.onUpdated,[\s\S]*?\n\s*\}\);/
+  );
+  assert.ok(listener, "tabs.onUpdated listener is present");
+  assert.match(listener[0], /changeInfo && changeInfo\.url && isChatGPTUrl\(changeInfo\.url\)/);
+  assert.match(listener[0], /changeInfo && changeInfo\.status === "complete"/);
+  assert.doesNotMatch(
+    listener[0],
+    /var url = \(changeInfo && changeInfo\.url\) \|\| \(tab && tab\.url\)/,
+    "title, favicon, and other metadata updates must not trigger reinjection"
+  );
+});
+
 function acquireAccountPermit(tabId, url = "https://chatgpt.com/") {
   return new Promise((resolve) => {
     background._testAccountRequests.acquire(
@@ -794,6 +809,37 @@ test("actual response slug overrides the requested route while preserving the re
   assert.equal(routedToLuna.variantsByModel["GPT-5.6 Luna"].variants["gpt-5-6-mini"].count, 1);
 });
 
+test("Chat keeps the submit-time public model when the exact request and response route are identical", () => {
+  const submittedAt = "2026-08-24T10:54:14.854Z";
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "same-route-public-chat",
+      selectedPublicModel: "GPT-4o mini",
+      selectedPublicModelSource: "selector-dom",
+      requestModel: "gpt-4o-mini",
+      responseModel: "gpt-4o-mini",
+      responseObservedAt: submittedAt,
+      responseObservedSource: "message-dom:model-slug",
+      apiModel: "gpt-4o-mini",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-4o-mini" },
+      sourceMode: "chat",
+      source: "send-button",
+      submittedAt,
+      pageUrl: "https://chatgpt.com/c/same-route-public-chat",
+      pageTitle: "Same route public Chat"
+    },
+    new Date(submittedAt)
+  );
+
+  assert.deepEqual(next.totals, { "GPT-4o mini": 1 });
+  assert.equal(next.events[0].requestModel, "gpt-4o-mini");
+  assert.equal(next.events[0].responseModel, "gpt-4o-mini");
+  assert.equal(next.events[0].publicModel, "GPT-4o mini");
+  assert.equal(next.events[0].publicModelSource, "selector+same-route");
+});
+
 test("visible labels and answer text cannot override exact response metadata", () => {
   const next = background.applyIncrement(
     background.createEmptyStats(),
@@ -1019,6 +1065,121 @@ test("late response reconciliation moves one existing count without incrementing
   assert.equal(repeated.events.length, 1);
   assert.deepEqual(repeated.events, reconciled.events);
   assert.equal(repeated.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-pro"].count, 1);
+});
+
+test("a response-only event later accepts exact request evidence without incrementing", () => {
+  const submittedAt = "2026-08-24T12:00:00.000Z";
+  const responseOnly = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "response-only-then-request",
+      requestModel: "",
+      responseModel: "gpt-5-6-thinking",
+      responseObservedAt: "2026-08-24T12:00:05.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      responseMessageId: "assistant-response-only",
+      modelIdentitySource: "response-model",
+      modelObservedSource: "pending-webRequest",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      source: "send-button",
+      sourceMode: "chat",
+      pageUrl: "https://chatgpt.com/c/response-only-conversation",
+      submittedAt,
+      promptHash: "response-only-prompt",
+      promptLength: 20
+    },
+    new Date(submittedAt)
+  );
+
+  assert.equal(background.totalCount(responseOnly), 1);
+  assert.equal(responseOnly.events[0].requestModel, "");
+  assert.equal(responseOnly.events[0].requestModelEvidence, "unavailable");
+  assert.equal(responseOnly.events[0].responseModel, "gpt-5-6-thinking");
+
+  const enriched = background.applyIncrement(
+    responseOnly,
+    {
+      submissionId: "response-only-then-request",
+      requestModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelParameters: {
+        model: "gpt-5-6-thinking",
+        "reasoning.effort": "high"
+      },
+      modelObservedSource: "webRequest",
+      requestMessageId: "user-response-only",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      usageFeatures: ["web_search"],
+      source: "send-button",
+      sourceMode: "chat",
+      pageUrl: "https://chatgpt.com/c/response-only-conversation",
+      submittedAt,
+      promptHash: "response-only-prompt",
+      promptLength: 20
+    },
+    new Date("2026-08-24T12:00:06.000Z")
+  );
+
+  assert.equal(background.totalCount(enriched), 1);
+  assert.equal(enriched.events.length, 1);
+  assert.equal(enriched.events[0].requestModel, "gpt-5-6-thinking");
+  assert.equal(enriched.events[0].requestModelEvidence, "trusted");
+  assert.equal(enriched.events[0].responseModel, "gpt-5-6-thinking");
+  assert.equal(enriched.events[0].requestMessageId, "user-response-only");
+  assert.equal(enriched.events[0].responseMessageId, "assistant-response-only");
+  assert.equal(enriched.events[0].requestReasoningEffort, "high");
+  assert.deepEqual(enriched.events[0].usageFeatures, ["web_search"]);
+});
+
+test("response reconciliation rejects conflicting or unmatched explicit request message ids", () => {
+  const submittedAt = "2026-08-24T12:10:00.000Z";
+  const initial = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "request-id-conflict",
+      requestModel: "gpt-5-6-thinking",
+      apiModel: "gpt-5-6-thinking",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      modelObservedSource: "webRequest",
+      requestMessageId: "user-original",
+      pageUrl: "https://chatgpt.com/c/request-id-conflict",
+      submittedAt,
+      promptHash: "request-id-conflict",
+      promptLength: 12
+    },
+    new Date(submittedAt)
+  );
+
+  const submissionConflict = background.applyResponseObservation(
+    initial,
+    {
+      submissionId: "request-id-conflict",
+      conversationId: "request-id-conflict",
+      requestMessageId: "user-different",
+      responseModel: "gpt-5-6-pro",
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-08-24T12:10:05.000Z"
+    },
+    new Date("2026-08-24T12:10:05.000Z")
+  );
+  assert.equal(submissionConflict.events[0].submissionId, "request-id-conflict");
+  assert.equal(submissionConflict.events[0].requestMessageId, "user-original");
+  assert.equal(submissionConflict.events[0].responseModel, "");
+
+  const unmatchedMessage = background.applyResponseObservation(
+    initial,
+    {
+      conversationId: "request-id-conflict",
+      requestMessageId: "user-not-present",
+      responseModel: "gpt-5-6-pro",
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-08-24T12:10:06.000Z"
+    },
+    new Date("2026-08-24T12:10:06.000Z")
+  );
+  assert.equal(unmatchedMessage.events[0].submissionId, "request-id-conflict");
+  assert.equal(unmatchedMessage.events[0].requestMessageId, "user-original");
+  assert.equal(unmatchedMessage.events[0].responseModel, "");
 });
 
 test("a generated-image outcome adds its feature to the same event without inventing a response model", () => {
@@ -4440,9 +4601,16 @@ test("badgeText keeps action badge compact", () => {
   assert.equal(background.badgeText(0), "");
   assert.equal(background.badgeText(12), "12");
   assert.equal(background.badgeText(99), "99");
-  // 数字大就用很短的 99+,避免长数字盖住工具栏图标
+  // Badge-safe toolbar artwork reserves Chrome's overlay area; 99+ caps width.
   assert.equal(background.badgeText(100), "99+");
   assert.equal(background.badgeText(10000), "99+");
+  assert.equal(background.actionIconPaths(false)[16], "/icons/icon16.png");
+  assert.equal(background.actionIconPaths(true)[16], "/icons/action16.png");
+  assert.equal(background.actionIconPaths(true)[24], "/icons/action24.png");
+  assert.equal(background.actionIconPaths("1")[16], "/icons/action1-16.png");
+  assert.equal(background.actionIconPaths("?")[24], "/icons/action1-24.png");
+  assert.equal(background.actionIconPaths("28")[32], "/icons/action2-32.png");
+  assert.equal(background.actionIconPaths("99+")[48], "/icons/action48.png");
 });
 
 test("OpenAI status records drive compact abnormal badge and title", () => {
@@ -4497,6 +4665,8 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     chartType: "donut",
     themeMode: "dark",
     sourceModeFilter: "work",
+    showLineChart: false,
+    showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
     mappedVisibleModels: ["GPT-5.6 Sol"],
@@ -4515,6 +4685,8 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     chartType: "donut",
     themeMode: "dark",
     sourceModeFilter: "work",
+    showLineChart: false,
+    showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
     mappedVisibleModels: ["GPT-5.6 Sol"],
@@ -4546,6 +4718,8 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     chartType: "line",
     themeMode: "system",
     sourceModeFilter: "all",
+    showLineChart: true,
+    showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
     mappedVisibleModels: [],
@@ -4566,6 +4740,8 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     chartType: "line",
     themeMode: "system",
     sourceModeFilter: "all",
+    showLineChart: true,
+    showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
     mappedVisibleModels: [],
@@ -4630,6 +4806,8 @@ test("sanitizeSettings clamps stored future dates to the current UTC calendar da
     chartType: "line",
     themeMode: "system",
     sourceModeFilter: "all",
+    showLineChart: true,
+    showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
     mappedVisibleModels: [],
@@ -4652,6 +4830,8 @@ test("mergeSettings updates one shared UI preference without resetting the other
     chartType: "donut",
     themeMode: "dark",
     sourceModeFilter: "all",
+    showLineChart: false,
+    showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
     mappedVisibleModels: ["GPT-5.6 Sol"],
@@ -4672,6 +4852,8 @@ test("mergeSettings updates one shared UI preference without resetting the other
     chartType: "donut",
     themeMode: "dark",
     sourceModeFilter: "all",
+    showLineChart: false,
+    showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
     mappedVisibleModels: ["GPT-5.6 Sol"],
@@ -5500,6 +5682,8 @@ test("status alarm stores latest OpenAI status and updates toolbar abnormal stat
   const stored = {};
   const badgeTexts = [];
   const badgeColors = [];
+  const actionIcons = [];
+  let actionIconFailureHandled = false;
   let title = "";
   let resolved;
   const updated = new Promise((resolve) => {
@@ -5533,7 +5717,17 @@ test("status alarm stores latest OpenAI status and updates toolbar abnormal stat
         }
       },
       action: {
+        setIcon: ({ path: iconPath }) => {
+          actionIcons.push(iconPath);
+          return {
+            catch: (handler) => {
+              actionIconFailureHandled = true;
+              handler(new Error("simulated asynchronous icon failure"));
+            }
+          };
+        },
         setBadgeBackgroundColor: ({ color }) => badgeColors.push(color),
+        setBadgeTextColor: () => {},
         setBadgeText: ({ text }) => badgeTexts.push(text),
         setTitle: ({ title: nextTitle }) => {
           title = nextTitle;
@@ -5571,6 +5765,8 @@ test("status alarm stores latest OpenAI status and updates toolbar abnormal stat
   assert.equal(stored[background.STATUS_KEY].state, "major");
   assert.equal(badgeTexts.at(-1), "!");
   assert.equal(badgeColors.at(-1), "#dc2626");
+  assert.equal(actionIcons.at(-1)[16], "/icons/action1-16.png");
+  assert.equal(actionIconFailureHandled, true);
   assert.match(title, /OpenAI status: Major outage/);
 });
 

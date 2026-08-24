@@ -10,9 +10,9 @@ test("popup keeps one viewport-sized shell and one dashboard scroll layer", () =
   const css = popupCss();
   const dashboard = dashboardSource();
 
-  assert.match(css, /html\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;/);
-  assert.match(css, /body\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;/);
-  assert.match(css, /\.shell\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;[\s\S]*padding:\s*8px;/);
+  assert.match(css, /html\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;/);
+  assert.match(css, /body\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;/);
+  assert.match(css, /\.shell\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;[\s\S]*padding:\s*8px;/);
   assert.match(dashboard, /\.usage-dashboard-popup\{[^}]*height:100%;[^}]*max-height:100%;[^}]*overflow:auto/);
   assert.doesNotMatch(dashboard, /\.usage-view-panel\{[^}]*overflow:auto/);
 });
@@ -127,7 +127,7 @@ test("interactive elements expose visible focus, hover, and reduced-motion handl
   assert.match(dashboard, /\.usage-view-tab:hover:not\(\.active\)/);
   assert.match(dashboard, /\.usage-date-controls input:focus/);
   assert.match(dashboard, /\.usage-date-controls input:invalid/);
-  assert.match(dashboard, /\.usage-settings-item:hover>\.usage-settings-submenu,\.usage-settings-item:focus-within>\.usage-settings-submenu/);
+  assert.match(dashboard, /\.usage-settings-item:not\(\.is-closing\):hover>\.usage-settings-submenu,\.usage-settings-item:not\(\.is-closing\):focus-within>\.usage-settings-submenu/);
   assert.match(dashboard, /\.usage-model-chip:hover/);
   // 尊重系统减少动画偏好
   assert.match(dashboard, /@media \(prefers-reduced-motion:reduce\)/);
@@ -147,13 +147,17 @@ test("chart trajectory and points use synchronized, position-stable animation", 
     (match) => match[1]
   );
 
-  assert.equal(colors.length, 8);
+  assert.equal(colors.length, 16);
   assert.equal(new Set(colors).size, colors.length);
   assert.ok(colors.every((color, index) => color.includes(`--usage-chart-series-${index + 1}`)));
   assert.deepEqual(lineStyles, ["none", "8 4", "2 3", "10 3 2 3", "14 4", "4 3 1 3", "1 4", "7 2 1 2"]);
   assert.equal(new Set(lineStyles).size, lineStyles.length);
-  assert.match(dashboard, /colorByModel\[model\] = COLORS\[index % COLORS\.length\]/);
-  assert.match(dashboard, /lineStyleByModel\[model\] = LINE_STYLES\[index % LINE_STYLES\.length\]/);
+  assert.match(dashboard, /function stableVisualIndex\(value, size\)/);
+  assert.match(dashboard, /var preferred = stableVisualIndex\(key, COLORS\.length\)/);
+  assert.match(dashboard, /while \(occupied\[index\] && attempts < COLORS\.length\)/);
+  assert.match(dashboard, /result\[key\] = COLORS\[index\]/);
+  assert.match(dashboard, /result\[key\] = "hsl\(" \+ hue\.toFixed\(1\) \+ " 72% 48%\)"/);
+  assert.match(dashboard, /lineStyleByModel\[model\] = LINE_STYLES\[stableVisualIndex\("line:" \+ model, LINE_STYLES\.length\)\]/);
   assert.match(dashboard, /series\.lineStyle = lineStyleByModel\[series\.model\] \|\| "none"/);
   assert.match(dashboard, /<g class="usage-series"[^>]*style="--usage-line-dash:/);
   assert.match(dashboard, /\.usage-line\{[^}]*stroke-dasharray:var\(--usage-line-dash,none\)/);
@@ -162,18 +166,25 @@ test("chart trajectory and points use synchronized, position-stable animation", 
   assert.match(dashboard, /class="usage-line-focus usage-line-focus-halo"/);
   assert.match(dashboard, /class="usage-line-focus usage-line-focus-color"/);
 
+  assert.match(dashboard, /<mask id="' \+ maskId[\s\S]*?<path class="usage-line-mask"/);
+  assert.match(dashboard, /mask="url\(#' \+ maskId/);
   assert.match(dashboard, /var progress = pointCount > 1 \? pointIndex \/ \(pointCount - 1\) : 0/);
-  assert.match(dashboard, /var pointDelay = \(0\.06 \+ progress \* 0\.58\)\.toFixed\(3\)/);
+  assert.match(dashboard, /var pointDelay = \(0\.04 \+ progress \* 0\.52\)\.toFixed\(3\)/);
   assert.match(dashboard, /style="--usage-point-delay:/);
-  assert.match(dashboard, /\.usage-series\{clip-path:inset\(0 100% 0 0\);animation:usage-series-reveal \.72s cubic-bezier\(\.22,\.72,\.25,1\) both\}/);
+  assert.match(dashboard, /function nearestPathProgress\(path, x, y\)/);
+  assert.match(dashboard, /path\.getTotalLength\(\)/);
+  assert.match(dashboard, /path\.getPointAtLength\(length\)/);
+  assert.match(dashboard, /var progress = nearestPathProgress\(/);
+  assert.match(dashboard, /point\.style\.setProperty\("--usage-point-delay", \(progress \* 0\.56\)\.toFixed\(3\) \+ "s"\)/);
+  assert.match(dashboard, /\.usage-line-mask\{[^}]*stroke-dasharray:1;[^}]*stroke-dashoffset:1;[^}]*animation:usage-line-reveal \.56s linear forwards\}/);
   assert.match(dashboard, /\.usage-point\{[^}]*animation:usage-point-in \.18s ease-out var\(--usage-point-delay,\.06s\)/);
   assert.doesNotMatch(dashboard, /\.usage-point\{[^}]*transform:/);
-  assert.match(dashboard, /@keyframes usage-series-reveal\{from\{clip-path:inset\(0 100% 0 0\)\}to\{clip-path:inset\(0 0 0 0\)\}\}/);
+  assert.match(dashboard, /@keyframes usage-line-reveal\{to\{stroke-dashoffset:0\}\}/);
   assert.match(dashboard, /@keyframes usage-point-in\{from\{opacity:0\}to\{opacity:1\}\}/);
   assert.doesNotMatch(dashboard, /@keyframes usage-point-in\{[^}]*transform:/);
   assert.match(
     dashboard,
-    /@media \(prefers-reduced-motion:reduce\)\{[^}]*\.usage-series,[^}]*\.usage-point,[^}]*\{animation:none\}[^}]*\.usage-series\{clip-path:none\}[^}]*\.usage-point\{opacity:1\}/
+    /@media \(prefers-reduced-motion:reduce\)\{[^}]*\.usage-line-mask,[^}]*\.usage-point,[^}]*\{animation:none\}[^}]*\.usage-line-mask\{stroke-dashoffset:0\}[^}]*\.usage-point\{opacity:1\}/
   );
 });
 
@@ -189,7 +200,7 @@ test("export tab is wired with all five conversation formats", () => {
   assert.match(dashboard, /exportFormatDocx/);
 });
 
-test("export keeps the conversation checkbox list and routes PNG+PDF via Canvas", () => {
+test("export keeps the conversation checkbox list, uses Canvas for PNG, and searchable text for PDF", () => {
   const dashboard = dashboardSource();
   // 用户从同一个列表明确选择一个或多个对话；全选/清空只是辅助操作。
   assert.match(dashboard, /data-export-conv/);
@@ -202,8 +213,11 @@ test("export keeps the conversation checkbox list and routes PNG+PDF via Canvas"
   assert.match(dashboard, /collectConversationChunk/);
   assert.match(dashboard, /chunkSize = 6/);
   assert.match(dashboard, /buildZip/);
-  // PNG 与 PDF 都走 Canvas(系统中文字体 + Markdown 渲染),而非 ASCII 像素字体/不嵌字体 PDF
+  // PNG 走 Canvas；PDF 走独立文本生成器，保留可搜索、可选择、可复制的文字层。
   assert.match(dashboard, /renderConversationsCanvas/);
+  assert.match(dashboard, /format === "pdf"/);
+  assert.match(dashboard, /exporter\.buildPdf/);
+  assert.doesNotMatch(dashboard, /format === "pdf" && typeof exporter\.buildPdfBlobFromConversations/);
 });
 
 test("bare GPT request slugs are stored exactly", () => {

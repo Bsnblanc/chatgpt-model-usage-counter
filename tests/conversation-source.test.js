@@ -761,13 +761,14 @@ test("account history supports the current 224-conversation account without trun
   assert.equal(calls, 3);
 });
 
-test("account history reads beyond six index pages until the reported total is reached", async () => {
+test("account history stops at the configured index-page cap and reports the unread remainder", async () => {
   const items = Array.from({ length: 620 }, (_, index) => indexItem(`large-${String(index).padStart(4, "0")}`));
   let calls = 0;
   const result = await source.listAccountConversations({
     includeArchived: false,
     origin: "https://chatgpt.com",
     pageSize: 100,
+    maxIndexPagesPerScope: 6,
     fetchImpl: async (url) => {
       calls += 1;
       const parsed = new URL(url);
@@ -777,15 +778,19 @@ test("account history reads beyond six index pages until the reported total is r
     }
   });
 
-  assert.equal(result.complete, true);
-  assert.equal(result.stopped, false);
-  assert.equal(result.conversations.length, 620);
-  assert.equal(calls, 7);
-  assert.equal(result.warnings.length, 0);
+  assert.equal(result.complete, false);
+  assert.equal(result.incomplete, true);
+  assert.equal(result.stopped, true);
+  assert.equal(result.code, "index-page-limit");
+  assert.equal(result.conversations.length, 600);
+  assert.equal(calls, 6, "the seventh index request must never start");
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, "index-page-limit");
+  assert.match(result.warnings[0].error, /remaining conversations were not requested/i);
 });
 
-test("selected export reads more than 500 conversations sequentially without a hard rejection", async () => {
-  const ids = Array.from({ length: 525 }, (_, index) => `selected-${String(index).padStart(4, "0")}`);
+test("selected export never requests ids beyond the configured conversation cap", async () => {
+  const ids = Array.from({ length: 4 }, (_, index) => `selected-${String(index).padStart(4, "0")}`);
   let calls = 0;
   let active = 0;
   let peak = 0;
@@ -793,6 +798,7 @@ test("selected export reads more than 500 conversations sequentially without a h
     exporter,
     origin: "https://chatgpt.com",
     concurrency: 8,
+    maxConversationsPerOperation: 2,
     fetchImpl: async (url) => {
       calls += 1;
       active += 1;
@@ -804,11 +810,18 @@ test("selected export reads more than 500 conversations sequentially without a h
     }
   });
 
-  assert.equal(result.complete, true);
-  assert.equal(result.requestedCount, 525);
-  assert.equal(result.conversations.length, 525);
-  assert.equal(result.failures.length, 0);
-  assert.equal(calls, 525);
+  assert.equal(result.complete, false);
+  assert.equal(result.incomplete, true);
+  assert.equal(result.code, "conversation-count-limit");
+  assert.equal(result.requestedCount, 4);
+  assert.equal(result.attemptedCount, 2);
+  assert.deepEqual(result.conversations.map((conversation) => conversation.id), ids.slice(0, 2));
+  assert.deepEqual(result.failures.map((failure) => failure.id), ids.slice(2));
+  assert.equal(result.failures.every((failure) => failure.code === "conversation-count-limit"), true);
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, "conversation-count-limit");
+  assert.match(result.warnings[0].error, /not requested/i);
+  assert.equal(calls, 2, "ids beyond the cap must never reach fetch");
   assert.equal(peak, 1);
 });
 

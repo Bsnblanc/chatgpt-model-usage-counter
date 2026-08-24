@@ -11,6 +11,10 @@
   var DEFAULT_PAGE_SIZE = 100;
   var DEFAULT_CONCURRENCY = 1;
   var MAX_CONCURRENCY = 1;
+  var DEFAULT_MAX_INDEX_PAGES_PER_SCOPE = 6;
+  var MAX_INDEX_PAGES_PER_SCOPE = 6;
+  var DEFAULT_MAX_CONVERSATIONS_PER_OPERATION = 50;
+  var MAX_CONVERSATIONS_PER_OPERATION = 50;
   var MAX_MESSAGE_PAGES_PER_CONVERSATION = 50;
   var MAX_MESSAGES_PER_CONVERSATION = 10000;
   var MAX_REQUEST_ATTEMPTS = 2;
@@ -436,6 +440,13 @@
     var fetchImpl = options.fetchImpl;
     var origin = normalizeOrigin(options.origin);
     var limit = Math.max(1, Math.min(100, Number(options.pageSize) || DEFAULT_PAGE_SIZE));
+    var maxPages = Math.max(
+      1,
+      Math.min(
+        MAX_INDEX_PAGES_PER_SCOPE,
+        Math.floor(Number(options.maxIndexPagesPerScope)) || DEFAULT_MAX_INDEX_PAGES_PER_SCOPE
+      )
+    );
     var offset = 0;
     var pageCount = 0;
     var items = [];
@@ -446,7 +457,11 @@
 
     function finish(complete, warning, code, stopped) {
       if (warning) {
-        warnings.push({ scope: archived ? "archived" : "active", error: safeText(warning, 240) });
+        warnings.push({
+          scope: archived ? "archived" : "active",
+          code: String(code || ""),
+          error: safeText(warning, 240)
+        });
       }
       return {
         conversations: items,
@@ -454,6 +469,7 @@
         pageCount: pageCount,
         archived: archived,
         complete: complete,
+        incomplete: complete === false,
         warnings: warnings,
         code: String(code || ""),
         stopped: Boolean(stopped)
@@ -527,6 +543,18 @@
           }
           return finish(true);
         }
+        if (pageCount >= maxPages) {
+          return finish(
+            false,
+            "Conversation index reading stopped after " +
+              maxPages +
+              " page" +
+              (maxPages === 1 ? "" : "s") +
+              " in this scope; remaining conversations were not requested.",
+            "index-page-limit",
+            true
+          );
+        }
         return nextPage();
       }).catch(function preservePartialHistory(error) {
         if (
@@ -568,6 +596,7 @@
         return {
           conversations: sortConversationIndex(active.conversations),
           complete: active.complete !== false,
+          incomplete: active.complete === false,
           warnings: active.warnings || [],
           pageCount: active.pageCount,
           stopped: Boolean(active.stopped),
@@ -582,6 +611,7 @@
         return {
           conversations: sortConversationIndex(Object.keys(byId).map(function toItem(id) { return byId[id]; })),
           complete: active.complete !== false && archived.complete !== false,
+          incomplete: active.complete === false || archived.complete === false,
           warnings: (active.warnings || []).concat(archived.warnings || []),
           pageCount: active.pageCount + archived.pageCount,
           stopped: Boolean(archived.stopped),
@@ -601,6 +631,7 @@
         return {
           conversations: sortConversationIndex(active.conversations),
           complete: false,
+          incomplete: true,
           warnings: (active.warnings || []).concat([{ scope: "archived", error: safeText(error && error.message, 240) || "Archived history is unavailable." }]),
           pageCount: active.pageCount,
           stopped: false,
@@ -795,9 +826,18 @@
 
   function collectConversations(ids, options) {
     options = options || {};
-    var targets = uniqueConversationIds(ids);
-    // The user may export every selected conversation in one action. A single
-    // worker keeps the complete operation paced without truncating that choice.
+    var requestedTargets = uniqueConversationIds(ids);
+    var maxConversations = Math.max(
+      1,
+      Math.min(
+        MAX_CONVERSATIONS_PER_OPERATION,
+        Math.floor(Number(options.maxConversationsPerOperation)) || DEFAULT_MAX_CONVERSATIONS_PER_OPERATION
+      )
+    );
+    var targets = requestedTargets.slice(0, maxConversations);
+    var skippedTargets = requestedTargets.slice(maxConversations);
+    // One worker keeps every allowed account read sequential. Selected ids
+    // beyond the operation cap remain explicit failures and never reach fetch.
     var concurrency = Math.max(1, Math.min(MAX_CONCURRENCY, Number(options.concurrency) || DEFAULT_CONCURRENCY));
     var results = new Array(targets.length);
     var failures = new Array(targets.length);
@@ -848,13 +888,37 @@
       if (stopError) {
         throw stopError;
       }
-      var cleanFailures = failures.filter(Boolean);
+      var cleanFailures = failures.filter(Boolean).concat(skippedTargets.map(function skipped(id) {
+        return {
+          id: id,
+          code: "conversation-count-limit",
+          error: "Conversation was not requested because the account operation limit of " +
+            maxConversations +
+            " conversations was reached."
+        };
+      }));
+      if (skippedTargets.length) {
+        warnings.push({
+          scope: "account-details",
+          code: "conversation-count-limit",
+          error: "ChatGPT account reading was limited to " +
+            maxConversations +
+            " selected conversations; " +
+            skippedTargets.length +
+            " remaining conversation" +
+            (skippedTargets.length === 1 ? " was" : "s were") +
+            " not requested."
+        });
+      }
       return {
         conversations: results.filter(Boolean),
         failures: cleanFailures,
         warnings: warnings,
-        requestedCount: targets.length,
-        complete: cleanFailures.length === 0 && warnings.length === 0
+        requestedCount: requestedTargets.length,
+        attemptedCount: targets.length,
+        complete: cleanFailures.length === 0 && warnings.length === 0,
+        incomplete: cleanFailures.length > 0 || warnings.length > 0,
+        code: skippedTargets.length ? "conversation-count-limit" : ""
       };
     });
   }
@@ -862,6 +926,8 @@
   return {
     LIMITS: {
       maxConcurrency: MAX_CONCURRENCY,
+      maxIndexPagesPerScope: MAX_INDEX_PAGES_PER_SCOPE,
+      maxConversationsPerOperation: MAX_CONVERSATIONS_PER_OPERATION,
       maxMessagePagesPerConversation: MAX_MESSAGE_PAGES_PER_CONVERSATION,
       maxMessagesPerConversation: MAX_MESSAGES_PER_CONVERSATION,
       maxRequestAttempts: MAX_REQUEST_ATTEMPTS

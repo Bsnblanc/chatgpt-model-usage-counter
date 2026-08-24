@@ -16,7 +16,15 @@
     "var(--usage-chart-series-5,#ea580c)",
     "var(--usage-chart-series-6,#0891b2)",
     "var(--usage-chart-series-7,#be123c)",
-    "var(--usage-chart-series-8,#4f46e5)"
+    "var(--usage-chart-series-8,#4f46e5)",
+    "var(--usage-chart-series-9,#0f766e)",
+    "var(--usage-chart-series-10,#a21caf)",
+    "var(--usage-chart-series-11,#ca8a04)",
+    "var(--usage-chart-series-12,#0369a1)",
+    "var(--usage-chart-series-13,#7c2d12)",
+    "var(--usage-chart-series-14,#4d7c0f)",
+    "var(--usage-chart-series-15,#6d28d9)",
+    "var(--usage-chart-series-16,#c026d3)"
   ];
   var LINE_STYLES = [
     "none",
@@ -75,6 +83,14 @@
       "--usage-chart-series-6": "#0891b2",
       "--usage-chart-series-7": "#be123c",
       "--usage-chart-series-8": "#4f46e5",
+      "--usage-chart-series-9": "#0f766e",
+      "--usage-chart-series-10": "#a21caf",
+      "--usage-chart-series-11": "#ca8a04",
+      "--usage-chart-series-12": "#0369a1",
+      "--usage-chart-series-13": "#7c2d12",
+      "--usage-chart-series-14": "#4d7c0f",
+      "--usage-chart-series-15": "#6d28d9",
+      "--usage-chart-series-16": "#c026d3",
       "--usage-accent-primary": "#245f49",
       "--usage-accent-primary-hover": "#1f513f",
       "--usage-accent-link": "#2563eb",
@@ -151,6 +167,14 @@
       "--usage-chart-series-6": "#22d3ee",
       "--usage-chart-series-7": "#fb7185",
       "--usage-chart-series-8": "#818cf8",
+      "--usage-chart-series-9": "#2dd4bf",
+      "--usage-chart-series-10": "#e879f9",
+      "--usage-chart-series-11": "#facc15",
+      "--usage-chart-series-12": "#38bdf8",
+      "--usage-chart-series-13": "#fdba74",
+      "--usage-chart-series-14": "#a3e635",
+      "--usage-chart-series-15": "#a78bfa",
+      "--usage-chart-series-16": "#f472b6",
       "--usage-accent-primary": "#10a37f",
       "--usage-accent-primary-hover": "#19c37d",
       "--usage-accent-link": "#10a37f",
@@ -244,8 +268,14 @@
       source: "来源",
       statisticsSections: "显示内容",
       statisticsDisplaySettings: "显示设置",
-      statisticsSectionTrend: "图表",
+      statisticsSectionTrend: "趋势（折线）",
+      statisticsSectionDonut: "构成（环形）",
       statisticsSectionText: "文字统计",
+      statisticsSectionTrendShort: "折线",
+      statisticsSectionDonutShort: "环形",
+      statisticsSectionTextShort: "文字",
+      statisticsSectionNone: "未显示",
+      statisticsSectionAll: "全部",
       statisticsMode: "视图模式",
       statisticsModeMapped: "基础",
       statisticsModeInternal: "高级",
@@ -333,8 +363,14 @@
       source: "Source",
       statisticsSections: "Visible statistics",
       statisticsDisplaySettings: "Display settings",
-      statisticsSectionTrend: "Chart",
+      statisticsSectionTrend: "Trend (line)",
+      statisticsSectionDonut: "Composition (donut)",
       statisticsSectionText: "Text statistics",
+      statisticsSectionTrendShort: "Line",
+      statisticsSectionDonutShort: "Donut",
+      statisticsSectionTextShort: "Text",
+      statisticsSectionNone: "None",
+      statisticsSectionAll: "All",
       statisticsMode: "View mode",
       statisticsModeMapped: "Basic",
       statisticsModeInternal: "Advanced",
@@ -415,6 +451,7 @@
     exportCancelling: "正在停止；不会再启动新的对话读取…",
     exportCancelled: "导出已取消。",
     statisticsData: "统计数据",
+    statisticsDataCurrent: "备份 / 恢复",
     statisticsDataExportJson: "备份 JSON",
     statisticsDataExportCsv: "记录 CSV",
     statisticsDataImportJson: "导入备份",
@@ -535,6 +572,7 @@
     exportCancelling: "Stopping; no new conversation reads will start…",
     exportCancelled: "Export cancelled.",
     statisticsData: "Statistics data",
+    statisticsDataCurrent: "Backup / restore",
     statisticsDataExportJson: "Backup JSON",
     statisticsDataExportCsv: "Records CSV",
     statisticsDataImportJson: "Import backup",
@@ -645,6 +683,20 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function cssAttributeValue(value) {
+    return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  function stableVisualIndex(value, size) {
+    var clean = String(value || "");
+    var hash = 2166136261;
+    for (var index = 0; index < clean.length; index += 1) {
+      hash ^= clean.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0) % Math.max(1, Number(size) || 1);
   }
 
   function countTotal(totals) {
@@ -1270,13 +1322,18 @@
         lastSubmittedAt: "",
         lastPageUrl: actualConversationId ? (event.pageUrl || ("https://chatgpt.com/c/" + conversationId)) : "",
         sourceMode: sourceMode,
-        sourceModes: {}
+        sourceModes: {},
+        efforts: {}
       };
       conversation.count += 1;
       conversation.sourceModes = conversation.sourceModes && typeof conversation.sourceModes === "object"
         ? conversation.sourceModes
         : {};
+      conversation.efforts = conversation.efforts && typeof conversation.efforts === "object"
+        ? conversation.efforts
+        : {};
       conversation.sourceModes[sourceMode] = (Number(conversation.sourceModes[sourceMode]) || 0) + 1;
+      conversation.efforts[effort] = (Number(conversation.efforts[effort]) || 0) + 1;
       if (String(event.submittedAt || "") >= String(conversation.lastSubmittedAt || "")) {
         conversation.lastSubmittedAt = String(event.submittedAt || "");
         conversation.lastPageUrl = actualConversationId ? (event.pageUrl || conversation.lastPageUrl) : "";
@@ -1590,6 +1647,8 @@
             chartType: DEFAULT_CHART_TYPE,
             themeMode: DEFAULT_THEME_MODE,
             sourceModeFilter: "all",
+            showLineChart: true,
+            showDonutChart: false,
             showTrendChart: true,
             showTextStatistics: true,
             startDate: "",
@@ -1603,6 +1662,8 @@
         chartType: DEFAULT_CHART_TYPE,
         themeMode: DEFAULT_THEME_MODE,
         sourceModeFilter: "all",
+        showLineChart: true,
+        showDonutChart: false,
         showTrendChart: true,
         showTextStatistics: true,
         startDate: "",
@@ -1671,7 +1732,9 @@
       chartType: normalizeChartType(state.chartType),
       themeMode: normalizeThemeMode(state.themeMode),
       sourceModeFilter: normalizeSourceModeFilter(state.sourceModeFilter),
-      showTrendChart: state.showTrendChart !== false,
+      showLineChart: state.showLineChart !== false,
+      showDonutChart: state.showDonutChart === true,
+      showTrendChart: state.showLineChart !== false || state.showDonutChart === true,
       showTextStatistics: state.showTextStatistics !== false,
       startDate: dateNoLaterThanToday(state.startDate),
       endDate: dateNoLaterThanToday(state.endDate) || defaultEndDate(),
@@ -1937,7 +2000,8 @@
         lastSubmittedAt: "",
         lastPageUrl: String(next.lastPageUrl || next.pageUrl || ""),
         sourceMode: normalizeDashboardSourceMode(next.sourceMode),
-        sourceModes: {}
+        sourceModes: {},
+        efforts: {}
       };
       current.count += Math.max(0, Number(next.count) || 0);
       current.sourceModes = current.sourceModes && typeof current.sourceModes === "object"
@@ -1961,6 +2025,13 @@
         current.sourceModes[sourceMode] = (Number(current.sourceModes[sourceMode]) || 0) +
           Math.max(0, Number(next.count) || 0);
       }
+      current.efforts = current.efforts && typeof current.efforts === "object"
+        ? current.efforts
+        : {};
+      Object.keys(next.efforts || {}).forEach(function mergeConversationEffort(effort) {
+        current.efforts[effort] = (Number(current.efforts[effort]) || 0) +
+          Math.max(0, Number(next.efforts[effort]) || 0);
+      });
       if (
         !current.firstSubmittedAt ||
         String(next.firstSubmittedAt || "") < current.firstSubmittedAt
@@ -2233,11 +2304,10 @@
     var top = 14;
     var bottom = 44;
     var data = chartSeriesForState(stats, models, state);
-    var colorByModel = {};
+    var colorByModel = statisticsColorMap(state);
     var lineStyleByModel = {};
-    eligibleModelsInRange(state).forEach(function assignStableColor(model, index) {
-      colorByModel[model] = COLORS[index % COLORS.length];
-      lineStyleByModel[model] = LINE_STYLES[index % LINE_STYLES.length];
+    eligibleModelsInRange(state).forEach(function assignStableLineStyle(model) {
+      lineStyleByModel[model] = LINE_STYLES[stableVisualIndex("line:" + model, LINE_STYLES.length)];
     });
     data.series.forEach(function keepToggleAndChartColorAligned(series) {
       series.color = colorByModel[series.model] || series.color;
@@ -2260,8 +2330,9 @@
       return '<line x1="' + left + '" x2="' + (width - right) + '" y1="' + y + '" y2="' + y + '" class="usage-grid"/><text x="' + (left - 6) + '" y="' + (y + 4) + '" class="usage-axis usage-axis-y" text-anchor="end">' + Math.round(value) + "</text>";
     }).join("");
     var focusPaths = [];
+    var revealMasks = [];
     var overlapPoints = {};
-    var seriesSvg = data.series.map(function renderSeries(series) {
+    var seriesSvg = data.series.map(function renderSeries(series, seriesIndex) {
       var seriesLabel = series.label || statisticsKeyLabel(state, series.model);
       var points = series.values.map(function point(value, index) {
         if (value === null) {
@@ -2289,7 +2360,7 @@
       var pathData = svgPath(points);
       var circles = points.map(function renderPoint(point, pointIndex) {
         var progress = pointCount > 1 ? pointIndex / (pointCount - 1) : 0;
-        var pointDelay = (0.06 + progress * 0.58).toFixed(3);
+        var pointDelay = (0.04 + progress * 0.52).toFixed(3);
         return '<circle class="usage-point" cx="' + point.x + '" cy="' + point.y +
           '" r="3.5" style="--usage-point-delay:' + pointDelay + 's" fill="' + series.color +
           '" data-model="' + escapeHtml(series.model) + '" data-model-label="' + escapeHtml(seriesLabel) +
@@ -2297,6 +2368,12 @@
           '" data-point-index="' + pointIndex + '" data-chart-series="' +
           escapeHtml(series.model) + '"/>';
       }).join("");
+      var maskId = "usage-line-reveal-" + seriesIndex;
+      revealMasks.push(
+        '<mask id="' + maskId + '" maskUnits="userSpaceOnUse" x="0" y="0" width="' +
+          width + '" height="' + height + '"><path class="usage-line-mask" d="' +
+          pathData + '" pathLength="1" fill="none"/></mask>'
+      );
       focusPaths.push(
         '<path class="usage-line-focus usage-line-focus-halo" d="' + pathData +
           '" fill="none" data-chart-focus="' + escapeHtml(series.model) + '"/>',
@@ -2307,7 +2384,8 @@
       );
       return '<g class="usage-series" data-chart-series-group="' + escapeHtml(series.model) +
         '" style="--usage-line-dash:' + series.lineStyle + '"><path class="usage-line" d="' + pathData +
-        '" fill="none" stroke="' + series.color + '" data-chart-series="' +
+        '" fill="none" stroke="' + series.color + '" mask="url(#' + maskId +
+        ')" data-chart-series="' +
         escapeHtml(series.model) + '"/>' + circles + "</g>";
     }).join("");
     var overlapSvg = Object.keys(overlapPoints).map(function renderOverlapRing(key) {
@@ -2341,13 +2419,13 @@
 
     var chartTitle = text(state, "chartTitle");
     return [
-      '<div class="usage-chart-wrap">',
+      '<div class="usage-chart-wrap usage-line-chart-wrap">',
       '<div class="usage-chart-head"><strong>' + escapeHtml(chartTitle) +
         '</strong><small>' + escapeHtml(text(state, "chartYAxis")) + "</small></div>",
-      '<div class="usage-models" role="group" aria-label="' + escapeHtml(text(state, "chartLegend")) + '">' +
-        renderModels(state) + "</div>",
+      renderChartLegend(state, { showPercentage: true }),
       '<svg viewBox="0 0 ' + width + " " + height + '" class="usage-chart" role="img" aria-label="' +
-        escapeHtml(chartTitle) + '">' + axisLabels + grid + labels + seriesSvg + overlapSvg +
+        escapeHtml(chartTitle) + '"><defs>' + revealMasks.join("") + "</defs>" +
+        axisLabels + grid + labels + seriesSvg + overlapSvg +
         focusPaths.join("") + "</svg>",
       '<div class="usage-tooltip" hidden></div>',
       "</div>"
@@ -2368,13 +2446,16 @@
 
   function donutSlices(items, total, attribute) {
     var offset = 0;
-    return items.map(function renderSlice(item) {
+    return items.map(function renderSlice(item, index) {
       var percentage = total > 0 ? (Number(item.count) || 0) / total * 100 : 0;
       var start = offset;
       offset += percentage;
       var label = item.label + ": " + item.count + " (" + percentage.toFixed(1) + "%)";
       return '<circle class="usage-donut-slice" cx="100" cy="100" r="66" pathLength="100"' +
-        ' fill="none" stroke="' + item.color + '" stroke-width="28" stroke-dasharray="' +
+        ' fill="none" stroke="' + item.color + '" stroke-width="28" style="--usage-donut-size:' +
+        percentage.toFixed(4) + ";--usage-donut-rest:" +
+        Math.max(0, 100 - percentage).toFixed(4) + ";--usage-donut-delay:" +
+        (index * 0.055).toFixed(3) + 's" stroke-dasharray="' +
         percentage.toFixed(4) + " " + Math.max(0, 100 - percentage).toFixed(4) +
         '" stroke-dashoffset="' + (-start).toFixed(4) + '" transform="rotate(-90 100 100)" ' +
         attribute + '="' + escapeHtml(item.key) + '" tabindex="0" role="button" aria-label="' +
@@ -2387,21 +2468,26 @@
       var percentage = total > 0 ? (Number(item.count) || 0) / total * 100 : 0;
       var interactive = interactiveAttribute
         ? ' tabindex="0" role="button" ' + interactiveAttribute + '="' + escapeHtml(item.key) + '"'
-        : "";
+        : ' tabindex="0" role="button" data-effort-filter="' + escapeHtml(reasoningEffortClass(item.key)) + '"';
       return '<div class="usage-donut-legend-row"' + interactive + '><i style="--slice:' +
-        item.color + '"></i><span>' + escapeHtml(item.label) + '</span><b>' +
+        item.color + '"></i><span style="color:' + item.color + '">' + escapeHtml(item.label) + '</span><b style="--slice:' +
+        item.color + '">' +
         escapeHtml(String(Number(item.count) || 0)) + '</b><small>' +
         percentage.toFixed(1) + "%</small></div>";
     }).join("") + "</div>";
   }
 
+  function donutTotalFontSize(total) {
+    var length = String(Math.max(0, Number(total) || 0)).length;
+    if (length >= 9) return 19;
+    if (length >= 7) return 22;
+    if (length >= 5) return 27;
+    return 32;
+  }
+
   function modelDonutItems(state, models) {
     var totals = statisticsTotalsInRange(state.stats, state);
-    var stableModels = eligibleModelsInRange(state);
-    var colorByModel = {};
-    stableModels.forEach(function stableColor(model, index) {
-      colorByModel[model] = COLORS[index % COLORS.length];
-    });
+    var colorByModel = statisticsColorMap(state);
     return models.map(function toItem(model) {
       return {
         key: model,
@@ -2456,7 +2542,7 @@
       return sum + (Number(item.count) || 0);
     }, 0);
     var title = drilledModel
-      ? statisticsKeyLabel(state, drilledModel) + text(state, "separator") + text(state, "reasoningEffort")
+      ? statisticsKeyLabel(state, drilledModel)
       : text(state, "chartCompositionTitle");
     var action = drilledModel
       ? '<button type="button" class="usage-donut-back" data-donut-back>' +
@@ -2466,36 +2552,33 @@
       ? '<div class="usage-donut-warning">' +
         escapeHtml(text(state, "chartCompositionIncomplete")) + "</div>"
       : "";
-    var controls = drilledModel
-      ? ""
-      : '<div class="usage-models usage-donut-models" role="group" aria-label="' +
-        escapeHtml(text(state, "chartLegend")) + '">' + renderModels(state) + "</div>";
     if (!total) {
       return [
         '<div class="usage-chart-wrap usage-donut-wrap">',
         '<div class="usage-chart-head"><strong>' + escapeHtml(title) + "</strong>" + action + "</div>",
-        controls,
+        drilledModel ? "" : renderChartLegend(state, { showPercentage: true }),
         warning,
         '<div class="usage-empty">' + escapeHtml(text(state, "chartCompositionEmpty")) + "</div>",
         "</div>"
       ].join("");
     }
     var sliceAttribute = drilledModel ? "data-donut-effort" : "data-donut-model";
-    var centerLabel = drilledModel
-      ? text(state, "reasoningEffort")
-      : text(state, "chartCompositionTotalLabel");
+    var centerLabel = text(state, "chartCompositionTotalLabel");
     return [
       '<div class="usage-chart-wrap usage-donut-wrap">',
       '<div class="usage-chart-head"><strong>' + escapeHtml(title) + "</strong>" + action + "</div>",
-      controls,
       warning,
-      '<div class="usage-donut-layout"><svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label="' +
+      '<div class="usage-donut-layout' +
+        '"><svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label="' +
         escapeHtml(title) + '"><circle class="usage-donut-track" cx="100" cy="100" r="66" fill="none" stroke-width="28"/>' +
         donutSlices(items, total, sliceAttribute) +
-        '<text class="usage-donut-total" x="100" y="96" text-anchor="middle">' +
+        '<text class="usage-donut-total" x="100" y="96" text-anchor="middle" style="font-size:' +
+        donutTotalFontSize(total) + 'px">' +
         escapeHtml(String(total)) + '</text><text class="usage-donut-center-label" x="100" y="116" text-anchor="middle">' +
         escapeHtml(centerLabel) + "</text></svg>" +
-        renderDonutLegend(items, total, drilledModel ? "" : "data-donut-model") +
+        (drilledModel
+          ? renderDonutLegend(items, total, "")
+          : renderChartLegend(state, { showPercentage: true })) +
         "</div></div>"
     ].join("");
   }
@@ -2544,24 +2627,89 @@
     return '<div class="usage-skeleton" aria-hidden="true">' + items.join("") + "</div>";
   }
 
-  function renderModels(state) {
+  function statisticsVisualKeys(state) {
+    var keys = eligibleModelsInRange(state).slice();
+    var known = {};
+    keys.forEach(function remember(key) {
+      known[key] = true;
+    });
+    aggregateRelationsInRange(state.stats || {}, state || {}).forEach(function rememberRelation(entry) {
+      var relation = entry && entry.relation || {};
+      [relation.requestModel, relation.responseModel].forEach(function rememberModel(rawModel) {
+        var model = String(rawModel || "").trim();
+        if (model && !known[model]) {
+          known[model] = true;
+          keys.push(model);
+        }
+      });
+    });
+    return keys;
+  }
+
+  function statisticsColorMap(state) {
+    var result = {};
+    var occupied = {};
+    statisticsVisualKeys(state).slice().sort(function stableOrder(left, right) {
+      return String(left).localeCompare(String(right));
+    }).forEach(function assignColor(key) {
+      var preferred = stableVisualIndex(key, COLORS.length);
+      var index = preferred;
+      var attempts = 0;
+      while (occupied[index] && attempts < COLORS.length) {
+        index = (index + 1) % COLORS.length;
+        attempts += 1;
+      }
+      if (attempts >= COLORS.length) {
+        // More simultaneous models than the named palette are still
+        // distinguishable by a deterministic high-cardinality fallback.
+        var hue = stableVisualIndex("hue:" + key, 3600) / 10;
+        result[key] = "hsl(" + hue.toFixed(1) + " 72% 48%)";
+        return;
+      }
+      occupied[index] = key;
+      result[key] = COLORS[index];
+    });
+    result[INTERNAL_UNKNOWN_REQUEST] = "var(--usage-text-muted)";
+    result[INTERNAL_UNKNOWN_RESPONSE] = "var(--usage-text-muted)";
+    return result;
+  }
+
+  function statisticsColorForKey(state, key) {
+    return statisticsColorMap(state)[String(key || "")] || COLORS[0];
+  }
+
+  function renderChartLegend(state, options) {
+    options = options || {};
     state.stats = sanitizeDashboardStats(state.stats || {});
     var totals = statisticsTotalsInRange(state.stats, state);
     var models = eligibleModelsInRange(state);
+    var overallTotal = models.reduce(function add(total, model) {
+      return total + (Number(totals[model]) || 0);
+    }, 0);
+    var colorByModel = statisticsColorMap(state);
     if (models.length === 0) {
       if (state.loading) {
         return renderLoadingSkeleton(2);
       }
       return '<div class="usage-empty">' + escapeHtml(text(state, "noModelRecords")) + "</div>";
     }
-    return models.map(function modelChip(model, index) {
-      var checked = state.selectedModels[model] ? " checked" : "";
-      return '<label class="usage-model-chip" data-chart-model="' + escapeHtml(model) +
-        '" style="--chip:' + COLORS[index % COLORS.length] + '"><input type="checkbox" data-model-toggle="' +
-        escapeHtml(model) + '"' + checked + '><span>' +
-        escapeHtml(statisticsKeyLabel(state, model)) + '</span><b>' +
-        escapeHtml(text(state, "countTimes", { count: Number(totals[model] || 0) })) + "</b></label>";
-    }).join("");
+    return '<div class="usage-chart-legend" role="group" aria-label="' +
+      escapeHtml(text(state, "chartLegend")) + '">' + models.map(function modelLegend(model) {
+      var active = Boolean(state.selectedModels[model]);
+      var count = Number(totals[model]) || 0;
+      var percentage = overallTotal > 0 ? count / overallTotal * 100 : 0;
+      return '<label class="usage-chart-legend-row' + (active ? " active" : "") +
+        '" data-chart-model="' + escapeHtml(model) + '" style="--series:' +
+        colorByModel[model] + '"><input class="usage-chart-legend-toggle" type="checkbox" data-model-toggle="' +
+        escapeHtml(model) + '"' + (active ? " checked" : "") + ' aria-label="' +
+        escapeHtml(statisticsKeyLabel(state, model)) + '"><i aria-hidden="true"></i><span style="color:' +
+        colorByModel[model] + '">' + escapeHtml(statisticsKeyLabel(state, model)) +
+        '</span><b>' + escapeHtml(String(count)) + '</b>' +
+        (options.showPercentage
+          ? '<small>' + percentage.toFixed(1) + "%</small>"
+          : '<small aria-hidden="true"></small>') +
+        "</label>";
+    }).join("") + "</div>";
   }
 
   function renderFeaturePills(features, state) {
@@ -2599,7 +2747,8 @@
       return [
         '<details class="usage-count-record usage-mapped-record" data-mapped-model="' + escapeHtml(row.model) + '">',
         '<summary class="usage-count-row">',
-        '<span><strong>' + escapeHtml(row.model) + '</strong>' + features + "</span>",
+        '<span><strong style="color:' + statisticsColorForKey(state, row.model) + '">' +
+          escapeHtml(row.model) + '</strong>' + features + "</span>",
         '<span class="usage-count-numbers"><b>' +
           escapeHtml(text(state, "countTimes", { count: row.total })) + "</b></span>",
         "</summary>",
@@ -2696,15 +2845,13 @@
     return [
       '<details class="usage-internal-response" data-response-model-child="' + escapeHtml(responseModel) + '">',
       '<summary class="usage-internal-response-summary">',
-      '<span class="usage-internal-response-model-row"><span class="usage-relation-values usage-internal-response-value"><code>' +
-        escapeHtml(responseLabel) + "</code>" +
+      '<span class="usage-internal-response-model-row"><span class="usage-relation-values usage-internal-response-value"><span class="usage-internal-response-copy"><code style="color:' +
+        statisticsColorForKey(state, responseModel) + '">' + escapeHtml(responseLabel) + "</code>" +
         '<span class="usage-internal-efforts-inline" aria-label="' +
         escapeHtml(text(state, "reasoningEffort")) + '">' +
-        '<small class="usage-internal-effort-label">' +
-          escapeHtml(text(state, "reasoningEffortInline")) + "</small>" +
-        (effortHtml || '<span><b class="usage-effort-unknown">' +
+        (effortHtml || '<span class="usage-effort-token" data-effort-filter="unknown" role="button" tabindex="0"><b class="usage-effort-unknown">' +
           escapeHtml(text(state, "reasoningUnspecified")) + "</b></span>") +
-        "</span>" +
+        "</span></span>" +
         '<b class="usage-internal-subcount">' +
         escapeHtml(String(Number(relation.count) || 0)) + "</b></span></span>",
       featureHtml,
@@ -2729,7 +2876,8 @@
           escapeHtml(group.requestModel) + '">',
         '<div class="usage-internal-request-head">',
         '<span class="usage-internal-model-copy"><small>' + escapeHtml(text(state, "requestModelGroup")) +
-          '</small><code>' + escapeHtml(statisticsKeyLabel(state, group.requestModel)) + "</code></span>",
+          '</small><code style="color:' + statisticsColorForKey(state, group.requestModel) + '">' +
+          escapeHtml(statisticsKeyLabel(state, group.requestModel)) + "</code></span>",
         '<b class="usage-internal-count">' +
           escapeHtml(text(state, "countTimes", { count: Number(group.count) || 0 })) + "</b>",
         "</div>",
@@ -2803,6 +2951,7 @@
             title: conversation.title || id,
             count: 0,
             models: {},
+            efforts: {},
             firstSubmittedAt: conversation.firstSubmittedAt || "",
             lastSubmittedAt: "",
             lastPageUrl: conversation.lastPageUrl || ("https://chatgpt.com/c/" + id)
@@ -2810,6 +2959,10 @@
           current.count += Number(conversation.count) || 0;
           current.models[model] = (Number(current.models[model]) || 0) +
             (Number(conversation.count) || 0);
+          Object.keys(conversation.efforts || {}).forEach(function addConversationEffort(effort) {
+            current.efforts[effort] = (Number(current.efforts[effort]) || 0) +
+              (Number(conversation.efforts[effort]) || 0);
+          });
           if (
             !current.firstSubmittedAt ||
             String(conversation.firstSubmittedAt || "") < current.firstSubmittedAt
@@ -2835,12 +2988,15 @@
             title: event.pageTitle || id,
             count: 0,
             models: {},
+            efforts: {},
             firstSubmittedAt: event.submittedAt || "",
             lastSubmittedAt: "",
             lastPageUrl: event.pageUrl || ("https://chatgpt.com/c/" + id)
           };
           current.count += 1;
           current.models[model] = (Number(current.models[model]) || 0) + 1;
+          var effort = reasoningEffortClass(eventReasoningEffort(event));
+          current.efforts[effort] = (Number(current.efforts[effort]) || 0) + 1;
           current.title = event.pageTitle || current.title;
           current.lastSubmittedAt = event.submittedAt || current.lastSubmittedAt;
           current.lastPageUrl = event.pageUrl || current.lastPageUrl;
@@ -2877,8 +3033,13 @@
         session.lastSubmittedAt ? formatDateTime(session.lastSubmittedAt) : ""
       ].filter(Boolean).join(text(state, "separator"));
       var href = session.lastPageUrl || ("https://chatgpt.com/c/" + session.conversationId);
+      var effortKeys = Object.keys(session.efforts || {}).filter(function positiveEffort(effort) {
+        return Number(session.efforts[effort]) > 0;
+      }).map(reasoningEffortClass).filter(function uniqueEffort(effort, effortIndex, list) {
+        return list.indexOf(effort) === effortIndex;
+      }).join(" ");
       return [
-        '<div class="usage-record-session-row">',
+        '<div class="usage-record-session-row" data-efforts="' + escapeHtml(effortKeys) + '">',
         '<span class="usage-index-number">' + (index + 1) + "</span>",
         '<div class="usage-index-content">',
         '<a class="usage-index-link" data-session-id="' + escapeHtml(session.conversationId) + '" href="' + escapeHtml(href) + '" target="_blank" rel="noreferrer" title="' + escapeHtml(session.conversationId) + '">' + escapeHtml(session.title || session.conversationId) + "</a>",
@@ -2941,15 +3102,45 @@
       return Number(counts[right]) - Number(counts[left]) || left.localeCompare(right);
     }).map(function renderCount(key) {
       var className = typeof valueClass === "function" ? String(valueClass(key) || "") : "";
-      return '<span><b' + (className ? ' class="usage-effort-' + escapeHtml(className) + '"' : "") + ">" +
+      return '<span' + (className
+        ? ' class="usage-effort-token" data-effort-filter="' + escapeHtml(className) +
+          '" role="button" tabindex="0" aria-label="' + escapeHtml(valueLabel(key)) + '"'
+        : "") + '><b' + (className ? ' class="usage-effort-' + escapeHtml(className) + '"' : "") + ">" +
         escapeHtml(valueLabel(key)) + '</b><span class="usage-subcount">' +
         escapeHtml(String(Number(counts[key]) || 0)) + "</span></span>";
     }).join("");
   }
 
   function relationConversationRows(state, relation) {
+    var derivedEfforts = {};
+    rangeEvents(state.stats || {}, state || {}).forEach(function collectConversationEffort(event) {
+      var requestModel = eventRequestModel(event) || INTERNAL_UNKNOWN_REQUEST;
+      var responseModel = eventResponseModel(event) || INTERNAL_UNKNOWN_RESPONSE;
+      if (
+        requestModel !== (relation.requestModel || INTERNAL_UNKNOWN_REQUEST) ||
+        responseModel !== (relation.responseModel || INTERNAL_UNKNOWN_RESPONSE)
+      ) {
+        return;
+      }
+      var conversationId = String(event.conversationId || "").trim() || (
+        event.submissionId ? "pending:" + String(event.submissionId).slice(0, 96) : ""
+      );
+      if (!conversationId) {
+        return;
+      }
+      derivedEfforts[conversationId] = derivedEfforts[conversationId] || {};
+      var effort = reasoningEffortClass(eventReasoningEffort(event));
+      derivedEfforts[conversationId][effort] =
+        (Number(derivedEfforts[conversationId][effort]) || 0) + 1;
+    });
     var conversations = Object.keys(relation.conversations || {}).map(function toConversation(id) {
-      return relation.conversations[id];
+      var conversation = Object.assign({}, relation.conversations[id]);
+      conversation.efforts = Object.assign(
+        {},
+        conversation.efforts || {},
+        derivedEfforts[id] || {}
+      );
+      return conversation;
     }).filter(Boolean).sort(function byRecent(left, right) {
       return String(right.lastSubmittedAt || "").localeCompare(String(left.lastSubmittedAt || ""));
     });
@@ -2991,8 +3182,13 @@
         return '<span class="usage-source-mode ' + escapeHtml(normalizeDashboardSourceMode(mode)) + '">' +
           escapeHtml(sourceModeLabel(state, mode) + (mixed ? " " + count : "")) + "</span>";
       }).join("");
+      var effortKeys = Object.keys(conversation.efforts || {}).filter(function positiveEffort(effort) {
+        return Number(conversation.efforts[effort]) > 0;
+      }).map(reasoningEffortClass).filter(function uniqueEffort(effort, index, list) {
+        return list.indexOf(effort) === index;
+      }).join(" ");
       return [
-        '<div class="usage-relation-conversation">',
+        '<div class="usage-relation-conversation" data-efforts="' + escapeHtml(effortKeys) + '">',
         '<span class="usage-source-mode-list">' + sourceBadges + "</span>",
         '<div class="usage-index-content">' + conversationTitle + "<small>" + escapeHtml(meta) + "</small></div>",
         "</div>"
@@ -3032,13 +3228,16 @@
       var sameModel = Boolean(requestModel && responseModel && requestModel === responseModel);
       var modelHead = sameModel
         ? '<strong class="same-model"><span class="usage-relation-model"><small>' +
-          escapeHtml(text(state, "modelRelationSame")) + '</small><code>' +
-          escapeHtml(requestModel) + "</code></span></strong>"
+          escapeHtml(text(state, "variants")) + '</small><code style="color:' +
+          statisticsColorForKey(state, responseModel || INTERNAL_UNKNOWN_RESPONSE) + '">' +
+          escapeHtml(responseModel) + "</code></span></strong>"
         : '<strong><span class="usage-relation-model"><small>' +
-          escapeHtml(text(state, "requestModels")) + '</small><code>' +
+          escapeHtml(text(state, "requestModels")) + '</small><code style="color:' +
+          statisticsColorForKey(state, requestModel || INTERNAL_UNKNOWN_REQUEST) + '">' +
           escapeHtml(requestModel || text(state, "responsePending")) +
           '</code></span><i>&rarr;</i><span class="usage-relation-model"><small>' +
-          escapeHtml(text(state, "variants")) + '</small><code>' +
+          escapeHtml(text(state, "variants")) + '</small><code style="color:' +
+          statisticsColorForKey(state, responseModel || INTERNAL_UNKNOWN_RESPONSE) + '">' +
           escapeHtml(responseModel || text(state, "responsePending")) + "</code></span></strong>";
       return [
         '<details class="usage-model-relation">',
@@ -3046,9 +3245,8 @@
           escapeHtml(text(state, "relationConversations") + " · " + conversations.length) + '">',
         '<span class="usage-relation-head">' + modelHead + "<span>" +
           escapeHtml(String(Number(relation.count) || 0)) + "</span></span>",
-        '<span class="usage-relation-dimension"><span class="usage-record-label">' +
-          escapeHtml(text(state, "reasoningEffort")) + '</span><span class="usage-relation-values">' +
-          (effortHtml || '<span><b class="usage-effort-unknown">' + escapeHtml(text(state, "reasoningUnspecified")) +
+        '<span class="usage-relation-dimension usage-relation-efforts-only"><span class="usage-relation-values">' +
+          (effortHtml || '<span class="usage-effort-token" data-effort-filter="unknown" role="button" tabindex="0"><b class="usage-effort-unknown">' + escapeHtml(text(state, "reasoningUnspecified")) +
             '</b><span class="usage-subcount">' + escapeHtml(String(Number(relation.count) || 0)) +
             "</span></span>") + "</span></span>",
         "</summary>",
@@ -3240,7 +3438,7 @@
     }
     return [
       '<div class="usage-openai-component' + (featured ? " featured" : "") + '">',
-      '<strong>' + escapeHtml(component.name) + "</strong>",
+      '<strong title="' + escapeHtml(component.name) + '">' + escapeHtml(component.name) + "</strong>",
       renderStatusBadge(state, component.status),
       "</div>"
     ].join("");
@@ -3347,9 +3545,8 @@
       '<details class="usage-settings-item usage-settings-item-' + escapeHtml(id) + '"' +
         (open ? " open" : "") + ' data-settings-category="' + escapeHtml(id) + '">',
       '<summary><span class="usage-settings-category-label">' + escapeHtml(label) + '</span>',
-      currentValue
-        ? '<span class="usage-settings-current">' + escapeHtml(currentValue) + '</span>'
-        : "",
+      '<span class="usage-settings-current"' + (currentValue ? "" : ' aria-hidden="true"') + '>' +
+        escapeHtml(currentValue || "") + "</span>",
       '<span class="usage-settings-arrow" aria-hidden="true">‹</span></summary>',
       '<div class="usage-settings-submenu' + (className ? " " + escapeHtml(className) : "") +
         '" role="group" aria-label="' + escapeHtml(label) + '">' + content + "</div>",
@@ -3357,10 +3554,22 @@
     ].join("");
   }
 
+  function renderHeaderIcon(name) {
+    if (name === "refresh") {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7"/></svg>';
+    }
+    if (name === "settings") {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3v-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06L7.06 4.2l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3h4v.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.6 1h.1v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>';
+    }
+    if (name === "close") {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.75 6.75 10.5 10.5M17.25 6.75l-10.5 10.5"/></svg>';
+    }
+    return "";
+  }
+
   function renderSettingsMenu(state) {
     var mode = normalizeSourceModeFilter(state.sourceModeFilter);
     var statisticsMode = normalizeStatisticsMode(state.statisticsMode);
-    var chartType = normalizeChartType(state.chartType);
     var themeMode = normalizeThemeMode(state.themeMode);
     var language = currentLanguage(state);
     var activeView = normalizeView(state.activeView);
@@ -3370,7 +3579,7 @@
     ].map(function languageOption(item) {
       return renderSettingsOption(state, "data-language-select", item.id, item.label, language === item.id);
     }).join("");
-    var categories = [
+    var basicCategories = [
       renderSettingsCategory(
         state,
         "language",
@@ -3392,7 +3601,7 @@
         themeMode === item.id
       );
     }).join("");
-    categories.push(
+    basicCategories.push(
       renderSettingsCategory(
         state,
         "theme",
@@ -3422,29 +3631,9 @@
       ),
       '<input class="usage-statistics-data-file" data-statistics-data-file type="file" accept=".json,application/json" hidden>'
     ].join("");
-    categories.push(
-      renderSettingsCategory(
-        state,
-        "data",
-        text(state, "statisticsData"),
-        "",
-        statisticsDataActions,
-        "usage-settings-data-submenu"
-      )
-    );
-
-    if (activeView !== "chart") {
-      return [
-        '<details class="usage-settings-menu"' + (state.settingsMenuOpen ? " open" : "") + ">",
-        '<summary class="usage-header-action usage-settings-trigger" aria-label="' +
-          escapeHtml(text(state, "settingsOpen")) + '" title="' + escapeHtml(text(state, "settingsOpen")) + '">' +
-          escapeHtml(text(state, "settings")) + "</summary>",
-        '<div class="usage-settings-popover">' + categories.join("") + "</div>",
-        "</details>"
-      ].join("");
-    }
-
-    var sourceOptions = [
+    var categories = basicCategories.slice();
+    if (activeView === "chart") {
+      var sourceOptions = [
       { id: "all", key: "sourceFilterAll" },
       { id: "chat", key: "sourceFilterChat" },
       { id: "work", key: "sourceFilterWork" }
@@ -3457,7 +3646,7 @@
         mode === item.id
       );
     }).join("");
-    var statisticsModeOptions = [
+      var statisticsModeOptions = [
       { id: "mapped", key: "statisticsModeMapped" },
       { id: "internal", key: "statisticsModeInternal" }
     ].map(function statisticsModeOption(item) {
@@ -3469,70 +3658,83 @@
         statisticsMode === item.id
       );
     }).join("");
-    var chartTypeOptions = [
-      { id: "line", key: "chartTypeLine" },
-      { id: "donut", key: "chartTypeDonut" }
-    ].map(function chartTypeOption(item) {
-      return renderSettingsOption(
-        state,
-        "data-chart-type",
-        item.id,
-        text(state, item.key),
-        chartType === item.id
-      );
-    }).join("");
-    var sectionVisibilityOptions = [
+      var sectionVisibilityItems = [
       {
-        id: "trend",
+        id: "line",
         key: "statisticsSectionTrend",
-        active: state.showTrendChart !== false
+        active: state.showLineChart !== false
+      },
+      {
+        id: "donut",
+        key: "statisticsSectionDonut",
+        active: state.showDonutChart === true
       },
       {
         id: "text",
         key: "statisticsSectionText",
         active: state.showTextStatistics !== false
       }
-    ].map(function sectionVisibilityOption(item) {
-      return '<label class="usage-statistics-visibility-option"><input type="checkbox" data-statistics-section="' +
-        item.id + '"' + (item.active ? " checked" : "") + "><span>" +
-        escapeHtml(text(state, item.key)) +
-        '</span><i class="usage-statistics-visibility-indicator" aria-hidden="true"></i></label>';
-    }).join("");
+      ];
+      var sectionVisibilityOptions = sectionVisibilityItems.map(function sectionVisibilityOption(item) {
+        return '<label class="usage-statistics-visibility-option"><input type="checkbox" data-statistics-section="' +
+          item.id + '"' + (item.active ? " checked" : "") + "><span>" +
+          escapeHtml(text(state, item.key)) +
+          '</span><i class="usage-statistics-visibility-indicator" aria-hidden="true"></i></label>';
+      }).join("");
+      var enabledSectionCount = sectionVisibilityItems.filter(function enabled(item) {
+        return item.active;
+      }).length;
+      var enabledSectionSummary = enabledSectionCount === sectionVisibilityItems.length
+        ? text(state, "statisticsSectionAll")
+        : sectionVisibilityItems.filter(function enabled(item) {
+            return item.active;
+          }).map(function shortSectionLabel(item) {
+            return text(state, item.id === "line"
+              ? "statisticsSectionTrendShort"
+              : item.id === "donut"
+                ? "statisticsSectionDonutShort"
+                : "statisticsSectionTextShort");
+          }).join(" + ") || text(state, "statisticsSectionNone");
+      categories.push(
+        renderSettingsCategory(
+          state,
+          "source",
+          text(state, "source"),
+          text(state, mode === "chat" ? "sourceFilterChat" : mode === "work" ? "sourceFilterWork" : "sourceFilterAll"),
+          sourceOptions
+        ),
+        renderSettingsCategory(
+          state,
+          "statistics",
+          text(state, "statisticsMode"),
+          text(state, statisticsMode === "internal" ? "statisticsModeInternal" : "statisticsModeMapped"),
+          statisticsModeOptions
+        ),
+        renderSettingsCategory(
+          state,
+          "sections",
+          text(state, "statisticsSections"),
+          enabledSectionSummary,
+          sectionVisibilityOptions
+        )
+      )
+    }
     categories.push(
       renderSettingsCategory(
         state,
-        "source",
-        text(state, "source"),
-        text(state, mode === "chat" ? "sourceFilterChat" : mode === "work" ? "sourceFilterWork" : "sourceFilterAll"),
-        sourceOptions
-      ),
-      renderSettingsCategory(
-        state,
-        "chart",
-        text(state, "chartType"),
-        text(state, chartType === "donut" ? "chartTypeDonut" : "chartTypeLine"),
-        chartTypeOptions
-      ),
-      renderSettingsCategory(
-        state,
-        "statistics",
-        text(state, "statisticsMode"),
-        text(state, statisticsMode === "internal" ? "statisticsModeInternal" : "statisticsModeMapped"),
-        statisticsModeOptions
-      ),
-      renderSettingsCategory(
-        state,
-        "sections",
-        text(state, "statisticsSections"),
-        "",
-        sectionVisibilityOptions
+        "data",
+        text(state, "statisticsData"),
+        text(state, "statisticsDataCurrent"),
+        statisticsDataActions,
+        "usage-settings-data-submenu"
       )
     );
     return [
       '<details class="usage-settings-menu"' + (state.settingsMenuOpen ? " open" : "") + ">",
       '<summary class="usage-header-action usage-settings-trigger" aria-label="' +
         escapeHtml(text(state, "settingsOpen")) + '" title="' + escapeHtml(text(state, "settingsOpen")) + '">' +
-        escapeHtml(text(state, "settings")) + "</summary>",
+        renderHeaderIcon("settings") + '<span class="usage-visually-hidden">' +
+        escapeHtml(text(state, "settings")) + "</span></summary>",
       '<div class="usage-settings-popover">' + categories.join("") + "</div>",
       "</details>"
     ].join("");
@@ -3540,15 +3742,18 @@
 
   function renderDateControls(state) {
     var today = defaultEndDate();
+    var startValue = dateNoLaterThanToday(state.startDate) || "";
+    var endValue = dateNoLaterThanToday(state.endDate) || today;
     return [
       '<div class="usage-controls usage-chart-controls">',
       '<div class="usage-date-controls" aria-label="' + escapeHtml(text(state, "customRange")) + '">',
-      '<label>' + escapeHtml(text(state, "startDate")) +
-        ' <input class="usage-start-date" type="date" max="' + escapeHtml(today) +
-        '" value="' + escapeHtml(state.startDate) + '"></label>',
-      '<label>' + escapeHtml(text(state, "endDate")) +
-        ' <input class="usage-end-date" type="date" max="' + escapeHtml(today) +
-        '" value="' + escapeHtml(state.endDate) + '"></label>',
+      '<label><span>' + escapeHtml(text(state, "startDate")) + '</span>' +
+        ' <input class="usage-start-date" type="date" max="' + escapeHtml(endValue) +
+        '" value="' + escapeHtml(startValue) + '"></label>',
+      '<label><span>' + escapeHtml(text(state, "endDate")) + '</span>' +
+        ' <input class="usage-end-date" type="date" min="' + escapeHtml(startValue) +
+        '" max="' + escapeHtml(today) +
+        '" value="' + escapeHtml(endValue) + '"></label>',
       "</div>",
       "</div>"
     ].join("");
@@ -3882,7 +4087,9 @@
         escapeHtml(text(state, "exportFormatGroup")) + '">' + buttons + "</div>",
       '<button type="button" class="usage-export-cancel" data-export-cancel hidden>' +
         escapeHtml(text(state, "exportCancel")) + "</button>",
-      '<p class="usage-export-status" data-export-status aria-live="polite"></p>',
+      '<p class="usage-export-status' + (state.exportStatusError ? " error" : "") +
+        '" data-export-status aria-live="polite">' +
+        escapeHtml(state.exportStatusText || "") + "</p>",
       "</section>"
     ].join("");
   }
@@ -3891,7 +4098,7 @@
     return normalizeStatisticsMode(state && state.statisticsMode) === "internal" ||
       normalizeSourceModeFilter(state && state.sourceModeFilter) !== "all" ||
       (
-        normalizeChartType(state && state.chartType) === "donut" &&
+        state && state.showDonutChart === true &&
         Boolean(state && state.donutModel)
       );
   }
@@ -3926,20 +4133,16 @@
       return '<div class="usage-view-panel">' + renderExportPanel(state) + "</div>";
     }
 
-    var showTrendChart = state.showTrendChart !== false;
+    var showLineChart = state.showLineChart !== false;
+    var showDonutChart = state.showDonutChart === true;
     var showTextStatistics = state.showTextStatistics !== false;
     return [
       '<div class="usage-view-panel usage-count-panel">',
       '<section class="usage-text-panel usage-chart-panel">',
       renderDateControls(state),
       renderStatisticsCompletenessWarning(state),
-      showTrendChart
-        ? (
-            normalizeChartType(state.chartType) === "donut"
-              ? renderDonutChart(state.stats, models, state)
-              : renderChart(state.stats, models, state)
-          )
-        : "",
+      showLineChart ? renderChart(state.stats, models, state) : "",
+      showDonutChart ? renderDonutChart(state.stats, models, state) : "",
       showTextStatistics
         ? '<div class="usage-count-list">' + renderModelCountRows(state, models) + "</div>"
         : "",
@@ -4187,11 +4390,169 @@
 
   }
 
+  function fitStatusPanel(state) {
+    if (!state || normalizeView(state.activeView) !== "status" || !state.container) {
+      return;
+    }
+    var dashboard = state.container.querySelector(".usage-dashboard");
+    if (!dashboard || !dashboard.classList) {
+      return;
+    }
+    dashboard.classList.remove(
+      "usage-status-compact",
+      "usage-status-columns",
+      "usage-status-dense",
+      "usage-status-ultra",
+      "usage-status-scaled"
+    );
+    if (dashboard.style && typeof dashboard.style.removeProperty === "function") {
+      dashboard.style.removeProperty("--usage-status-columns");
+      dashboard.style.removeProperty("--usage-status-font-compensation");
+      // Clear the previous whole-dashboard fallback when an existing panel is
+      // re-rendered after an extension update.
+      dashboard.style.removeProperty("zoom");
+    }
+    var statusPanel = typeof dashboard.querySelector === "function"
+      ? dashboard.querySelector(".usage-view-panel")
+      : null;
+    if (statusPanel && statusPanel.style && typeof statusPanel.style.removeProperty === "function") {
+      statusPanel.style.removeProperty("zoom");
+    }
+    var clientHeight = Number(dashboard.clientHeight);
+    var clientWidth = Number(dashboard.clientWidth);
+    if (!(clientHeight > 0) || !(clientWidth > 0)) {
+      return;
+    }
+    var overflows = function overflows() {
+      return Number(dashboard.scrollHeight) > clientHeight + 1 ||
+        Number(dashboard.scrollWidth) > clientWidth + 1;
+    };
+    var overflowScore = function overflowScore() {
+      return Math.max(
+        Number(dashboard.scrollHeight) / clientHeight,
+        Number(dashboard.scrollWidth) / clientWidth
+      );
+    };
+    var tryColumnRange = function tryColumnRange(maxColumns) {
+      var bestColumns = 1;
+      var bestScore;
+      dashboard.classList.remove("usage-status-columns");
+      if (dashboard.style && typeof dashboard.style.removeProperty === "function") {
+        dashboard.style.removeProperty("--usage-status-columns");
+      }
+      bestScore = overflowScore();
+      if (!overflows()) {
+        return true;
+      }
+      if (!dashboard.style || typeof dashboard.style.setProperty !== "function") {
+        return false;
+      }
+      for (var columns = 2; columns <= maxColumns; columns += 1) {
+        dashboard.classList.add("usage-status-columns");
+        dashboard.style.setProperty("--usage-status-columns", String(columns));
+        var score = overflowScore();
+        if (score < bestScore) {
+          bestColumns = columns;
+          bestScore = score;
+        }
+        if (!overflows()) {
+          return true;
+        }
+      }
+      if (bestColumns > 1) {
+        dashboard.classList.add("usage-status-columns");
+        dashboard.style.setProperty("--usage-status-columns", String(bestColumns));
+      } else {
+        dashboard.classList.remove("usage-status-columns");
+        dashboard.style.removeProperty("--usage-status-columns");
+      }
+      return false;
+    };
+    var columnLimit = function columnLimit(minimumWidth, maximumColumns) {
+      return Math.max(1, Math.min(
+        maximumColumns,
+        Math.floor(clientWidth / minimumWidth)
+      ));
+    };
+    if (overflows()) {
+      dashboard.classList.add("usage-status-compact");
+    }
+    if (!overflows()) {
+      return;
+    }
+    if (tryColumnRange(columnLimit(128, 3))) {
+      return;
+    }
+    dashboard.classList.add("usage-status-dense");
+    if (tryColumnRange(columnLimit(108, 3))) {
+      return;
+    }
+    dashboard.classList.add("usage-status-ultra");
+    if (tryColumnRange(columnLimit(92, 4))) {
+      return;
+    }
+    if (
+      !statusPanel ||
+      !statusPanel.style ||
+      typeof statusPanel.style.setProperty !== "function" ||
+      !dashboard.style ||
+      typeof dashboard.style.setProperty !== "function"
+    ) {
+      return;
+    }
+
+    // Only the status body is scaled, so the title, tabs, and controls stay at
+    // their normal readable size. Text compensation preserves the status copy
+    // at its ultra-layout size for all reasonable panel heights (down to 82%);
+    // below that point only truly pathological content growth starts shrinking
+    // the text instead of introducing a scrollbar or clipping rows.
+    dashboard.classList.add("usage-status-scaled");
+    var applyScale = function applyScale(value) {
+      var scale = Math.max(0.05, Math.min(1, Number(value) || 1));
+      statusPanel.style.setProperty("zoom", scale.toFixed(3));
+      dashboard.style.setProperty(
+        "--usage-status-font-compensation",
+        (1 / Math.max(scale, 0.82)).toFixed(4)
+      );
+      return scale;
+    };
+    var panelHeight = Number(statusPanel.scrollHeight);
+    var fixedHeight = Math.max(0, Number(dashboard.scrollHeight) - panelHeight);
+    var availablePanelHeight = Math.max(1, clientHeight - fixedHeight - 1);
+    var heightRatio = panelHeight > 0 ? availablePanelHeight / panelHeight : 1;
+    var widestContent = Math.max(
+      Number(dashboard.scrollWidth) || 0,
+      Number(statusPanel.scrollWidth) || 0
+    );
+    var widthRatio = widestContent > 0 ? clientWidth / widestContent : 1;
+    var scale = applyScale(Math.min(1, heightRatio, widthRatio) * 0.985);
+
+    // Font compensation and pixel rounding make the first geometric estimate
+    // deliberately conservative rather than exact. Re-measure the real layout
+    // and monotonically reduce only as much as the rendered panel still needs.
+    for (var attempt = 0; attempt < 12 && overflows(); attempt += 1) {
+      var verticalCorrection = Number(dashboard.scrollHeight) > 0
+        ? clientHeight / Number(dashboard.scrollHeight)
+        : 1;
+      var horizontalCorrection = Number(dashboard.scrollWidth) > 0
+        ? clientWidth / Number(dashboard.scrollWidth)
+        : 1;
+      var correction = Math.min(verticalCorrection, horizontalCorrection);
+      if (!(correction > 0) || !Number.isFinite(correction)) {
+        break;
+      }
+      scale = applyScale(scale * Math.min(0.985, correction * 0.985));
+    }
+  }
+
   function render(state) {
     state.stats = sanitizeDashboardStats(state.stats || {});
     ensureSelection(state);
     state.startDate = dateNoLaterThanToday(state.startDate) || defaultStartDate(state.stats || {});
     state.endDate = dateNoLaterThanToday(state.endDate) || defaultEndDate();
+    if (state.startDate && state.endDate && state.startDate > state.endDate) {
+      state.endDate = state.startDate;
+    }
     var models = selectedModels(state);
     var activeView = normalizeView(state.activeView);
     // 标题/副标题跟随当前标签页:导出页原来还显示"模型使用 + 统计副标题",是错的(用户:导出界面标题不对)。
@@ -4203,15 +4564,22 @@
     var subtitle = "";
     var surface = state.options && state.options.surface === "page" ? "page" : "popup";
     var closeAction = surface === "page" && state.options && typeof state.options.onClose === "function"
-      ? '<button class="usage-header-action usage-panel-close" type="button" data-panel-close aria-label="' + escapeHtml(text(state, "close")) + '" title="' + escapeHtml(text(state, "close")) + '">&times;</button>'
+      ? '<button class="usage-header-action usage-panel-close" type="button" data-panel-close aria-label="' +
+        escapeHtml(text(state, "close")) + '" title="' + escapeHtml(text(state, "close")) + '">' +
+        renderHeaderIcon("close") + '<span class="usage-visually-hidden">' +
+        escapeHtml(text(state, "close")) + "</span></button>"
       : "";
     var visibleStatusText = state.statusText || "";
     state.container.innerHTML = [
-      '<div class="usage-dashboard usage-dashboard-' + surface + '">',
+      '<div class="usage-dashboard usage-dashboard-' + surface + " usage-active-" + activeView + '">',
       '<div class="usage-sticky-header"><div class="usage-topline"><div class="usage-top-copy"><div class="usage-title-row"><h2>' + escapeHtml(heading) + "</h2></div>" +
         (subtitle ? "<p>" + escapeHtml(subtitle) + "</p>" : "") +
-        '</div><div class="usage-top-actions"><button class="usage-header-action usage-refresh" type="button">' +
-        escapeHtml(text(state, "refresh")) + "</button>" + renderSettingsMenu(state) + closeAction + "</div></div>",
+        '</div><div class="usage-top-actions"><button class="usage-header-action usage-refresh' +
+        (state.refreshing ? " is-refreshing" : "") + '" type="button"' +
+        (state.refreshing ? ' disabled aria-busy="true"' : "") + ' aria-label="' +
+        escapeHtml(text(state, "refresh")) + '" title="' + escapeHtml(text(state, "refresh")) + '">' +
+        renderHeaderIcon("refresh") + '<span class="usage-visually-hidden">' +
+        escapeHtml(text(state, "refresh")) + "</span></button>" + renderSettingsMenu(state) + closeAction + "</div></div>",
       renderViewTabs(state),
       "</div>",
       renderActiveView(state, models),
@@ -4220,6 +4588,7 @@
     ].join("");
     applyPageThemeVariables(state);
     applyPopupThemeVariables(state);
+    fitStatusPanel(state);
     bindEvents(state);
     notifyLanguage(state);
     pushBadgeFilter(state);
@@ -4508,12 +4877,207 @@
     });
   }
 
+  function clearConversationEffortFilter(container) {
+    if (!container || typeof container.querySelectorAll !== "function") {
+      return;
+    }
+    Array.prototype.forEach.call(
+      container.querySelectorAll(".usage-relation-conversation,.usage-record-session-row"),
+      function showConversation(row) {
+        row.hidden = false;
+      }
+    );
+    Array.prototype.forEach.call(container.querySelectorAll("[data-effort-filter]"), function clearToken(token) {
+      token.removeAttribute("data-effort-active");
+    });
+    Array.prototype.forEach.call(container.querySelectorAll(".usage-effort-filter-empty"), function removeEmpty(node) {
+      if (node.parentNode) {
+        node.parentNode.removeChild(node);
+      }
+    });
+  }
+
+  function filterConversationDetailsByEffort(state, details, effort, activeToken) {
+    if (!details || !effort) {
+      return 0;
+    }
+    clearConversationEffortFilter(details);
+    var rows = details.querySelectorAll(".usage-relation-conversation,.usage-record-session-row");
+    var matches = 0;
+    Array.prototype.forEach.call(rows, function filterConversation(row) {
+      var efforts = String(row.getAttribute("data-efforts") || "").split(/\s+/).filter(Boolean);
+      var visible = efforts.indexOf(effort) !== -1;
+      row.hidden = !visible;
+      if (visible) {
+        matches += 1;
+      }
+    });
+    if (activeToken) {
+      activeToken.setAttribute("data-effort-active", "true");
+    }
+    details.open = true;
+    var list = details.querySelector(".usage-relation-conversation-list,.usage-count-details");
+    if (!matches && list && typeof list.insertAdjacentHTML === "function") {
+      list.insertAdjacentHTML(
+        "beforeend",
+        '<div class="usage-record-empty usage-effort-filter-empty">' +
+          escapeHtml(text(state, "noModelConversations")) + "</div>"
+      );
+    }
+    return matches;
+  }
+
+  function focusDonutEffortConversations(state, effort) {
+    if (!state.donutModel) {
+      return;
+    }
+    if (state.showTextStatistics === false) {
+      state.showTextStatistics = true;
+      render(state);
+      saveSettings(state, ["showTextStatistics"]).catch(function failed(error) {
+        setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+      });
+    }
+    var selector = normalizeStatisticsMode(state.statisticsMode) === "internal"
+      ? '[data-request-model-group="' + cssAttributeValue(state.donutModel) + '"]'
+      : '[data-mapped-model="' + cssAttributeValue(state.donutModel) + '"]';
+    var group = state.container.querySelector(selector);
+    if (!group) {
+      return;
+    }
+    var mappedGroup = group.matches && group.matches(".usage-mapped-record");
+    var mappedRelations = mappedGroup
+      ? Array.prototype.slice.call(group.querySelectorAll(".usage-model-relation"))
+      : [];
+    var details = mappedGroup
+      ? (mappedRelations.length ? mappedRelations : [group])
+      : group.matches && group.matches(".usage-internal-response,.usage-model-relation")
+        ? [group]
+        : Array.prototype.slice.call(group.querySelectorAll(".usage-internal-response,.usage-model-relation"));
+    if (mappedGroup) {
+      group.open = true;
+    }
+    var firstMatch = null;
+    details.forEach(function filterDetails(item) {
+      var matches = filterConversationDetailsByEffort(state, item, effort, null);
+      if (matches && !firstMatch) {
+        firstMatch = item;
+      }
+      if (!matches) {
+        item.open = false;
+      }
+    });
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-donut-effort],.usage-donut-legend-row[data-effort-filter]"),
+      function markDonutEffort(target) {
+      var targetEffort = target.hasAttribute("data-donut-effort")
+        ? target.getAttribute("data-donut-effort")
+        : target.getAttribute("data-effort-filter");
+      if (reasoningEffortClass(targetEffort) === effort) {
+        target.setAttribute("data-effort-active", "true");
+      } else {
+        target.removeAttribute("data-effort-active");
+      }
+    });
+    Array.prototype.forEach.call(group.querySelectorAll("[data-effort-filter]"), function markTextEffort(target) {
+      if (reasoningEffortClass(target.getAttribute("data-effort-filter")) === effort) {
+        target.setAttribute("data-effort-active", "true");
+      }
+    });
+    if (firstMatch && typeof firstMatch.scrollIntoView === "function") {
+      firstMatch.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
+
+  function nearestPathProgress(path, x, y) {
+    if (!path || typeof path.getTotalLength !== "function" || typeof path.getPointAtLength !== "function") {
+      return null;
+    }
+    var total = Number(path.getTotalLength()) || 0;
+    if (total <= 0) {
+      return 0;
+    }
+    var samples = 72;
+    var bestLength = 0;
+    var bestDistance = Number.POSITIVE_INFINITY;
+    for (var index = 0; index <= samples; index += 1) {
+      var length = total * index / samples;
+      var point = path.getPointAtLength(length);
+      var dx = Number(point.x) - x;
+      var dy = Number(point.y) - y;
+      var distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestLength = length;
+      }
+    }
+    var radius = total / samples;
+    var low = Math.max(0, bestLength - radius);
+    var high = Math.min(total, bestLength + radius);
+    for (var refinement = 0; refinement < 10; refinement += 1) {
+      var first = low + (high - low) / 3;
+      var second = high - (high - low) / 3;
+      var firstPoint = path.getPointAtLength(first);
+      var secondPoint = path.getPointAtLength(second);
+      var firstDx = Number(firstPoint.x) - x;
+      var firstDy = Number(firstPoint.y) - y;
+      var secondDx = Number(secondPoint.x) - x;
+      var secondDy = Number(secondPoint.y) - y;
+      if (firstDx * firstDx + firstDy * firstDy <= secondDx * secondDx + secondDy * secondDy) {
+        high = second;
+      } else {
+        low = first;
+      }
+    }
+    return Math.max(0, Math.min(1, ((low + high) / 2) / total));
+  }
+
+  function syncChartTrajectoryAnimation(state) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-chart-series-group]"),
+      function syncSeries(group) {
+        var path = group.querySelector && group.querySelector(".usage-line");
+        if (!path) {
+          return;
+        }
+        Array.prototype.forEach.call(group.querySelectorAll(".usage-point"), function syncPoint(point, index, points) {
+          var progress = nearestPathProgress(
+            path,
+            Number(point.getAttribute("cx")) || 0,
+            Number(point.getAttribute("cy")) || 0
+          );
+          if (progress == null) {
+            progress = points.length > 1 ? index / (points.length - 1) : 0;
+          }
+          if (point.style && typeof point.style.setProperty === "function") {
+            point.style.setProperty("--usage-point-delay", (progress * 0.56).toFixed(3) + "s");
+          }
+        });
+      }
+    );
+  }
+
   function bindEvents(state) {
     var refreshButton = state.container.querySelector(".usage-refresh");
     if (refreshButton) {
       refreshButton.addEventListener("click", function refresh() {
-        reload(state, {
+        if (state.refreshing) {
+          return;
+        }
+        state.refreshing = true;
+        render(state);
+        Promise.resolve(reload(state, {
           forceExportList: state.activeView === "export"
+        })).then(function refreshFinished() {
+          state.refreshing = false;
+          render(state);
+        }, function refreshFailed(error) {
+          state.refreshing = false;
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+          render(state);
         });
       });
     }
@@ -4525,6 +5089,58 @@
     }
     var settingsMenu = state.container.querySelector(".usage-settings-menu");
     if (settingsMenu) {
+      var closeSettingsTimer = null;
+      var submenuCloseTimers = {};
+      var settingsTransitionMs = 160;
+      var setClosing = function setClosing(element, closing) {
+        if (!element || !element.classList) {
+          return;
+        }
+        if (closing) {
+          element.classList.add("is-closing");
+        } else {
+          element.classList.remove("is-closing");
+        }
+      };
+      var openSettingsMenu = function openSettingsMenu() {
+        if (closeSettingsTimer) {
+          clearTimeout(closeSettingsTimer);
+          closeSettingsTimer = null;
+        }
+        setClosing(settingsMenu, false);
+        settingsMenu.open = true;
+        state.settingsMenuOpen = true;
+      };
+      var closeSettingsMenu = function closeSettingsMenu() {
+        if (closeSettingsTimer) {
+          clearTimeout(closeSettingsTimer);
+        }
+        setClosing(settingsMenu, true);
+        closeSettingsTimer = setTimeout(function closeAfterPointerLeavesTree() {
+          settingsMenu.open = false;
+          setClosing(settingsMenu, false);
+          state.settingsMenuOpen = false;
+          state.settingsSubmenu = "";
+          closeSettingsTimer = null;
+        }, settingsTransitionMs);
+      };
+      settingsMenu.addEventListener("mouseenter", openSettingsMenu);
+      settingsMenu.addEventListener("mouseleave", closeSettingsMenu);
+      settingsMenu.addEventListener("focusin", openSettingsMenu);
+      settingsMenu.addEventListener("focusout", function closeAfterFocusLeaves(event) {
+        if (!settingsMenu.contains(event.relatedTarget)) {
+          closeSettingsMenu();
+        }
+      });
+      var settingsTrigger = settingsMenu.querySelector(".usage-settings-trigger");
+      if (settingsTrigger) {
+        settingsTrigger.addEventListener("click", function keepHoverMenuOpen(event) {
+          if (typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          openSettingsMenu();
+        });
+      }
       settingsMenu.addEventListener("toggle", function rememberSettingsMenu() {
         state.settingsMenuOpen = Boolean(settingsMenu.open);
         if (!state.settingsMenuOpen) {
@@ -4534,53 +5150,72 @@
     }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function bindSettingsCategory(category) {
       var categoryId = category.getAttribute("data-settings-category") || "";
+      var openSettingsCategory = function openSettingsCategory() {
+        if (!settingsMenu || !settingsMenu.open) {
+          return;
+        }
+        state.settingsSubmenu = categoryId;
+        Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function updateCategory(sibling) {
+          var siblingId = sibling.getAttribute("data-settings-category") || "";
+          if (submenuCloseTimers[siblingId]) {
+            clearTimeout(submenuCloseTimers[siblingId]);
+            delete submenuCloseTimers[siblingId];
+          }
+          if (sibling === category) {
+            setClosing(sibling, false);
+            sibling.open = true;
+            return;
+          }
+          if (!sibling.open) {
+            setClosing(sibling, false);
+            return;
+          }
+          setClosing(sibling, true);
+          submenuCloseTimers[siblingId] = setTimeout(function finishSubmenuClose() {
+            if (state.settingsSubmenu !== siblingId) {
+              sibling.open = false;
+            }
+            setClosing(sibling, false);
+            delete submenuCloseTimers[siblingId];
+          }, settingsTransitionMs);
+        });
+      };
       category.addEventListener("toggle", function rememberSettingsCategory() {
         if (category.open) {
           state.settingsSubmenu = categoryId;
-          Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function closeSibling(sibling) {
-            if (sibling !== category) {
-              sibling.open = false;
-            }
-          });
         } else if (state.settingsSubmenu === categoryId) {
           state.settingsSubmenu = "";
         }
       });
-      category.addEventListener("mouseenter", function expandSettingsCategory() {
-        if (!settingsMenu || !settingsMenu.open) {
-          return;
-        }
-        state.settingsSubmenu = categoryId;
-        Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function updateCategory(sibling) {
-          sibling.open = sibling === category;
-        });
-      });
-      category.addEventListener("focusin", function expandFocusedSettingsCategory() {
-        if (!settingsMenu || !settingsMenu.open) {
-          return;
-        }
-        state.settingsSubmenu = categoryId;
-        Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function updateCategory(sibling) {
-          sibling.open = sibling === category;
-        });
-      });
+      category.addEventListener("mouseenter", openSettingsCategory);
+      category.addEventListener("focusin", openSettingsCategory);
     });
     var startDate = state.container.querySelector(".usage-start-date");
     var endDate = state.container.querySelector(".usage-end-date");
     if (startDate) {
       startDate.addEventListener("change", function changeStart(event) {
-        state.startDate = dateNoLaterThanToday(event.target.value) || state.startDate;
+        var nextStart = dateNoLaterThanToday(event.target.value) || state.startDate;
+        var nextEnd = dateNoLaterThanToday(state.endDate) || defaultEndDate();
+        state.startDate = nextStart;
+        if (nextStart && (!nextEnd || nextStart > nextEnd)) {
+          state.endDate = nextStart;
+        }
         render(state);
-        saveSettings(state, ["startDate"]).catch(function failed(error) {
+        saveSettings(state, ["startDate", "endDate"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
     }
     if (endDate) {
       endDate.addEventListener("change", function changeEnd(event) {
-        state.endDate = dateNoLaterThanToday(event.target.value) || state.endDate;
+        var nextEnd = dateNoLaterThanToday(event.target.value) || state.endDate;
+        var nextStart = dateNoLaterThanToday(state.startDate) || nextEnd;
+        state.endDate = nextEnd;
+        if (nextEnd && (!nextStart || nextEnd < nextStart)) {
+          state.startDate = nextEnd;
+        }
         render(state);
-        saveSettings(state, ["endDate"]).catch(function failed(error) {
+        saveSettings(state, ["startDate", "endDate"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
@@ -4605,16 +5240,6 @@
         });
       });
     });
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-type]"), function bindChartType(button) {
-      button.addEventListener("click", function changeChartType() {
-        state.chartType = normalizeChartType(button.getAttribute("data-chart-type"));
-        state.donutModel = "";
-        render(state);
-        saveSettings(state, ["chartType"]).catch(function failed(error) {
-          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
-        });
-      });
-    });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-theme-select]"), function bindThemeMode(button) {
       button.addEventListener("click", function changeThemeMode() {
         state.themeMode = normalizeThemeMode(button.getAttribute("data-theme-select"));
@@ -4628,9 +5253,17 @@
       button.addEventListener("change", function changeStatisticsSection() {
         var section = button.getAttribute("data-statistics-section");
         var settingField;
-        if (section === "trend") {
-          state.showTrendChart = Boolean(button.checked);
-          settingField = "showTrendChart";
+        if (section === "line" || section === "trend") {
+          state.showLineChart = Boolean(button.checked);
+          state.showTrendChart = state.showLineChart || state.showDonutChart;
+          settingField = "showLineChart";
+        } else if (section === "donut") {
+          state.showDonutChart = Boolean(button.checked);
+          state.showTrendChart = state.showLineChart || state.showDonutChart;
+          if (!state.showDonutChart) {
+            state.donutModel = "";
+          }
+          settingField = "showDonutChart";
         } else if (section === "text") {
           state.showTextStatistics = Boolean(button.checked);
           settingField = "showTextStatistics";
@@ -4638,7 +5271,7 @@
           return;
         }
         render(state);
-        saveSettings(state, [settingField]).catch(function failed(error) {
+        saveSettings(state, [settingField, "showTrendChart"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
@@ -4677,6 +5310,9 @@
     }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-view-tab]"), function bindViewTab(button) {
       button.addEventListener("click", function changeView() {
+        state.activeViewInteractionRevision =
+          (Number(state.activeViewInteractionRevision) || 0) + 1;
+        state.activeViewSettingsLoaded = true;
         state.activeView = normalizeView(button.getAttribute("data-view-tab"));
         if (isActiveStatusView(state)) {
           ensureOpenAIStatus(state, false);
@@ -4690,13 +5326,36 @@
         });
       });
     });
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-model-toggle]"), function bindToggle(input) {
-      input.addEventListener("change", function updateModel() {
-        state.selectedModels[input.getAttribute("data-model-toggle")] = input.checked;
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-model-toggle]"), function bindToggle(control) {
+      var eventName = String(control.tagName || "").toLowerCase() === "input" ? "change" : "click";
+      var updateModel = function updateModel() {
+        var model = control.getAttribute("data-model-toggle");
+        var nextSelected = String(control.tagName || "").toLowerCase() === "input"
+          ? Boolean(control.checked)
+          : control.getAttribute("aria-pressed") !== "true";
+        state.selectedModels[model] = nextSelected;
+        if (!nextSelected && state.donutModel === model) {
+          state.donutModel = "";
+        }
         render(state);
         saveSettings(state, modelSelectionSettingFields(state.statisticsMode)).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
+      };
+      control.addEventListener(eventName, updateModel);
+      control.addEventListener("keydown", function toggleModelByKeyboard(event) {
+        if (event.key !== "Enter") {
+          return;
+        }
+        if (typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (String(control.tagName || "").toLowerCase() === "input") {
+          control.checked = !Boolean(control.checked);
+          updateModel();
+          return;
+        }
+        updateModel();
       });
     });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-donut-model]"), function bindDonutModel(target) {
@@ -4721,6 +5380,76 @@
         render(state);
       });
     }
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-effort-filter]"), function bindEffortFilter(target) {
+      var applyFilter = function applyFilter(event) {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        if (event && typeof event.stopPropagation === "function") {
+          event.stopPropagation();
+        }
+        var effort = reasoningEffortClass(target.getAttribute("data-effort-filter"));
+        var details = typeof target.closest === "function"
+          ? target.closest(".usage-internal-response,.usage-model-relation")
+          : null;
+        if (details) {
+          filterConversationDetailsByEffort(state, details, effort, target);
+          return;
+        }
+        focusDonutEffortConversations(state, effort);
+      };
+      target.addEventListener("click", applyFilter);
+      target.addEventListener("keydown", function filterByKeyboard(event) {
+        if (event.key === "Enter" || event.key === " ") {
+          applyFilter(event);
+        }
+      });
+    });
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-donut-effort]"), function bindDonutEffort(target) {
+      var focusEffort = function focusEffort(event) {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        focusDonutEffortConversations(
+          state,
+          reasoningEffortClass(target.getAttribute("data-donut-effort"))
+        );
+      };
+      target.addEventListener("click", focusEffort);
+      target.addEventListener("keydown", function focusEffortByKeyboard(event) {
+        if (event.key === "Enter" || event.key === " ") {
+          focusEffort(event);
+        }
+      });
+    });
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll(".usage-internal-response-summary,.usage-relation-summary,.usage-count-row"),
+      function bindConversationSummary(summary) {
+        summary.addEventListener("click", function resetEffortFilter(event) {
+          var effortTarget = event && event.target && typeof event.target.closest === "function"
+            ? event.target.closest("[data-effort-filter]")
+            : null;
+          if (effortTarget) {
+            return;
+          }
+          var details = typeof summary.closest === "function"
+            ? summary.closest(".usage-internal-response,.usage-model-relation,.usage-count-record")
+            : null;
+          var hadEffortFilter = Boolean(
+            details &&
+            typeof details.querySelector === "function" &&
+            details.querySelector('[data-effort-active="true"]')
+          );
+          clearConversationEffortFilter(details);
+          if (hadEffortFilter && details) {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            details.open = true;
+          }
+        });
+      }
+    );
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-format]"), function bindExport(button) {
       button.addEventListener("click", function runExport() {
         exportConversations(state, button.getAttribute("data-export-format"));
@@ -4800,6 +5529,7 @@
     if (state.activeView === "export") {
       syncExportSelectionUi(state);
     }
+    syncChartTrajectoryAnimation(state);
     bindTooltip(state);
   }
 
@@ -4809,10 +5539,12 @@
   }
 
   function setExportStatus(state, message, isError) {
+    state.exportStatusText = message || "";
+    state.exportStatusError = Boolean(isError);
     var node = state.container && state.container.querySelector("[data-export-status]");
     if (node) {
-      node.textContent = message || "";
-      node.classList.toggle("error", Boolean(isError));
+      node.textContent = state.exportStatusText;
+      node.classList.toggle("error", state.exportStatusError);
     }
   }
 
@@ -4929,8 +5661,11 @@
       })[0];
       if (current) {
         nextSelection[current.id] = true;
+        // An empty, unavailable, or still-incomplete first response must not
+        // consume the one-time default. Select the current conversation when
+        // it first becomes available, then preserve every later user choice.
+        state.exportSelectionInitialized = true;
       }
-      state.exportSelectionInitialized = true;
     }
     state.exportSelected = nextSelection;
     render(state);
@@ -5314,33 +6049,29 @@
     return new Blob([arr], { type: mime });
   }
 
-  // PNG 与 PDF 都走 Canvas(系统中文字体 + Markdown 渲染),从根本上解决两类问题:
-  //  - 旧 PNG 像素字体只有 ASCII(中文→"?")、旧 PDF 用 STSong 不嵌字体(中文空白);
-  //  - 两者都把 Markdown 当纯文本显示(## ** ``` | 不渲染)。
-  // 其它格式(Markdown / DOCX / JSON)仍走同步 exportArtifact。
+  // PNG 走 Canvas，以保留 Markdown 的视觉层次和品牌水印。
+  // PDF 必须走独立的文本 PDF 生成器，确保分页按内容块完成，且文字可搜索、选择和复制。
+  // Markdown / DOCX / JSON 继续使用各自的结构化导出器。
   function buildExportArtifacts(exporter, valid, format, base) {
     var hasCanvas = root && root.document && typeof root.document.createElement === "function" &&
       typeof exporter.renderConversationsCanvas === "function";
-    if (hasCanvas && (format === "png" || format === "image" || format === "pdf")) {
-      if (format === "pdf" && typeof exporter.buildPdfBlobFromConversations === "function") {
-        return exporter.buildPdfBlobFromConversations(valid, { filenameBase: base, pageHeight: 1216 }).then(function (blob) {
-          return [{ blob: blob, filename: base + ".pdf" }];
-        });
+    if (format === "pdf") {
+      if (typeof exporter.buildPdf === "function") {
+        return Promise.resolve([{
+          blob: exporter.buildPdf(valid, { filenameBase: base }),
+          filename: base + ".pdf"
+        }]);
       }
+      var pdfArtifact = exporter.exportArtifact(valid, "pdf", { filenameBase: base });
+      return Promise.resolve([{ blob: pdfArtifact.blob, filename: pdfArtifact.filename }]);
+    }
+    if (hasCanvas && (format === "png" || format === "image")) {
       if ((format === "png" || format === "image") && typeof exporter.buildPngBlobFromConversations === "function") {
         return exporter.buildPngBlobFromConversations(valid, { filenameBase: base, pageHeight: 14000 }).then(function (blob) {
           return [{ blob: blob, filename: base + ".png" }];
         });
       }
       var pages = [exporter.renderConversationsCanvas(valid, { filenameBase: base })];
-      if (format === "pdf") {
-        var pdfPromise = typeof exporter.buildPdfBlobFromCanvases === "function"
-          ? exporter.buildPdfBlobFromCanvases(pages, {})
-          : exporter.buildPdfBlobFromCanvas(pages[0], {});
-        return pdfPromise.then(function (blob) {
-          return [{ blob: blob, filename: base + ".pdf" }];
-        });
-      }
       return exporter.canvasToPngBlob(pages[0]).then(function pngFile(blob) {
         return [{ blob: blob, filename: base + ".png" }];
       });
@@ -5873,6 +6604,8 @@
 
   function reload(state, options) {
     options = options || {};
+    var activeViewInteractionRevision =
+      Number(state.activeViewInteractionRevision) || 0;
     state.loading = true;
     if (!isActiveStatusView(state)) {
       state.openaiStatusLoaded = false;
@@ -5884,7 +6617,11 @@
       var settings = results[1] || {};
       state.stats = results[0];
       state.language = normalizeLanguage(settings.language);
-      if (!state.activeViewSettingsLoaded || options.restoreActiveView) {
+      if (
+        (!state.activeViewSettingsLoaded || options.restoreActiveView) &&
+        (Number(state.activeViewInteractionRevision) || 0) ===
+          activeViewInteractionRevision
+      ) {
         state.activeView = normalizeView(settings.activeView);
       }
       state.activeViewSettingsLoaded = true;
@@ -5893,16 +6630,20 @@
       state.chartType = normalizeChartType(settings.chartType);
       state.themeMode = normalizeThemeMode(settings.themeMode);
       state.sourceModeFilter = normalizeSourceModeFilter(settings.sourceModeFilter);
-      state.showTrendChart = settings.showTrendChart !== false;
+      state.showLineChart = typeof settings.showLineChart === "boolean"
+        ? settings.showLineChart
+        : settings.showTrendChart !== false && state.chartType === "line";
+      state.showDonutChart = typeof settings.showDonutChart === "boolean"
+        ? settings.showDonutChart
+        : settings.showTrendChart !== false && state.chartType === "donut";
+      state.showTrendChart = state.showLineChart || state.showDonutChart;
       state.showTextStatistics = settings.showTextStatistics !== false;
       state.startDate = dateNoLaterThanToday(settings.startDate) || state.startDate || "";
-      // Every newly opened dashboard starts with the range ending today.
-      // A stored date from yesterday must not silently hide today's calls.
-      // Once the dashboard is open, a user's explicit date change remains in
-      // place across Refresh within that same panel session.
-      state.endDate = state.dateSettingsLoaded
-        ? (dateNoLaterThanToday(state.endDate) || defaultEndDate())
-        : defaultEndDate();
+      // A new install defaults to today. Once the user chooses another valid
+      // end date, both entry points restore the same persisted range.
+      state.endDate = dateNoLaterThanToday(settings.endDate) ||
+        dateNoLaterThanToday(state.endDate) ||
+        defaultEndDate();
       state.dateSettingsLoaded = true;
       state.loading = false;
       setStatus(state, "");
@@ -5991,7 +6732,13 @@
       var nextSourceModeFilter = normalizeSourceModeFilter(settings.sourceModeFilter);
       var nextStartDate = dateNoLaterThanToday(settings.startDate);
       var nextEndDate = dateNoLaterThanToday(settings.endDate) || defaultEndDate();
-      var nextShowTrendChart = settings.showTrendChart !== false;
+      var nextShowLineChart = typeof settings.showLineChart === "boolean"
+        ? settings.showLineChart
+        : settings.showTrendChart !== false && nextChartType === "line";
+      var nextShowDonutChart = typeof settings.showDonutChart === "boolean"
+        ? settings.showDonutChart
+        : settings.showTrendChart !== false && nextChartType === "donut";
+      var nextShowTrendChart = nextShowLineChart || nextShowDonutChart;
       var nextShowTextStatistics = settings.showTextStatistics !== false;
       var modelSelectionSettingsChanged =
         persistedModelSelectionKey(settings) !== currentModelSelectionKey(state);
@@ -6004,6 +6751,8 @@
         nextSourceModeFilter !== normalizeSourceModeFilter(state.sourceModeFilter) ||
         nextStartDate !== dateNoLaterThanToday(state.startDate) ||
         nextEndDate !== (dateNoLaterThanToday(state.endDate) || defaultEndDate()) ||
+         nextShowLineChart !== (state.showLineChart !== false) ||
+         nextShowDonutChart !== (state.showDonutChart === true) ||
          nextShowTrendChart !== (state.showTrendChart !== false) ||
          nextShowTextStatistics !== (state.showTextStatistics !== false) ||
          modelSelectionSettingsChanged;
@@ -6019,6 +6768,8 @@
       state.sourceModeFilter = nextSourceModeFilter;
       state.startDate = nextStartDate || state.startDate || "";
       state.endDate = nextEndDate;
+      state.showLineChart = nextShowLineChart;
+      state.showDonutChart = nextShowDonutChart;
       state.showTrendChart = nextShowTrendChart;
       state.showTextStatistics = nextShowTextStatistics;
       applyPersistedModelSelections(state, settings);
@@ -6045,6 +6796,7 @@
       ".usage-dashboard button,.usage-dashboard select,.usage-dashboard input{font:inherit}",
       ".usage-dashboard-popup{height:100%;max-height:100%;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain;padding-right:0;background:var(--usage-surface-page)}",
       ".usage-dashboard-page{height:100%;max-height:100%;max-width:100%;padding:8px;background:var(--usage-surface-panel);overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}",
+      ".usage-dashboard-popup.usage-active-status,.usage-dashboard-page.usage-active-status{overflow:hidden;scrollbar-gutter:auto}",
       ".usage-sticky-header{position:sticky;top:0;z-index:20;margin:0 0 8px;padding:0 0 7px;border-bottom:1px solid var(--usage-border-divider);background:var(--usage-surface-panel)}",
       ".usage-dashboard-page .usage-sticky-header{top:-8px;margin:-8px -8px 8px;padding:8px 8px 7px}",
       ".usage-sticky-header .usage-view-tabs{margin:7px 0 0}",
@@ -6053,30 +6805,37 @@
       ".usage-title-row{display:flex;align-items:center;flex-wrap:nowrap;gap:5px;min-width:0}",
       ".usage-topline h2{margin:0;font-size:15px;line-height:1.25;font-weight:750;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".usage-top-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}",
-      ".usage-header-action{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-width:48px;height:30px;margin:0;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--usage-text-control);font:600 11px/1 system-ui,sans-serif;white-space:nowrap;cursor:pointer;transition:color .12s ease,background .12s ease}",
+      ".usage-header-action{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:30px;min-width:30px;height:30px;margin:0;padding:0;border:0;border-radius:7px;background:transparent;color:var(--usage-text-control);font:600 11px/1 system-ui,sans-serif;white-space:nowrap;cursor:pointer;transition:color .16s ease,background .16s ease,transform .16s ease}",
       ".usage-header-action:hover,.usage-settings-menu[open]>.usage-settings-trigger{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
-      ".usage-panel-close{width:30px;min-width:30px;padding:0;font-size:18px;line-height:1}",
+      ".usage-header-action:active{transform:scale(.94)}",
+      ".usage-header-action:disabled{cursor:wait;opacity:.78}",
+      ".usage-header-action svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}",
+      ".usage-refresh.is-refreshing svg{animation:usage-refresh-spin .68s linear infinite}",
+      ".usage-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}",
+      ".usage-panel-close{width:30px;min-width:30px;padding:0}",
       ".usage-controls{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0 4px}",
       ".usage-chart-controls{align-items:center}",
-      ".usage-date-controls{display:flex;align-items:center;justify-content:flex-start;gap:8px;width:100%}",
+      ".usage-date-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;width:100%}",
       ".usage-date-controls label{display:flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}",
-      ".usage-date-controls input{width:124px;min-width:0;height:28px;border:1px solid var(--usage-border-control);border-radius:5px;padding:3px 3px 3px 5px;background:var(--usage-surface-panel);color:var(--usage-text-primary);font-size:11px}",
-      ".usage-date-controls input::-webkit-datetime-edit{padding:0}",
+      ".usage-date-controls input{width:112px;min-width:0;height:28px;border:1px solid var(--usage-border-control);border-radius:5px;padding:0 1px 0 5px;background:var(--usage-surface-panel);color:var(--usage-text-primary);font-size:11px}",
+      ".usage-date-controls input::-webkit-datetime-edit,.usage-date-controls input::-webkit-datetime-edit-fields-wrapper{padding:0}",
       ".usage-date-controls input::-webkit-calendar-picker-indicator{width:14px;height:14px;margin:0;padding:0;cursor:pointer}",
       ".usage-settings-menu{position:relative;flex:0 0 auto}",
       ".usage-settings-menu>summary,.usage-settings-item>summary{list-style:none}",
       ".usage-settings-menu>summary::-webkit-details-marker,.usage-settings-item>summary::-webkit-details-marker{display:none}",
       ".usage-settings-menu>summary::marker,.usage-settings-item>summary::marker{content:\"\"}",
-      ".usage-settings-popover{position:absolute;z-index:30;top:calc(100% + 5px);right:0;display:grid;gap:2px;width:174px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip)}",
-      ".usage-settings-menu:not([open])>.usage-settings-popover{display:none}",
+      ".usage-settings-popover{position:absolute;z-index:30;top:calc(100% + 4px);right:0;display:grid;gap:2px;width:236px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-5px) scale(.985);transform-origin:top right;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}",
+      ".usage-dashboard-page .usage-settings-popover{right:-36px}",
+      ".usage-settings-menu[open]:not(.is-closing)>.usage-settings-popover{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0) scale(1);transition-delay:0s}",
       ".usage-settings-item{position:relative;min-width:0}",
-      ".usage-settings-item>summary{display:grid;grid-template-columns:minmax(0,1fr) auto 10px;align-items:center;gap:5px;min-height:31px;padding:5px 6px;border-radius:6px;color:var(--usage-text-secondary);font-size:11px;cursor:pointer}",
+      ".usage-settings-item>summary{display:grid;grid-template-columns:minmax(82px,1fr) 104px 10px;align-items:center;column-gap:6px;min-height:31px;padding:5px 6px;border-radius:6px;color:var(--usage-text-secondary);font-size:11px;line-height:1.35;cursor:pointer}",
       ".usage-settings-item>summary:hover,.usage-settings-item[open]>summary,.usage-settings-item:focus-within>summary{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
-      ".usage-settings-category-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:650}",
-      ".usage-settings-current{max-width:76px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-muted);font-size:10px}",
-      ".usage-settings-arrow{font-size:15px;line-height:1;color:var(--usage-text-muted)}",
-      ".usage-settings-submenu{position:absolute;z-index:31;top:-5px;right:calc(100% - 1px);display:none;gap:2px;width:164px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip)}",
-      ".usage-settings-item:hover>.usage-settings-submenu,.usage-settings-item:focus-within>.usage-settings-submenu,.usage-settings-item[open]>.usage-settings-submenu{display:grid}",
+      ".usage-settings-category-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:1.35;font-weight:650}",
+      ".usage-settings-current{width:104px;min-width:0;justify-self:stretch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-muted);font-size:11px;line-height:1.35;text-align:right;font-variant-numeric:tabular-nums}",
+      ".usage-settings-current:empty{visibility:hidden}",
+      ".usage-settings-arrow{width:10px;font-size:15px;line-height:1;color:var(--usage-text-muted);text-align:center}",
+      ".usage-settings-submenu{position:absolute;z-index:31;top:-5px;right:calc(100% - 1px);display:grid;gap:2px;width:176px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(5px) scale(.985);transform-origin:top right;transition:opacity .15s ease,transform .15s ease,visibility 0s linear .15s}",
+      ".usage-settings-item:not(.is-closing):hover>.usage-settings-submenu,.usage-settings-item:not(.is-closing):focus-within>.usage-settings-submenu,.usage-settings-item[open]:not(.is-closing)>.usage-settings-submenu{opacity:1;visibility:visible;pointer-events:auto;transform:translateX(0) scale(1);transition-delay:0s}",
       ".usage-settings-option{display:grid;grid-template-columns:minmax(0,1fr) 15px;align-items:center;gap:6px;width:100%;min-height:30px;border:0;border-radius:6px;padding:5px 7px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer}",
       ".usage-settings-option:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
       ".usage-settings-option.active{color:var(--usage-accent-link);font-weight:700}",
@@ -6155,27 +6914,40 @@
       ".usage-model-chip b{color:var(--usage-accent-link)}",
       ".usage-model-chip:has(input:not(:checked)){opacity:.62}",
       ".usage-model-chip:has(input:checked){background:var(--usage-surface-chip);border-color:var(--chip)}",
+      ".usage-chart-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;padding:0 8px 7px}",
+      ".usage-chart-legend-row{appearance:none;display:grid;grid-template-columns:10px minmax(0,1fr) auto 43px;align-items:center;gap:5px;min-width:0;min-height:29px;padding:3px 5px;border:0;border-radius:6px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer;transition:background .15s ease,opacity .15s ease}",
+      ".usage-chart-legend-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}",
+      ".usage-chart-legend-row:hover,.usage-chart-legend-row:focus-visible{background:var(--usage-surface-row-hover)}",
+      ".usage-chart-legend-row:focus-within{background:var(--usage-surface-row-hover);outline:2px solid var(--usage-accent-link);outline-offset:-1px}",
+      ".usage-chart-legend-row i{width:8px;height:8px;border:2px solid var(--series);border-radius:999px;background:transparent;box-shadow:none;transition:background .15s ease,opacity .15s ease}",
+      ".usage-chart-legend-row.active i{background:var(--series)}",
+      ".usage-chart-legend-row:not(.active){opacity:.58}",
+      ".usage-chart-legend-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.35;font-weight:700}",
+      ".usage-chart-legend-row b{color:var(--series);font-size:15px;line-height:1.35;font-weight:750;font-variant-numeric:tabular-nums}",
+      ".usage-chart-legend-row small{min-width:43px;text-align:right;color:var(--usage-text-muted);font-size:14px;line-height:1.35;font-weight:650;font-variant-numeric:tabular-nums}",
       ".usage-view-panel{min-height:0;animation:usage-panel-in .16s ease-out both}",
       ".usage-chart-wrap{position:relative;border:1px solid var(--usage-border-panel);border-radius:7px;background:var(--usage-surface-panel);margin:3px 0 5px;overflow:hidden}",
       ".usage-chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 8px 6px}",
       ".usage-chart-head strong{font-size:14px;line-height:1.35;font-weight:700;color:var(--usage-text-primary)}",
       ".usage-chart-head small{font-size:9px;line-height:1.3;font-weight:650;color:var(--usage-text-muted)}",
       ".usage-donut-wrap{overflow:visible}",
-      ".usage-donut-layout{display:grid;grid-template-columns:minmax(132px,44%) minmax(0,1fr);align-items:center;gap:8px;padding:2px 8px 10px}",
+      ".usage-donut-layout{display:grid;grid-template-columns:minmax(142px,44%) minmax(0,1fr);align-items:center;gap:8px;padding:2px 8px 10px}",
       ".usage-donut{display:block;width:100%;max-width:164px;height:auto;justify-self:center;overflow:visible}",
+      ".usage-donut-layout>.usage-chart-legend{grid-template-columns:minmax(0,1fr);align-content:center;padding:0}",
       ".usage-donut-track{stroke:var(--usage-surface-track)}",
-      ".usage-donut-slice{cursor:pointer;opacity:.96;transition:opacity .16s ease,stroke-width .16s ease,filter .16s ease;animation:usage-donut-in .34s ease-out both}",
-      ".usage-donut-slice:hover,.usage-donut-slice:focus-visible{opacity:1;stroke-width:32;filter:drop-shadow(0 2px 3px var(--usage-shadow-accent));outline:none}",
-      ".usage-donut-total{fill:var(--usage-text-primary);font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}",
-      ".usage-donut-center-label{fill:var(--usage-text-muted);font-size:10px;font-weight:650}",
+      ".usage-donut-slice{cursor:pointer;opacity:.96;transition:opacity .16s ease,stroke-width .16s ease,filter .16s ease;animation:usage-donut-draw .52s cubic-bezier(.22,.72,.25,1) var(--usage-donut-delay,0s) both}",
+      ".usage-donut-slice:hover,.usage-donut-slice:focus-visible,.usage-donut-slice[data-effort-active=\"true\"]{opacity:1;stroke-width:32;filter:drop-shadow(0 2px 3px var(--usage-shadow-accent));outline:none}",
+      ".usage-donut-total{fill:var(--usage-text-primary);font-size:32px;font-weight:800;font-variant-numeric:tabular-nums}",
+      ".usage-donut-center-label{fill:var(--usage-text-muted);font-size:12px;font-weight:700}",
       ".usage-donut-legend{display:grid;align-content:center;gap:2px;min-width:0}",
       ".usage-donut-legend-row{display:grid;grid-template-columns:9px minmax(0,1fr) auto auto;align-items:center;gap:5px;min-height:27px;padding:3px 4px;border-radius:6px;color:var(--usage-text-secondary)}",
       ".usage-donut-legend-row[role=\"button\"]{cursor:pointer}",
       ".usage-donut-legend-row[role=\"button\"]:hover,.usage-donut-legend-row[role=\"button\"]:focus-visible{background:var(--usage-surface-row-hover);outline:2px solid var(--usage-accent-link);outline-offset:-1px}",
+      ".usage-donut-legend-row[data-effort-active=\"true\"]{background:var(--usage-surface-row-hover);box-shadow:inset 0 0 0 1px var(--usage-border-panel)}",
       ".usage-donut-legend-row i{width:8px;height:8px;border-radius:999px;background:var(--slice);box-shadow:0 0 0 1px var(--usage-border-panel)}",
-      ".usage-donut-legend-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:650;color:var(--usage-text-primary)}",
-      ".usage-donut-legend-row b{font-size:11px;font-weight:750;color:var(--usage-accent-link);font-variant-numeric:tabular-nums}",
-      ".usage-donut-legend-row small{min-width:38px;text-align:right;font-size:10px;color:var(--usage-text-muted);font-variant-numeric:tabular-nums}",
+      ".usage-donut-legend-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.35;font-weight:700}",
+      ".usage-donut-legend-row b{font-size:15px;line-height:1.35;font-weight:750;color:var(--slice);font-variant-numeric:tabular-nums}",
+      ".usage-donut-legend-row small{min-width:43px;text-align:right;font-size:14px;line-height:1.35;font-weight:650;color:var(--usage-text-muted);font-variant-numeric:tabular-nums}",
       ".usage-donut-back{border:0;background:transparent;color:var(--usage-accent-link);padding:2px 0;font:inherit;font-size:10px;font-weight:700;cursor:pointer}",
       ".usage-donut-back:hover{color:var(--usage-accent-link-hover);text-decoration:underline}",
       ".usage-donut-back:focus-visible{outline:2px solid var(--usage-accent-link);outline-offset:2px;border-radius:3px}",
@@ -6187,7 +6959,8 @@
       ".usage-axis-label{font-size:9px;font-weight:650}",
       ".usage-axis-date{font-size:9px}",
       ".usage-axis-y{font-variant-numeric:tabular-nums}",
-      ".usage-series{clip-path:inset(0 100% 0 0);animation:usage-series-reveal .72s cubic-bezier(.22,.72,.25,1) both}",
+      ".usage-series{opacity:1}",
+      ".usage-line-mask{stroke:#fff;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:usage-line-reveal .56s linear forwards}",
       ".usage-line{stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:var(--usage-line-dash,none);transition:opacity .12s ease}",
       ".usage-point{stroke:var(--usage-chart-point-stroke);stroke-width:1.25;cursor:pointer;animation:usage-point-in .18s ease-out var(--usage-point-delay,.06s) both;transition:r .16s ease,opacity .12s ease}",
       ".usage-point:hover{r:6}",
@@ -6235,13 +7008,16 @@
       ".usage-internal-response-summary>.usage-count-features{margin-top:0}",
       ".usage-internal-response[open]>.usage-internal-response-summary{padding-bottom:5px;border-bottom:1px solid var(--usage-border-divider)}",
       ".usage-internal-response-model-row{display:block;min-height:21px}",
-      ".usage-internal-response-value{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 7px}",
+      ".usage-relation-values.usage-internal-response-value{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:4px 7px}",
+      ".usage-internal-response-value>.usage-internal-response-copy{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 7px;min-width:0}",
       ".usage-internal-response-value code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary)}",
       ".usage-internal-efforts-inline{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;min-width:0}",
       ".usage-internal-effort-label{font-size:11px;line-height:1.35;font-weight:650;color:var(--usage-text-muted)}",
       ".usage-internal-efforts-inline>span{display:inline-flex;align-items:baseline;gap:4px;color:var(--usage-text-secondary)}",
+      ".usage-effort-token{border-radius:5px;padding:1px 3px;cursor:pointer;transition:background .15s ease,box-shadow .15s ease}",
+      ".usage-effort-token:hover,.usage-effort-token:focus-visible,.usage-effort-token[data-effort-active=\"true\"]{background:var(--usage-surface-chip);box-shadow:0 0 0 1px var(--usage-border-panel);outline:none}",
       ".usage-internal-subcount,.usage-subcount{color:var(--usage-accent-link);font-variant-numeric:tabular-nums}",
-      ".usage-internal-subcount{margin-left:auto}",
+      ".usage-internal-subcount{align-self:start;white-space:nowrap}",
       ".usage-count-row strong,.usage-count-numbers b,.usage-internal-request-head .usage-internal-model-copy code,.usage-internal-count{font-size:13px;line-height:1.35;font-weight:750}",
       ".usage-internal-response-value code,.usage-internal-efforts-inline>span,.usage-internal-efforts-inline b,.usage-internal-subcount,.usage-subcount{font-size:12px;line-height:1.4;font-weight:650}",
       ".usage-internal-request-head .usage-internal-model-copy small,.usage-internal-response-heading,.usage-record-label,.usage-relation-model small{font-size:11px;line-height:1.35;font-weight:650}",
@@ -6275,6 +7051,7 @@
       ".usage-relation-head>span{flex:0 0 auto;color:var(--usage-accent-link)}",
       ".usage-relation-head code,.usage-relation-head>span{font-size:12px;line-height:1.4;font-weight:650}",
       ".usage-relation-dimension{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px;align-items:baseline;min-width:0}",
+      ".usage-relation-efforts-only{grid-template-columns:minmax(0,1fr)}",
       ".usage-relation-values{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}",
       ".usage-relation-values>span{display:inline-flex;align-items:baseline;gap:4px;color:var(--usage-text-secondary)}",
       ".usage-relation-values>span,.usage-relation-values b{font-size:12px;line-height:1.4;font-weight:650}",
@@ -6288,9 +7065,15 @@
       ".usage-relation-values b.usage-effort-min{color:var(--usage-effort-min)}",
       ".usage-relation-values b.usage-effort-none{color:var(--usage-effort-none)}",
       ".usage-relation-values b.usage-effort-unknown{color:var(--usage-effort-unknown)}",
-      ".usage-model-relation:not([open])>.usage-relation-conversation-list{display:none}",
-      ".usage-relation-conversation-list{display:grid;gap:4px;padding-top:0}",
+      ".usage-relation-conversation-list,.usage-count-details{display:grid;gap:4px;max-height:0;overflow:hidden;opacity:0;transform:translateY(-4px);transition:max-height .24s ease,opacity .18s ease,transform .2s ease,padding .2s ease}",
+      ".usage-relation-conversation-list{padding:0}",
+      ".usage-count-details{padding:0 0 0 12px}",
+      ".usage-internal-response[open]>.usage-relation-conversation-list,.usage-model-relation[open]>.usage-relation-conversation-list,.usage-count-record[open]>.usage-count-details{max-height:520px;opacity:1;transform:translateY(0)}",
+      ".usage-internal-response[open]>.usage-relation-conversation-list,.usage-model-relation[open]>.usage-relation-conversation-list{padding-top:5px}",
+      ".usage-internal-response[open]>.usage-relation-conversation-list,.usage-model-relation[open]>.usage-relation-conversation-list,.usage-count-record[open]>.usage-count-details{overflow:auto;scrollbar-gutter:stable}",
+      ".usage-count-record[open]>.usage-count-details{padding-bottom:8px}",
       ".usage-relation-conversation{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px;align-items:start}",
+      ".usage-relation-conversation[hidden],.usage-record-session-row[hidden]{display:none!important}",
       ".usage-source-mode-list{display:flex;flex-wrap:wrap;gap:3px;align-items:flex-start}",
       ".usage-source-mode{display:inline-flex;align-items:center;justify-content:center;min-width:38px;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:9px}",
       ".usage-source-mode.work{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
@@ -6345,6 +7128,34 @@
       ".usage-openai-component.featured{padding:8px 0;background:transparent}",
       ".usage-openai-component strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".usage-openai-component small{display:block;color:var(--usage-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".usage-active-status .usage-view-tabs{margin-bottom:5px}",
+      ".usage-active-status .usage-openai-status{gap:4px}",
+      ".usage-active-status .usage-openai-hero{padding-bottom:5px}",
+      ".usage-active-status .usage-openai-component{min-height:27px;padding:4px 0}",
+      ".usage-status-compact .usage-sticky-header{margin-bottom:5px;padding-bottom:5px}",
+      ".usage-dashboard-page.usage-status-compact .usage-sticky-header{margin-bottom:5px;padding-bottom:5px}",
+      ".usage-status-compact .usage-view-tabs{margin-top:5px;margin-bottom:3px}",
+      ".usage-status-compact .usage-openai-status{gap:3px}",
+      ".usage-status-compact .usage-openai-hero{padding-bottom:4px}",
+      ".usage-status-compact .usage-openai-component{min-height:24px;padding:2px 0}",
+      ".usage-status-columns .usage-openai-components{grid-template-columns:repeat(var(--usage-status-columns,2),minmax(0,1fr));column-gap:10px}",
+      ".usage-status-columns .usage-openai-component{min-width:0}",
+      ".usage-status-dense .usage-openai-components{column-gap:8px}",
+      ".usage-status-dense .usage-openai-component{min-height:21px;padding:1px 0;gap:4px}",
+      ".usage-status-dense .usage-openai-component strong{font-size:10px}",
+      ".usage-status-dense .usage-openai-badge{min-height:18px;padding:1px 5px;font-size:9px}",
+      ".usage-status-ultra .usage-openai-components{column-gap:6px}",
+      ".usage-status-ultra .usage-openai-component{min-height:18px;padding:0;gap:3px}",
+      ".usage-status-ultra .usage-openai-component strong{font-size:10px;line-height:1.2}",
+      ".usage-status-ultra .usage-openai-component small{display:none}",
+      ".usage-status-ultra .usage-openai-badge{min-height:16px;padding:0 4px;font-size:9px}",
+      ".usage-status-ultra .usage-openai-hero>div{display:flex;align-items:baseline;gap:6px;min-width:0}",
+      ".usage-status-ultra .usage-openai-hero strong,.usage-status-ultra .usage-openai-hero small{margin-top:0}",
+      ".usage-status-scaled .usage-openai-status{font-size:calc(10px * var(--usage-status-font-compensation,1))}",
+      ".usage-status-scaled .usage-openai-hero strong{font-size:calc(14px * var(--usage-status-font-compensation,1))}",
+      ".usage-status-scaled .usage-openai-hero small{font-size:calc(10px * var(--usage-status-font-compensation,1))}",
+      ".usage-status-scaled .usage-openai-component strong{font-size:calc(10px * var(--usage-status-font-compensation,1))}",
+      ".usage-status-scaled .usage-openai-badge{font-size:calc(9px * var(--usage-status-font-compensation,1))}",
       ".usage-openai-error{display:grid;gap:4px;padding:10px;border:1px solid var(--usage-border-error);border-radius:8px;background:var(--usage-error-surface);color:var(--usage-error-text-strong)}",
       ".usage-openai-error small{color:var(--usage-error-text)}",
       ".usage-status{min-height:17px;margin-top:6px;color:var(--usage-text-muted)}",
@@ -6353,13 +7164,15 @@
       ".usage-empty{color:var(--usage-text-muted);padding:8px 0}",
       ".usage-skeleton{display:grid;gap:6px;width:100%;padding:2px 0}",
       ".usage-skeleton i{display:block;height:24px;border-radius:7px;background:linear-gradient(90deg,var(--usage-skeleton-start),var(--usage-skeleton-middle),var(--usage-skeleton-start));background-size:200% 100%;animation:usage-skeleton 1s linear infinite}",
-      "@keyframes usage-series-reveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}",
-      "@keyframes usage-donut-in{from{opacity:0}to{opacity:.96}}",
+      "@keyframes usage-line-reveal{to{stroke-dashoffset:0}}",
+      "@keyframes usage-refresh-spin{to{transform:rotate(360deg)}}",
+      "@keyframes usage-donut-draw{from{opacity:0;stroke-dasharray:0 100}to{opacity:.96;stroke-dasharray:var(--usage-donut-size) var(--usage-donut-rest)}}",
       "@keyframes usage-point-in{from{opacity:0}to{opacity:1}}",
       "@keyframes usage-panel-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}",
       "@keyframes usage-skeleton{from{background-position:100% 0}to{background-position:-100% 0}}",
+      "@media (max-width:390px){.usage-settings-submenu{top:0;right:0;width:100%;transform:translateX(5px) scale(.985)}.usage-settings-item:not(.is-closing):hover>.usage-settings-submenu,.usage-settings-item:not(.is-closing):focus-within>.usage-settings-submenu,.usage-settings-item[open]:not(.is-closing)>.usage-settings-submenu{transform:translateX(0) scale(1)}}",
       "@media (max-width:380px){.usage-donut-layout{grid-template-columns:124px minmax(0,1fr);gap:5px;padding-left:5px;padding-right:5px}.usage-donut-legend-row{gap:4px;padding-left:2px;padding-right:2px}.usage-donut-legend-row small{min-width:34px}}",
-      "@media (prefers-reduced-motion:reduce){.usage-view-panel,.usage-series,.usage-point,.usage-donut-slice,.usage-skeleton i{animation:none}.usage-series{clip-path:none}.usage-point{opacity:1}.usage-point,.usage-donut-slice,.usage-param-row,.usage-variant-row{transition:none}}"
+      "@media (prefers-reduced-motion:reduce){.usage-view-panel,.usage-line-mask,.usage-refresh.is-refreshing svg,.usage-point,.usage-donut-slice,.usage-skeleton i{animation:none}.usage-line-mask{stroke-dashoffset:0}.usage-point{opacity:1}.usage-point,.usage-donut-slice,.usage-param-row,.usage-variant-row,.usage-settings-popover,.usage-settings-submenu,.usage-relation-conversation-list,.usage-count-details{transition:none}}"
     ].join("");
     root.document.head.appendChild(style);
   }
@@ -6372,11 +7185,14 @@
       language: DEFAULT_LANGUAGE,
       activeView: "chart",
       activeViewSettingsLoaded: false,
+      activeViewInteractionRevision: 0,
       sourceModeFilter: "all",
       statisticsMode: DEFAULT_STATISTICS_MODE,
       chartType: DEFAULT_CHART_TYPE,
       themeMode: DEFAULT_THEME_MODE,
       donutModel: "",
+      showLineChart: true,
+      showDonutChart: false,
       showTrendChart: true,
       showTextStatistics: true,
       settingsMenuOpen: false,
@@ -6410,7 +7226,10 @@
       exportSearch: "",
       exportBusy: false,
       exportCancelRequested: false,
+      exportStatusText: "",
+      exportStatusError: false,
       statisticsDataBusy: false,
+      refreshing: false,
       stats: { totals: {}, byDate: {}, models: {}, sessionsByModel: {}, variantsByModel: {}, parametersByModel: {}, events: [] }
     };
     subscribePageThemeChanges(state);
@@ -6452,6 +7271,7 @@
       renderModelCountRows: renderModelCountRows,
       renderStatisticsCompletenessWarning: renderStatisticsCompletenessWarning,
       statisticsTotalsInRange: statisticsTotalsInRange,
+      statisticsColorMap: statisticsColorMap,
       applyPopupThemeVariables: applyPopupThemeVariables,
       applyExportConversationList: applyExportConversationList,
       buildExportArtifacts: buildExportArtifacts,
@@ -6470,6 +7290,9 @@
       statisticsDataDateStamp: statisticsDataDateStamp,
       modelRelations: modelRelations,
       reasoningEffortClass: reasoningEffortClass,
+      focusDonutEffortConversations: focusDonutEffortConversations,
+      fitStatusPanel: fitStatusPanel,
+      setExportStatus: setExportStatus,
       setExportControlsDisabled: setExportControlsDisabled,
       syncExportSelectionUi: syncExportSelectionUi,
       syncExportSearchUi: syncExportSearchUi,

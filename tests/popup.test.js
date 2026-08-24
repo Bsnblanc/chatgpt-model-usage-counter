@@ -6,13 +6,13 @@ const test = require("node:test");
 const popupCss = () => fs.readFileSync(path.join(__dirname, "..", "src", "popup.css"), "utf8");
 const dashboardSource = () => fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf8");
 
-test("popup viewport is compact and delegates scrolling to the dashboard", () => {
+test("popup viewport is fixed at 430x600 and delegates scrolling to the dashboard", () => {
   const css = popupCss();
   const dashboard = dashboardSource();
 
-  assert.match(css, /html\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;/);
-  assert.match(css, /body\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;/);
-  assert.match(css, /\.shell\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;[\s\S]*padding:\s*8px;/);
+  assert.match(css, /html\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;/);
+  assert.match(css, /body\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;/);
+  assert.match(css, /\.shell\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;[\s\S]*padding:\s*8px;/);
   assert.match(dashboard, /\.usage-dashboard-popup\{[^}]*height:100%;[^}]*overflow:auto/);
   assert.match(dashboard, /\.usage-dashboard-page\{[^}]*height:100%;[^}]*overflow:auto/);
 });

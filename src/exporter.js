@@ -16,20 +16,31 @@
   var ZIP_MIME = "application/zip";
   var SVG_MIME = "image/svg+xml;charset=utf-8";
   var PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  // One normalized geometry drives both the extension artwork and every PNG
-  // watermark renderer. Keep the SVG source in icons/usage-counter-mark.svg
-  // visually equivalent to this data so the toolbar mark and exported mark
-  // remain the same identity at every size.
+  // One normalized geometry drives every export watermark. Keep the SVG source
+  // in icons/usage-counter-mark.svg visually equivalent to these ordered
+  // layers so the installed extension and exported files share one identity.
+  var BRAND_BACKGROUND = {
+    kind: "rounded",
+    role: "background",
+    x: 4,
+    y: 4,
+    width: 120,
+    height: 120,
+    radius: 30,
+    color: "#101B4E"
+  };
   var BRAND_ICON = {
     viewBox: 128,
-    background: { x: 4, y: 4, width: 120, height: 120, radius: 30, color: "#172554" },
-    orbit: { x: 96, y: 15, width: 18, height: 18, radius: 9, color: "#A78BFA" },
-    bubble: { x: 24, y: 25, width: 80, height: 58, radius: 19, color: "#FFFFFF" },
-    tail: { points: [[34, 78], [57, 78], [30, 101]], color: "#FFFFFF" },
-    bars: [
-      { x: 44, y: 57, width: 11, height: 14, radius: 5.5, color: "#22D3EE" },
-      { x: 61, y: 48, width: 11, height: 23, radius: 5.5, color: "#60A5FA" },
-      { x: 78, y: 38, width: 11, height: 33, radius: 5.5, color: "#A78BFA" }
+    background: BRAND_BACKGROUND,
+    layers: [
+      BRAND_BACKGROUND,
+      { kind: "rounded", role: "counter-ring", x: 23, y: 22, width: 82, height: 82, radius: 41, color: "#FFFFFF" },
+      { kind: "rounded", role: "counter-cutout", x: 37, y: 36, width: 54, height: 54, radius: 27, color: "#101B4E" },
+      { kind: "triangle", role: "counter-opening", points: [[75, 54], [111, 79], [82, 91]], color: "#101B4E" },
+      { kind: "triangle", role: "conversation-tail", points: [[82, 82], [107, 108], [93, 72]], color: "#FFFFFF" },
+      { kind: "rounded", role: "usage-low", x: 45, y: 68, width: 11, height: 17, radius: 5.5, color: "#22D3EE" },
+      { kind: "rounded", role: "usage-mid", x: 59, y: 56, width: 11, height: 29, radius: 5.5, color: "#60A5FA" },
+      { kind: "rounded", role: "usage-high", x: 73, y: 43, width: 11, height: 42, radius: 5.5, color: "#C48BFA" }
     ]
   };
   var MIME = {
@@ -1150,6 +1161,462 @@
     return lines.length ? lines : [""];
   }
 
+  var READABLE_MATH_SYMBOLS = {
+    alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ϵ",
+    zeta: "ζ", eta: "η", theta: "θ", vartheta: "ϑ", iota: "ι", kappa: "κ",
+    lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", omicron: "ο", pi: "π", varpi: "ϖ",
+    rho: "ρ", varrho: "ϱ", sigma: "σ", varsigma: "ς", tau: "τ", upsilon: "υ",
+    phi: "φ", varphi: "ϕ", chi: "χ", psi: "ψ", omega: "ω",
+    Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Xi: "Ξ", Pi: "Π",
+    Sigma: "Σ", Upsilon: "Υ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
+    to: "→", rightarrow: "→", longrightarrow: "⟶", Rightarrow: "⇒", Longrightarrow: "⟹",
+    leftarrow: "←", longleftarrow: "⟵", Leftarrow: "⇐", Longleftarrow: "⟸",
+    leftrightarrow: "↔", longleftrightarrow: "⟷", Leftrightarrow: "⇔", Longleftrightarrow: "⟺",
+    mapsto: "↦", uparrow: "↑", downarrow: "↓", updownarrow: "↕",
+    le: "≤", leq: "≤", ge: "≥", geq: "≥", ne: "≠", neq: "≠",
+    approx: "≈", simeq: "≃", sim: "∼", equiv: "≡", propto: "∝",
+    ll: "≪", gg: "≫", in: "∈", notin: "∉", ni: "∋",
+    subset: "⊂", subseteq: "⊆", supset: "⊃", supseteq: "⊇",
+    cup: "∪", cap: "∩", setminus: "∖", emptyset: "∅", varnothing: "∅",
+    times: "×", cdot: "·", div: "÷", pm: "±", mp: "∓", ast: "∗",
+    sum: "∑", prod: "∏", coprod: "∐", int: "∫", iint: "∬", iiint: "∭", oint: "∮",
+    partial: "∂", nabla: "∇", infty: "∞", ell: "ℓ",
+    forall: "∀", exists: "∃", nexists: "∄", therefore: "∴", because: "∵",
+    angle: "∠", degree: "°", perp: "⊥", parallel: "∥",
+    ldots: "…", cdots: "⋯", dots: "…",
+    // ASCII angle brackets remain visible in every PDF/DOCX fallback font.
+    // Mathematical U+27E8/U+27E9 glyphs were disappearing in otherwise valid
+    // exports when the reader substituted SimSun/Arial.
+    lbrace: "{", rbrace: "}", langle: "<", rangle: ">",
+    lceil: "⌈", rceil: "⌉", lfloor: "⌊", rfloor: "⌋",
+    vert: "|", lvert: "|", rvert: "|", mid: "|",
+    Vert: "‖", lVert: "‖", rVert: "‖"
+  };
+  var READABLE_SUPERSCRIPTS = {
+    "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴",
+    "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",
+    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+    i: "ⁱ", n: "ⁿ"
+  };
+  var READABLE_SUBSCRIPTS = {
+    "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄",
+    "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉",
+    "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
+    a: "ₐ", e: "ₑ", h: "ₕ", i: "ᵢ", j: "ⱼ", k: "ₖ", l: "ₗ",
+    m: "ₘ", n: "ₙ", o: "ₒ", p: "ₚ", r: "ᵣ", s: "ₛ", t: "ₜ",
+    u: "ᵤ", v: "ᵥ", x: "ₓ"
+  };
+  var READABLE_BLACKBOARD = {
+    C: "ℂ", H: "ℍ", N: "ℕ", P: "ℙ", Q: "ℚ", R: "ℝ", Z: "ℤ"
+  };
+
+  function readableMathScript(value, marker) {
+    var clean = String(value == null ? "" : value).trim();
+    var table = marker === "^" ? READABLE_SUPERSCRIPTS : READABLE_SUBSCRIPTS;
+    var converted = "";
+    var complete = Boolean(clean);
+    Array.from(clean).forEach(function convertCharacter(character) {
+      if (!Object.prototype.hasOwnProperty.call(table, character)) {
+        complete = false;
+        return;
+      }
+      converted += table[character];
+    });
+    if (complete) {
+      return converted;
+    }
+    return marker + "(" + clean + ")";
+  }
+
+  function readableMathFractionPart(value) {
+    var clean = String(value == null ? "" : value).trim();
+    if (!clean) {
+      return "?";
+    }
+    return /[\s+\-−=<>≤≥≈≠→←⇒⇐×÷±∓]/.test(clean) ? "(" + clean + ")" : clean;
+  }
+
+  function readableMathExpression(source) {
+    var text = String(source == null ? "" : source);
+    var index = 0;
+
+    function skipSpaces() {
+      while (index < text.length && /[ \t]/.test(text.charAt(index))) {
+        index += 1;
+      }
+    }
+
+    function parseOptionalGroup() {
+      skipSpaces();
+      if (text.charAt(index) !== "[") {
+        return "";
+      }
+      index += 1;
+      return parseUntil("]");
+    }
+
+    function parseArgument() {
+      skipSpaces();
+      if (text.charAt(index) === "{") {
+        index += 1;
+        return parseUntil("}");
+      }
+      if (text.charAt(index) === "\\") {
+        return parseCommand();
+      }
+      if (index >= text.length) {
+        return "";
+      }
+      var character = text.charAt(index);
+      index += 1;
+      return character;
+    }
+
+    function parseCommand() {
+      index += 1;
+      if (index >= text.length) {
+        return "\\";
+      }
+      var punctuation = text.charAt(index);
+      if (punctuation === "\\") {
+        index += 1;
+        return "\n";
+      }
+      if (punctuation === " " || punctuation === "," || punctuation === ";" || punctuation === ":") {
+        index += 1;
+        return " ";
+      }
+      if (punctuation === "!") {
+        index += 1;
+        return "";
+      }
+      if (/[%#$&_{}]/.test(punctuation)) {
+        index += 1;
+        return punctuation;
+      }
+
+      var start = index;
+      while (index < text.length && /[A-Za-z]/.test(text.charAt(index))) {
+        index += 1;
+      }
+      if (start === index) {
+        index += 1;
+        return punctuation;
+      }
+      var command = text.slice(start, index);
+      if (Object.prototype.hasOwnProperty.call(READABLE_MATH_SYMBOLS, command)) {
+        return READABLE_MATH_SYMBOLS[command];
+      }
+      if (/^(?:left|right|middle|limits|nolimits|displaystyle|textstyle|scriptstyle|scriptscriptstyle)$/.test(command)) {
+        return "";
+      }
+      if (/^(?:quad|qquad|enspace|thinspace|medspace|thickspace)$/.test(command)) {
+        return " ";
+      }
+      if (/^(?:begin|end)$/.test(command)) {
+        parseArgument();
+        return "";
+      }
+      if (/^(?:text|textrm|textsf|texttt|mathrm|mathbf|mathit|mathsf|mathtt|operatorname|mbox)$/.test(command)) {
+        return parseArgument();
+      }
+      if (command === "mathbb") {
+        var blackboard = parseArgument().trim();
+        return READABLE_BLACKBOARD[blackboard] || blackboard;
+      }
+      if (command === "boxed") {
+        return "【" + parseArgument().trim() + "】";
+      }
+      if (command === "ket") {
+        return "|" + parseArgument().trim() + ">";
+      }
+      if (command === "bra") {
+        return "<" + parseArgument().trim() + "|";
+      }
+      if (/^(?:braket|inner)$/.test(command)) {
+        return "<" + parseArgument().trim() + ">";
+      }
+      if (/^(?:frac|dfrac|tfrac)$/.test(command)) {
+        var numerator = parseArgument();
+        var denominator = parseArgument();
+        return readableMathFractionPart(numerator) + "/" + readableMathFractionPart(denominator);
+      }
+      if (command === "sqrt") {
+        var degree = parseOptionalGroup();
+        var radicand = parseArgument().trim();
+        return (degree ? "√[" + degree.trim() + "]" : "√") +
+          (/^[A-Za-z0-9α-ωΑ-Ω₀-₉⁰-⁹]+$/.test(radicand) ? radicand : "(" + radicand + ")");
+      }
+      if (command === "binom") {
+        return "C(" + parseArgument().trim() + ", " + parseArgument().trim() + ")";
+      }
+      if (/^(?:overline|underline|hat|widehat|bar|vec|dot|ddot)$/.test(command)) {
+        return command + "(" + parseArgument().trim() + ")";
+      }
+      if (/^(?:overset|stackrel)$/.test(command)) {
+        var over = parseArgument().trim();
+        var base = parseArgument().trim();
+        return base + readableMathScript(over, "^");
+      }
+      if (command === "underset") {
+        var under = parseArgument().trim();
+        var underBase = parseArgument().trim();
+        return underBase + readableMathScript(under, "_");
+      }
+      if (/^(?:sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|log|ln|exp|lim|max|min|sup|inf|det|gcd|Pr)$/.test(command)) {
+        return command;
+      }
+
+      skipSpaces();
+      if (text.charAt(index) === "{") {
+        return command + "(" + parseArgument().trim() + ")";
+      }
+      return command;
+    }
+
+    function parseUntil(endCharacter) {
+      var output = "";
+      while (index < text.length) {
+        var character = text.charAt(index);
+        if (endCharacter && character === endCharacter) {
+          index += 1;
+          break;
+        }
+        if (character === "\\") {
+          output += parseCommand();
+          continue;
+        }
+        if (character === "^" || character === "_") {
+          index += 1;
+          output += readableMathScript(parseArgument(), character);
+          continue;
+        }
+        if (character === "{") {
+          index += 1;
+          output += parseUntil("}");
+          continue;
+        }
+        if (character === "}" || character === "]") {
+          index += 1;
+          output += character;
+          continue;
+        }
+        if (character === "&") {
+          index += 1;
+          continue;
+        }
+        if (character === "~") {
+          index += 1;
+          output += " ";
+          continue;
+        }
+        output += character;
+        index += 1;
+      }
+      return output;
+    }
+
+    return parseUntil("").replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n");
+  }
+
+  function isEscapedTextCharacter(text, index) {
+    var slashCount = 0;
+    for (var cursor = index - 1; cursor >= 0 && text.charAt(cursor) === "\\"; cursor -= 1) {
+      slashCount += 1;
+    }
+    return slashCount % 2 === 1;
+  }
+
+  function readableMathDelimiterContext(text, index) {
+    return index === 0 || /[\s(\[{"'“‘>]/.test(text.charAt(index - 1));
+  }
+
+  function looksLikeReadableMath(value) {
+    var clean = String(value == null ? "" : value).trim();
+    if (!clean) {
+      return false;
+    }
+    return /\\[A-Za-z]+|[_^=<>+\-*/]|[≤≥≠≈→←⇒⇐∑∏∫√∞α-ωΑ-Ω]/.test(clean) ||
+      /^[A-Za-z]$/.test(clean) ||
+      /^\d+(?:\.\d+)?$/.test(clean);
+  }
+
+  function findReadableMathClose(text, start, closeToken) {
+    var cursor = start;
+    while (cursor < text.length) {
+      var found = text.indexOf(closeToken, cursor);
+      if (found < 0) {
+        return -1;
+      }
+      if (!isEscapedTextCharacter(text, found)) {
+        return found;
+      }
+      cursor = found + closeToken.length;
+    }
+    return -1;
+  }
+
+  function normalizeReadableMathResult(value, inline) {
+    var lines = String(value == null ? "" : value).replace(/\r/g, "").split("\n").map(function trimMathLine(line) {
+      return line.replace(/[ \t]+/g, " ").trim();
+    });
+    while (lines.length && !lines[0]) {
+      lines.shift();
+    }
+    while (lines.length && !lines[lines.length - 1]) {
+      lines.pop();
+    }
+    return inline ? lines.join(" ").replace(/\s+/g, " ").trim() : lines.join("\n");
+  }
+
+  function convertReadableMathInProse(value) {
+    var text = String(value == null ? "" : value);
+    var output = "";
+    var index = 0;
+
+    function appendDelimited(openToken, closeToken, inline) {
+      var contentStart = index + openToken.length;
+      var closeIndex = findReadableMathClose(text, contentStart, closeToken);
+      if (closeIndex < 0) {
+        return false;
+      }
+      var expression = text.slice(contentStart, closeIndex);
+      if (!looksLikeReadableMath(expression)) {
+        return false;
+      }
+      output += normalizeReadableMathResult(readableMathExpression(expression), inline);
+      index = closeIndex + closeToken.length;
+      return true;
+    }
+
+    while (index < text.length) {
+      if (text.charAt(index) === "`") {
+        var tickEnd = index;
+        while (tickEnd < text.length && text.charAt(tickEnd) === "`") {
+          tickEnd += 1;
+        }
+        var ticks = text.slice(index, tickEnd);
+        var inlineCodeEnd = text.indexOf(ticks, tickEnd);
+        if (inlineCodeEnd >= 0) {
+          output += text.slice(index, inlineCodeEnd + ticks.length);
+          index = inlineCodeEnd + ticks.length;
+          continue;
+        }
+      }
+      if (
+        text.slice(index, index + 2) === "\\[" &&
+        readableMathDelimiterContext(text, index) &&
+        appendDelimited("\\[", "\\]", false)
+      ) {
+        continue;
+      }
+      if (
+        text.slice(index, index + 2) === "\\(" &&
+        readableMathDelimiterContext(text, index) &&
+        appendDelimited("\\(", "\\)", true)
+      ) {
+        continue;
+      }
+      if (text.slice(index, index + 2) === "$$" && !isEscapedTextCharacter(text, index) && appendDelimited("$$", "$$", false)) {
+        continue;
+      }
+      if (
+        text.charAt(index) === "$" &&
+        text.charAt(index + 1) !== "$" &&
+        !isEscapedTextCharacter(text, index) &&
+        index + 1 < text.length &&
+        !/\s/.test(text.charAt(index + 1))
+      ) {
+        var dollarClose = index + 1;
+        var convertedDollar = false;
+        while (dollarClose < text.length) {
+          dollarClose = text.indexOf("$", dollarClose);
+          if (dollarClose < 0) {
+            break;
+          }
+          if (
+            !isEscapedTextCharacter(text, dollarClose) &&
+            text.charAt(dollarClose - 1) !== "$" &&
+            !/\s/.test(text.charAt(dollarClose - 1))
+          ) {
+            var dollarExpression = text.slice(index + 1, dollarClose);
+            if (
+              looksLikeReadableMath(dollarExpression) &&
+              !/^\s*\d+(?:\.\d+)?\s*$/.test(dollarExpression)
+            ) {
+              output += normalizeReadableMathResult(readableMathExpression(dollarExpression), true);
+              index = dollarClose + 1;
+              convertedDollar = true;
+              break;
+            }
+          }
+          dollarClose += 1;
+        }
+        if (convertedDollar) {
+          continue;
+        }
+      }
+      output += text.charAt(index);
+      index += 1;
+    }
+    return output;
+  }
+
+  // JSON and Markdown are source-preserving formats. Every reading-oriented
+  // renderer calls this one conversion before layout so PDF, Word, HTML, SVG
+  // and PNG show common ChatGPT TeX as ordinary mathematical text. Fenced and
+  // inline code are copied verbatim; backslashes outside confirmed math
+  // delimiters are never interpreted.
+  function readableMathText(value) {
+    var normalized = String(value == null ? "" : value).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    var lines = normalized.match(/[^\n]*\n|[^\n]+$/g) || [normalized];
+    var output = "";
+    var prose = "";
+    var fenceCharacter = "";
+    var fenceLength = 0;
+
+    function flushProse() {
+      if (!prose) {
+        return;
+      }
+      output += convertReadableMathInProse(prose);
+      prose = "";
+    }
+
+    lines.forEach(function convertLine(line) {
+      var content = line.replace(/\n$/, "");
+      var fence = content.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (!fenceCharacter && fence) {
+        flushProse();
+        fenceCharacter = fence[1].charAt(0);
+        fenceLength = fence[1].length;
+        output += line;
+        return;
+      }
+      if (fenceCharacter) {
+        output += line;
+        var closePattern = new RegExp("^\\s{0,3}" + (fenceCharacter === "`" ? "`" : "~") + "{" + fenceLength + ",}\\s*$");
+        if (closePattern.test(content)) {
+          fenceCharacter = "";
+          fenceLength = 0;
+        }
+        return;
+      }
+      if (/^(?: {4}|\t)/.test(content)) {
+        flushProse();
+        output += line;
+        return;
+      }
+      prose += line;
+    });
+    flushProse();
+    return output;
+  }
+
+  function readableMessageText(message) {
+    return readableMathText(message && (message.text || message.content) || "");
+  }
+
   function wrapMultilineText(text, maxChars) {
     var lines = [];
     String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").forEach(function wrapLine(line) {
@@ -1263,7 +1730,7 @@
 
       conversation.messages.forEach(function messageToText(message) {
         lines.push(speakerName(message.role) + ":");
-        contentLines(message.text || message.content || "").forEach(function appendLine(line) {
+        contentLines(readableMessageText(message)).forEach(function appendLine(line) {
           lines.push(line || " ");
         });
         var foot = messageFootnote(message);
@@ -1289,7 +1756,7 @@
         return [
           '<div class="msg ' + (user ? "user" : "assistant") + '">',
           '<div class="row"><span class="who">' + escapeHtml(speakerName(message.role)) + "</span></div>",
-          '<div class="bubble"><div class="content">' + escapeHtml(message.text || message.content || "") + "</div>",
+          '<div class="bubble"><div class="content">' + escapeHtml(readableMessageText(message)) + "</div>",
           foot ? '<div class="foot">' + escapeHtml(foot) + "</div>" : "",
           "</div>",
           "</div>"
@@ -1380,25 +1847,18 @@
 
   function brandIconSvg(x, y, size) {
     var scale = Number(size || 0) / BRAND_ICON.viewBox;
-    var background = BRAND_ICON.background;
-    var orbit = BRAND_ICON.orbit;
-    var bubble = BRAND_ICON.bubble;
-    var tailPoints = BRAND_ICON.tail.points.map(function point(pair) {
-      return pair[0] + "," + pair[1];
-    }).join(" ");
-    var bars = BRAND_ICON.bars.map(function barSvg(bar) {
-      return '<rect x="' + bar.x + '" y="' + bar.y + '" width="' + bar.width + '" height="' + bar.height +
-        '" rx="' + bar.radius + '" fill="' + bar.color + '"/>';
+    var layers = BRAND_ICON.layers.map(function layerSvg(layer) {
+      if (layer.kind === "triangle") {
+        var points = layer.points.map(function point(pair) {
+          return pair[0] + "," + pair[1];
+        }).join(" ");
+        return '<polygon points="' + points + '" fill="' + layer.color + '"/>';
+      }
+      return '<rect x="' + layer.x + '" y="' + layer.y + '" width="' + layer.width + '" height="' + layer.height +
+        '" rx="' + layer.radius + '" fill="' + layer.color + '"/>';
     }).join("");
     return '<g transform="translate(' + x + " " + y + ") scale(" + scale + ')">' +
-      '<rect x="' + background.x + '" y="' + background.y + '" width="' + background.width + '" height="' + background.height +
-        '" rx="' + background.radius + '" fill="' + background.color + '"/>' +
-      '<rect x="' + orbit.x + '" y="' + orbit.y + '" width="' + orbit.width + '" height="' + orbit.height +
-        '" rx="' + orbit.radius + '" fill="' + orbit.color + '"/>' +
-      '<rect x="' + bubble.x + '" y="' + bubble.y + '" width="' + bubble.width + '" height="' + bubble.height +
-        '" rx="' + bubble.radius + '" fill="' + bubble.color + '"/>' +
-      '<polygon points="' + tailPoints + '" fill="' + BRAND_ICON.tail.color + '"/>' +
-      bars +
+      layers +
       "</g>";
   }
 
@@ -1453,7 +1913,7 @@
       conv.messages.forEach(function messageToSvg(message) {
         var user = isUserMessage(message.role);
         var lines = [];
-        contentLines(message.text || message.content || "").forEach(function wrapRaw(raw) {
+        contentLines(readableMessageText(message)).forEach(function wrapRaw(raw) {
           wrapPlainLine(raw, maxUnits).forEach(function pushWrapped(w) { lines.push(w); });
         });
         if (!lines.length) { lines = [""]; }
@@ -2092,19 +2552,21 @@
         pngColor(shape.color)
       );
     }
-    rounded(BRAND_ICON.background);
-    rounded(BRAND_ICON.orbit);
-    rounded(BRAND_ICON.bubble);
-    fillPngTriangle(
-      raw,
-      width,
-      height,
-      BRAND_ICON.tail.points.map(function scalePoint(point) {
-        return [x + point[0] * scale, y + point[1] * scale];
-      }),
-      pngColor(BRAND_ICON.tail.color)
-    );
-    BRAND_ICON.bars.forEach(rounded);
+    BRAND_ICON.layers.forEach(function drawLayer(layer) {
+      if (layer.kind === "triangle") {
+        fillPngTriangle(
+          raw,
+          width,
+          height,
+          layer.points.map(function scalePoint(point) {
+            return [x + point[0] * scale, y + point[1] * scale];
+          }),
+          pngColor(layer.color)
+        );
+        return;
+      }
+      rounded(layer);
+    });
   }
 
   function drawPngGlyph(raw, width, height, x, y, character, scale, color) {
@@ -2426,15 +2888,16 @@
 
       conversation.messages.forEach(function appendMessage(message) {
         var user = isUserMessage(message.role);
+        var readableText = readableMessageText(message) || " ";
         paragraphs.push(paragraph(speakerName(message.role), user ? "SpeakerUser" : "SpeakerBot"));
         // renderMarkdown 时按 Markdown 渲染成 Word 结构(标题/加粗/行内代码/代码块/列表/表格);
         // 否则保留原始文本分段(单测与机器可读路径走这条,保证结构化内容逐字保留)。
         if (renderMd) {
-          docxMarkdownParagraphs(message.text || message.content || " ", links).forEach(function appendBlock(block) {
+          docxMarkdownParagraphs(readableText, links).forEach(function appendBlock(block) {
             paragraphs.push(block);
           });
         } else {
-          String(message.text || message.content || " ").replace(/\r\n/g, "\n").split(/\n{2,}/).forEach(function appendRaw(block) {
+          readableText.replace(/\r\n/g, "\n").split(/\n{2,}/).forEach(function appendRaw(block) {
             paragraphs.push(paragraph(block || " ", "MsgBody"));
           });
         }
@@ -2864,17 +3327,17 @@
     var list = normalizeConversations(conversations);
     var pageWidth = 595;
     var pageHeight = 842;
-    var margin = 56;
+    var margin = 52;
     var contentW = pageWidth - margin * 2;
-    var fontSize = 11;
-    var lineH = 17;
-    // 已给 STSong-Light 加了 /W(ASCII 半角),所以 1 个排版单位 ≈ 半个字号;CJK 占 2 单位。
-    var unitW = fontSize * 0.5;
-    var maxUnits = Math.max(20, Math.floor(contentW / unitW));
+    var fontSize = 10.5;
+    var lineH = 16;
     var INK = "0.12 0.13 0.16";
     var MUTED = "0.46 0.51 0.58";
     var USER_COLOR = "0.13 0.36 0.70";
     var BOT_COLOR = "0.16 0.18 0.23";
+    var ACCENT = "0.12 0.31 0.62";
+    var CODE_BG = "0.965 0.973 0.984";
+    var QUOTE_RULE = "0.76 0.80 0.86";
     var pages = [[]];
     var y = pageHeight - margin;
 
@@ -2885,10 +3348,226 @@
       currentPage().push({ type: "text", x: x, y: ty, text: text || " ", fontSize: size, color: color, bold: !!bold });
     }
 
-    // 隐藏全文层:供 PDF 文本搜索/复制(完整未折行)。
-    var fullText = buildPlainTextLines(conversations, options).join("\n");
-    if (fullText.trim()) {
-      currentPage().push({ type: "text", x: margin, y: y, text: fullText, fontSize: 1, color: "1 1 1", hidden: true });
+    function unitsFor(size, width) {
+      // STSong 的 ASCII 宽度约为字号的一半，CJK 约为一个字号；wrapPdfText 使用 1/2 单位表示两者。
+      return Math.max(12, Math.floor((width || contentW) / (Number(size) * 0.5)));
+    }
+
+    function cleanInline(spans) {
+      return (spans || []).map(function spanText(span) {
+        return String(span && span.t || "");
+      }).join("");
+    }
+
+    function wrapped(text, size, width) {
+      var units = unitsFor(size, width);
+      return wrapPdfText(String(text == null ? "" : text), units, units);
+    }
+
+    function drawWrappedText(text, x, width, size, height, color, bold, after) {
+      var lines = wrapped(text, size, width);
+      lines.forEach(function drawLine(line) {
+        ensureSpace(height);
+        pushText(x, y - size + 2, line || " ", size, color, bold);
+        y -= line ? height : Math.max(6, Math.round(height * 0.55));
+      });
+      y -= Math.max(0, Number(after) || 0);
+      return lines.length;
+    }
+
+    function firstBlockHeight(block) {
+      if (!block) {
+        return lineH;
+      }
+      if (block.type === "heading") {
+        return 24;
+      }
+      if (block.type === "code" || block.type === "table") {
+        return 22;
+      }
+      return lineH;
+    }
+
+    function pdfMarkdownBlocks(messageText) {
+      var rawLines = String(messageText == null ? "" : messageText).replace(/\r/g, "").split("\n");
+      var structuredStart = -1;
+      for (var lineIndex = 0; lineIndex < rawLines.length - 1; lineIndex += 1) {
+        if (
+          /^[A-Za-z0-9_.-]+:\s*$/.test(rawLines[lineIndex]) &&
+          /^\s{2,}\S/.test(rawLines[lineIndex + 1])
+        ) {
+          structuredStart = lineIndex;
+          break;
+        }
+      }
+      if (structuredStart < 0) {
+        return cvParseBlocks(messageText || "");
+      }
+      var structuredEnd = structuredStart + 1;
+      while (
+        structuredEnd < rawLines.length &&
+        (
+          !rawLines[structuredEnd].trim() ||
+          /^\s{2,}\S/.test(rawLines[structuredEnd]) ||
+          /^[A-Za-z0-9_.-]+:\s*$/.test(rawLines[structuredEnd])
+        )
+      ) {
+        structuredEnd += 1;
+      }
+      return cvParseBlocks(rawLines.slice(0, structuredStart).join("\n"))
+        .concat([{
+          type: "preformatted",
+          lines: rawLines.slice(structuredStart, structuredEnd)
+        }])
+        .concat(cvParseBlocks(rawLines.slice(structuredEnd).join("\n")));
+    }
+
+    function renderMarkdownBlocks(messageText) {
+      var blocks = pdfMarkdownBlocks(messageText || "");
+      if (!blocks.length) {
+        blocks = [{ type: "para", spans: [{ t: " " }] }];
+      }
+      blocks.forEach(function renderBlock(block, blockIndex) {
+        var nextHeight = firstBlockHeight(blocks[blockIndex + 1]);
+        if (block.type === "heading") {
+          var level = Math.max(1, Math.min(6, Number(block.level) || 1));
+          var style = level <= 1
+            ? { size: 15, height: 21, before: 10, after: 5, color: INK }
+            : level === 2
+              ? { size: 13.5, height: 19, before: 9, after: 4, color: INK }
+              : level === 3
+                ? { size: 12.5, height: 18, before: 8, after: 3, color: INK }
+                : { size: 11.5, height: 17, before: 7, after: 3, color: ACCENT };
+          var headingText = cleanInline(block.spans);
+          var headingLines = wrapped(headingText, style.size, contentW);
+          ensureSpace(style.before + headingLines.length * style.height + style.after + nextHeight);
+          y -= style.before;
+          headingLines.forEach(function drawHeading(line) {
+            pushText(margin, y - style.size + 2, line || " ", style.size, style.color, true);
+            y -= style.height;
+          });
+          y -= style.after;
+          return;
+        }
+        if (block.type === "para") {
+          drawWrappedText(cleanInline(block.spans), margin, contentW, fontSize, lineH, INK, false, 6);
+          return;
+        }
+        if (block.type === "list") {
+          (block.items || []).forEach(function drawListItem(item, itemIndex) {
+            var prefix = block.ordered ? String(itemIndex + 1) + "." : "•";
+            var itemText = cleanInline(item);
+            var itemX = margin + 20;
+            var itemWidth = contentW - 20;
+            var itemLines = wrapped(itemText, fontSize, itemWidth);
+            ensureSpace(Math.min(itemLines.length, 2) * lineH + 3);
+            pushText(margin + 2, y - fontSize + 2, prefix, fontSize, MUTED, true);
+            itemLines.forEach(function drawItemLine(line) {
+              ensureSpace(lineH);
+              pushText(itemX, y - fontSize + 2, line || " ", fontSize, INK, false);
+              y -= lineH;
+            });
+            y -= 3;
+          });
+          y -= 3;
+          return;
+        }
+        if (block.type === "quote") {
+          var quoteText = cleanInline(block.spans);
+          var quoteX = margin + 16;
+          var quoteWidth = contentW - 16;
+          var quoteLines = wrapped(quoteText, fontSize, quoteWidth);
+          quoteLines.forEach(function drawQuoteLine(line) {
+            ensureSpace(lineH);
+            currentPage().push({
+              type: "rect",
+              x: margin + 2,
+              y: y - lineH + 3,
+              w: 2.5,
+              h: lineH,
+              color: QUOTE_RULE
+            });
+            pushText(quoteX, y - fontSize + 2, line || " ", fontSize, MUTED, false);
+            y -= lineH;
+          });
+          y -= 7;
+          return;
+        }
+        if (block.type === "code") {
+          String(block.code || "").split("\n").forEach(function drawCodeSourceLine(sourceLine) {
+            var codeLines = wrapped(sourceLine || " ", 9.5, contentW - 20);
+            codeLines.forEach(function drawCodeLine(line) {
+              ensureSpace(16);
+              currentPage().push({
+                type: "rect",
+                x: margin,
+                y: y - 13,
+                w: contentW,
+                h: 17,
+                color: CODE_BG
+              });
+              pushText(margin + 10, y - 8, line || " ", 9.5, BOT_COLOR, false);
+              y -= 16;
+            });
+          });
+          y -= 7;
+          return;
+        }
+        if (block.type === "preformatted") {
+          (block.lines || []).forEach(function drawPreformattedSourceLine(sourceLine) {
+            var source = String(sourceLine == null ? "" : sourceLine);
+            var preformattedLines = wrapped(source || " ", 9.5, contentW - 20);
+            preformattedLines.forEach(function drawPreformattedLine(line) {
+              ensureSpace(16);
+              currentPage().push({
+                type: "rect",
+                x: margin,
+                y: y - 13,
+                w: contentW,
+                h: 17,
+                color: CODE_BG
+              });
+              pushText(margin + 10, y - 8, line || " ", 9.5, BOT_COLOR, false);
+              y -= 16;
+            });
+          });
+          y -= 7;
+          return;
+        }
+        if (block.type === "table") {
+          (block.rows || []).forEach(function drawTableRow(row, rowIndex) {
+            var rowText = (row || []).map(function cleanCell(cell) {
+              return cleanInline(cvParseInline(cell));
+            }).join("  |  ");
+            var rowLines = wrapped(rowText, 9.5, contentW - 12);
+            rowLines.forEach(function drawTableLine(line) {
+              ensureSpace(16);
+              if (rowIndex === 0) {
+                currentPage().push({
+                  type: "rect",
+                  x: margin,
+                  y: y - 13,
+                  w: contentW,
+                  h: 17,
+                  color: CODE_BG
+                });
+              }
+              pushText(margin + 6, y - 8, line || " ", 9.5, INK, rowIndex === 0);
+              y -= 16;
+            });
+            currentPage().push({ type: "line", x1: margin, x2: pageWidth - margin, y: y + 2 });
+            y -= 4;
+          });
+          y -= 5;
+          return;
+        }
+        if (block.type === "hr") {
+          ensureSpace(16);
+          y -= 6;
+          currentPage().push({ type: "line", x1: margin, x2: pageWidth - margin, y: y });
+          y -= 10;
+        }
+      });
     }
 
     // 文档标题 + 摘要 + 分隔线
@@ -2914,35 +3593,44 @@
 
       conv.messages.forEach(function messageToPdf(message) {
         var user = isUserMessage(message.role);
-        var lines = [];
-        contentLines(message.text || message.content || "").forEach(function wrapRaw(raw) {
-          if (raw === "") { lines.push(""); return; }
-          wrapPdfText(raw, maxUnits, maxUnits).forEach(function pushWrapped(w) { lines.push(w); });
-        });
-        if (!lines.length) { lines = [""]; }
+        var readableText = readableMessageText(message);
         // 说话人小标题(着色加粗)
-        ensureSpace(lineH + 12);
+        var messageBlocks = pdfMarkdownBlocks(readableText);
+        ensureSpace(lineH + 12 + firstBlockHeight(messageBlocks[0]));
         y -= 10;
         pushText(margin, y - fontSize, speakerName(message.role), 11.5, user ? USER_COLOR : BOT_COLOR, true);
         y -= lineH + 2;
-        // 正文段落(整宽)
-        lines.forEach(function drawLine(l) {
-          if (l === "") { y -= Math.round(lineH * 0.5); return; }
-          ensureSpace(lineH);
-          pushText(margin, y - fontSize + 2, l, fontSize, INK);
-          y -= lineH;
-        });
+        renderMarkdownBlocks(readableText);
         // 助手脚注(模型 / 功能)
         var foot = messageFootnote(message);
         if (foot) {
-          ensureSpace(14);
-          pushText(margin, y - 9, foot, 8.5, MUTED);
-          y -= 14;
+          drawWrappedText(foot, margin, contentW, 8.5, 13, MUTED, false, 2);
         }
       });
     });
 
-    return pages.filter(function hasContent(page) { return page.length > 0; });
+    ensureSpace(56);
+    y -= 8;
+    currentPage().push({ type: "line", x1: margin, x2: pageWidth - margin, y: y });
+    y -= 17;
+    pushText(margin, y, EXPORT_PROMO_NAME, 9.5, ACCENT, true);
+    y -= 14;
+    drawWrappedText(EXPORT_PROMO_DESC, margin, contentW, 8.5, 12, MUTED, false, 0);
+    drawWrappedText(EXPORT_PROMO_URL, margin, contentW, 8.5, 12, ACCENT, false, 0);
+
+    var filteredPages = pages.filter(function hasContent(page) { return page.length > 0; });
+    filteredPages.forEach(function addPageFooter(page, pageIndex) {
+      page.push({
+        type: "text",
+        x: pageWidth - margin - 34,
+        y: 24,
+        text: String(pageIndex + 1) + " / " + String(filteredPages.length),
+        fontSize: 7.5,
+        color: MUTED,
+        bold: false
+      });
+    });
+    return filteredPages;
   }
 
   function pdfContentStream(page) {
@@ -3488,17 +4176,19 @@
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(scale, scale);
-    rounded(BRAND_ICON.background);
-    rounded(BRAND_ICON.orbit);
-    rounded(BRAND_ICON.bubble);
-    ctx.fillStyle = BRAND_ICON.tail.color;
-    ctx.beginPath();
-    ctx.moveTo(BRAND_ICON.tail.points[0][0], BRAND_ICON.tail.points[0][1]);
-    ctx.lineTo(BRAND_ICON.tail.points[1][0], BRAND_ICON.tail.points[1][1]);
-    ctx.lineTo(BRAND_ICON.tail.points[2][0], BRAND_ICON.tail.points[2][1]);
-    ctx.closePath();
-    ctx.fill();
-    BRAND_ICON.bars.forEach(rounded);
+    BRAND_ICON.layers.forEach(function drawLayer(layer) {
+      if (layer.kind === "triangle") {
+        ctx.fillStyle = layer.color;
+        ctx.beginPath();
+        ctx.moveTo(layer.points[0][0], layer.points[0][1]);
+        ctx.lineTo(layer.points[1][0], layer.points[1][1]);
+        ctx.lineTo(layer.points[2][0], layer.points[2][1]);
+        ctx.closePath();
+        ctx.fill();
+        return;
+      }
+      rounded(layer);
+    });
     ctx.restore();
   }
 
@@ -3638,7 +4328,7 @@
       conv.messages.forEach(function (msg) {
         gap(6);
         addText(margin, speakerName(msg.role), 13, isUserMessage(msg.role) ? USERC : ACCENT, { bold: true }); gap(20);
-        drawBlocks(cvParseBlocks(msg.text || msg.content || ""), margin, contentW);
+        drawBlocks(cvParseBlocks(readableMessageText(msg)), margin, contentW);
         var foot = messageFootnote(msg);
         if (foot) { addText(margin, foot, 11, MUTED, { italic: true }); gap(16); }
         gap(4);

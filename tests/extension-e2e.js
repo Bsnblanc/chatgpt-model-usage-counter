@@ -4,14 +4,19 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const EXTENSION_ROOT = path.resolve(__dirname, "..");
+const EXTENSION_ROOT = process.env.EXTENSION_ROOT
+  ? path.resolve(process.env.EXTENSION_ROOT)
+  : path.resolve(__dirname, "..");
 const CHROME_PATHS = [
+  process.env.CHROME_PATH,
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
   path.join(os.homedir(), "AppData\\Local\\Google\\Chrome\\Application\\chrome.exe")
-];
+].filter(Boolean);
 const STORAGE_KEY = "chatgptModelUsageStats.v1";
 const SETTINGS_KEY = "chatgptModelUsageSettings.v1";
+const COMPLETION_MARKER = "CHATGPT_MODEL_USAGE_COUNTER_EXTENSION_E2E_COMPLETE";
+const CDP_PIPE_TEST_MARKER = "CHATGPT_MODEL_USAGE_COUNTER_CDP_PIPE_TEST_COMPLETE";
 
 function findChrome() {
   const chromePath = CHROME_PATHS.find((candidate) => fs.existsSync(candidate));
@@ -38,12 +43,19 @@ class CdpPipe {
     this.buffer = Buffer.alloc(0);
     this.pending = new Map();
     this.eventHandlers = new Map();
+    this.closed = false;
+    this.closing = false;
+    this.failure = null;
+    this.stderr = "";
     this.child = spawn(
       chromePath,
       [
         "--remote-debugging-pipe",
         "--enable-unsafe-extension-debugging",
         `--user-data-dir=${profilePath}`,
+        "--no-sandbox",
+        "--disable-gpu-sandbox",
+        "--disable-features=RendererCodeIntegrity",
         "--no-first-run",
         "--no-default-browser-check",
         "about:blank"
@@ -52,6 +64,41 @@ class CdpPipe {
     );
 
     this.child.stdio[4].on("data", (chunk) => this.handleData(chunk));
+    this.child.stderr.on("data", (chunk) => {
+      this.stderr = (this.stderr + chunk.toString()).slice(-4000);
+    });
+    this.child.on("error", (error) => {
+      this.fail(new Error(`Chrome process error: ${error.message}`, { cause: error }));
+    });
+    this.child.on("exit", (code, signal) => {
+      const exitDescription = signal ? `signal ${signal}` : `code ${code}`;
+      const stderr = this.stderr.trim();
+      this.fail(new Error(
+        `Chrome process exited ${this.closing ? "during cleanup" : "unexpectedly"} with ${exitDescription}.` +
+        (stderr ? `\nChrome stderr:\n${stderr}` : "")
+      ));
+    });
+    this.child.stdio[3].on("error", (error) => {
+      this.fail(new Error(`Chrome CDP command pipe failed: ${error.message}`, { cause: error }));
+    });
+    this.child.stdio[4].on("error", (error) => {
+      this.fail(new Error(`Chrome CDP response pipe failed: ${error.message}`, { cause: error }));
+    });
+  }
+
+  fail(error) {
+    if (this.failure) {
+      return;
+    }
+
+    this.failure = error instanceof Error ? error : new Error(String(error));
+    this.closed = true;
+    const pending = Array.from(this.pending.values());
+    this.pending.clear();
+    pending.forEach(({ reject, timer }) => {
+      clearTimeout(timer);
+      reject(this.failure);
+    });
   }
 
   handleData(chunk) {
@@ -80,8 +127,11 @@ class CdpPipe {
 
     const callbacks = this.pending.get(message.id);
     this.pending.delete(message.id);
+    clearTimeout(callbacks.timer);
     if (message.error) {
-      callbacks.reject(new Error(JSON.stringify(message.error)));
+      callbacks.reject(new Error(
+        `Chrome CDP command failed: ${callbacks.method}: ${JSON.stringify(message.error)}`
+      ));
       return;
     }
 
@@ -123,6 +173,10 @@ class CdpPipe {
   }
 
   send(method, params = {}, sessionId) {
+    if (this.closed) {
+      return Promise.reject(this.failure || new Error("Chrome CDP pipe is closed."));
+    }
+
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
       const message = { id, method, params };
@@ -130,12 +184,45 @@ class CdpPipe {
         message.sessionId = sessionId;
       }
 
-      this.pending.set(id, { resolve, reject });
-      this.child.stdio[3].write(JSON.stringify(message) + "\0");
+      const timer = setTimeout(() => {
+        if (!this.pending.has(id)) {
+          return;
+        }
+        this.pending.delete(id);
+        reject(new Error(`Chrome CDP command timed out: ${method}`));
+      }, 30000);
+      this.pending.set(id, { resolve, reject, timer, method });
+      try {
+        this.child.stdio[3].write(JSON.stringify(message) + "\0", (error) => {
+          if (error && this.pending.has(id)) {
+            this.fail(new Error(`Chrome CDP command write failed: ${error.message}`, { cause: error }));
+          }
+        });
+      } catch (error) {
+        this.fail(new Error(`Chrome CDP command write failed: ${error.message}`, { cause: error }));
+      }
     });
   }
 
   async close() {
+    if (this.closing) {
+      return;
+    }
+    this.closing = true;
+    this.closed = true;
+    if (this.pending.size) {
+      const error = new Error("Chrome CDP pipe closed before pending requests completed.");
+      const pending = Array.from(this.pending.values());
+      this.pending.clear();
+      pending.forEach(({ reject, timer }) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    }
+    if (this.child.exitCode !== null || this.child.signalCode) {
+      return;
+    }
+
     try {
       this.child.kill("SIGTERM");
     } catch (_) {
@@ -221,7 +308,7 @@ async function pollPopup(cdp, popupSessionId) {
       popupSessionId,
       `(() => ({
         headline: document.querySelector(".usage-topline")?.textContent || "",
-        models: document.querySelector(".usage-models")?.textContent || "",
+        models: document.querySelector(".usage-chart-legend")?.textContent || "",
         chart: Boolean(document.querySelector(".usage-chart")),
         modelTextVisible: Boolean(document.querySelector(".usage-model-text-list")),
         sessionsVisible: Boolean(document.querySelector(".usage-sessions")),
@@ -232,16 +319,17 @@ async function pollPopup(cdp, popupSessionId) {
           selected: button.getAttribute("aria-selected"),
           text: button.textContent || ""
         })),
-        language: document.querySelector(".usage-language-toggle")?.getAttribute("data-language-toggle") === "en" ? "zh" : "en"
+        language: document.querySelector('[data-language-select="en"]')?.getAttribute("aria-pressed") === "true"
+          ? "en"
+          : "zh"
       }))()`
     );
     lastState = state;
 
     if (
-      state.language === "zh" &&
-      state.headline.includes("2") &&
-      state.models.includes("gpt-4o-mini") &&
-      state.models.includes("future-family-2026-thinking") &&
+      state.language === "en" &&
+      state.headline.includes("Model usage") &&
+      state.models.includes("GPT-4o mini") &&
       state.chart &&
       !state.modelTextVisible &&
       !state.sessionsVisible &&
@@ -266,15 +354,18 @@ async function waitForRealChatGPTInjection(cdp, pageSessionId) {
     const state = await evaluate(
       cdp,
       pageSessionId,
-      `(() => ({
-        url: location.href,
-        readyState: document.readyState,
-        contentEntry: document.documentElement.getAttribute("data-chatgpt-model-usage-content-entry") || "",
-        contentMarker: document.documentElement.getAttribute("data-chatgpt-model-usage-content-loaded") || "",
-        contentStage: document.documentElement.getAttribute("data-chatgpt-model-usage-content-stage") || "",
-        contentSkip: document.documentElement.getAttribute("data-chatgpt-model-usage-content-skip") || "",
-        panelHost: Boolean(document.querySelector("#chatgpt-model-usage-counter-panel-host"))
-      }))()`
+      `(() => {
+        const root = document.documentElement;
+        return {
+          url: location.href,
+          readyState: document.readyState,
+          contentEntry: root?.getAttribute("data-chatgpt-model-usage-content-entry") || "",
+          contentMarker: root?.getAttribute("data-chatgpt-model-usage-content-loaded") || "",
+          contentStage: root?.getAttribute("data-chatgpt-model-usage-content-stage") || "",
+          contentSkip: root?.getAttribute("data-chatgpt-model-usage-content-skip") || "",
+          panelHost: Boolean(document.querySelector("#chatgpt-model-usage-counter-panel-host"))
+        };
+      })()`
     );
     lastState = state;
     if (state.contentMarker === "true" && state.panelHost) {
@@ -342,7 +433,42 @@ async function refreshPopup(cdp, popupSessionId) {
   );
 }
 
+async function testCdpPipeFailureHandling() {
+  const missingChrome = path.join(
+    os.tmpdir(),
+    `chatgpt-usage-missing-chrome-${process.pid}-${Date.now()}.exe`
+  );
+  const spawnFailure = new CdpPipe(missingChrome, "unused-profile");
+  await assert.rejects(
+    spawnFailure.send("Browser.getVersion"),
+    /Chrome process error|Chrome CDP command (?:pipe|write) failed/
+  );
+  assert.equal(spawnFailure.pending.size, 0);
+  await spawnFailure.close();
+
+  const earlyExit = new CdpPipe(process.execPath, "unused-profile");
+  await assert.rejects(
+    earlyExit.send("Browser.getVersion"),
+    /Chrome process exited unexpectedly|Chrome CDP (?:command|response) pipe failed/
+  );
+  assert.equal(earlyExit.pending.size, 0);
+  await assert.rejects(
+    earlyExit.send("Target.getTargets"),
+    /closed|failed|exited/
+  );
+  await earlyExit.close();
+
+  console.log(JSON.stringify({
+    ok: true,
+    completionMarker: CDP_PIPE_TEST_MARKER
+  }));
+}
+
 async function main() {
+  // Keep the process failed until every E2E assertion reaches the explicit
+  // completion checkpoint. This prevents an abandoned Promise from producing
+  // a successful exit merely because Chrome has already terminated.
+  process.exitCode = 1;
   const chromePath = findChrome();
   const profilePath = fs.mkdtempSync(path.join(os.tmpdir(), "chatgpt-usage-e2e-"));
   const cdp = new CdpPipe(chromePath, profilePath);
@@ -350,16 +476,98 @@ async function main() {
   try {
     await cdp.send("Browser.getVersion");
     const extension = await cdp.send("Extensions.loadUnpacked", { path: EXTENSION_ROOT });
-    const workerTarget = await findExtensionWorker(cdp, extension.id);
-    const workerSessionId = await attach(cdp, workerTarget.targetId);
-    await cdp.send("Runtime.enable", {}, workerSessionId);
-    await waitForExtensionStorage(cdp, workerSessionId);
-    await evaluate(cdp, workerSessionId, "new Promise(resolve => chrome.storage.local.clear(() => resolve(true)))");
+    const startupTarget = await cdp.send("Target.createTarget", {
+      url: `chrome-extension://${extension.id}/src/popup.html`
+    });
+    const storageSessionId = await attach(cdp, startupTarget.targetId);
+    await cdp.send("Runtime.enable", {}, storageSessionId);
+    await cdp.send("Page.enable", {}, storageSessionId);
+    await waitForExtensionStorage(cdp, storageSessionId);
+    await findExtensionWorker(cdp, extension.id);
+    await evaluate(cdp, storageSessionId, "new Promise(resolve => chrome.storage.local.clear(() => resolve(true)))");
+    // Keep one extension page alive for the whole run so Chrome does not
+    // suspend the MV3 worker while assertions still use its CDP session.
 
     const pageTarget = await cdp.send("Target.createTarget", { url: "about:blank" });
     const pageSessionId = await attach(cdp, pageTarget.targetId);
     await cdp.send("Runtime.enable", {}, pageSessionId);
     await cdp.send("Page.enable", {}, pageSessionId);
+    await cdp.send("Network.enable", {}, pageSessionId);
+    const observedConversationRequests = [];
+    const fulfilledChatGPTNetworkIds = new Set();
+    const interceptedChatGPTRequests = [];
+    cdp.on("Fetch.requestPaused", async (params, sessionId) => {
+      if (sessionId !== pageSessionId || !params?.request?.url) {
+        return;
+      }
+
+      const requestUrl = new URL(params.request.url);
+      if (requestUrl.hostname !== "chatgpt.com") {
+        await cdp.send("Fetch.continueRequest", { requestId: params.requestId }, pageSessionId);
+        return;
+      }
+
+      const isDocument = params.resourceType === "Document";
+      const isConversationRequest =
+        params.request.method === "POST" &&
+        /\/backend-api\/(?:f\/)?conversation\/?$/.test(requestUrl.pathname);
+      interceptedChatGPTRequests.push({
+        url: params.request.url,
+        method: params.request.method,
+        resourceType: params.resourceType,
+        networkId: params.networkId || ""
+      });
+      if (params.networkId) {
+        fulfilledChatGPTNetworkIds.add(params.networkId);
+      }
+
+      const body = isDocument
+        ? Buffer.from(
+          "<!doctype html><html><head><meta charset=\"utf-8\"><title>ChatGPT E2E Fixture</title></head><body><main id=\"app\"></main></body></html>"
+        ).toString("base64")
+        : "";
+      await cdp.send(
+        "Fetch.fulfillRequest",
+        {
+          requestId: params.requestId,
+          responseCode: isDocument ? 200 : (isConversationRequest ? 204 : 200),
+          responseHeaders: [
+            { name: "content-type", value: isDocument ? "text/html; charset=utf-8" : "text/plain; charset=utf-8" },
+            { name: "cache-control", value: "no-store" }
+          ],
+          body
+        },
+        pageSessionId
+      );
+    });
+    await cdp.send(
+      "Fetch.enable",
+      {
+        patterns: [
+          {
+            urlPattern: "https://chatgpt.com/*",
+            requestStage: "Request"
+          }
+        ]
+      },
+      pageSessionId
+    );
+    cdp.on("Network.requestWillBeSent", (params, sessionId) => {
+      const request = params && params.request;
+      if (
+        sessionId === pageSessionId &&
+        request &&
+        request.method === "POST" &&
+        /\/backend-api\/(?:f\/)?conversation\/?$/.test(new URL(request.url).pathname)
+      ) {
+        observedConversationRequests.push({
+          requestId: params.requestId || "",
+          url: request.url,
+          method: request.method,
+          postData: request.postData || ""
+        });
+      }
+    });
     await cdp.send("Page.navigate", { url: "https://chatgpt.com/" }, pageSessionId);
     await waitForRealChatGPTInjection(cdp, pageSessionId);
 
@@ -394,32 +602,71 @@ async function main() {
         app.append(model, form);
         send.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
         send.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        const userTurn = document.createElement("div");
+        userTurn.setAttribute("data-turn", "user");
         const userMessage = document.createElement("div");
         userMessage.setAttribute("data-message-author-role", "user");
+        userMessage.setAttribute("data-message-id", "e2e-user-message");
         userMessage.textContent = ${JSON.stringify(prompt)};
-        const assistantMessage = document.createElement("div");
-        assistantMessage.setAttribute("data-message-author-role", "assistant");
-        assistantMessage.textContent = "E2E assistant response";
-        app.append(userMessage, assistantMessage);
-        fetch("/local-codex-dom-model-probe", {
+        userTurn.append(userMessage);
+        app.append(userTurn);
+        fetch("/backend-api/f/conversation", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             model: "gpt-4o-mini"
           })
         }).catch(() => {});
+        setTimeout(() => {
+          const assistantTurn = document.createElement("div");
+          assistantTurn.setAttribute("data-turn", "assistant");
+          const assistantMessage = document.createElement("div");
+          assistantMessage.setAttribute("data-message-author-role", "assistant");
+          assistantMessage.setAttribute("data-message-id", "e2e-assistant-message");
+          assistantMessage.setAttribute("data-message-model-slug", "gpt-4o-mini");
+          assistantMessage.textContent = "E2E assistant response";
+          assistantTurn.append(assistantMessage);
+          app.append(assistantTurn);
+        }, 500);
         return true;
       })()`
     );
 
     await wait(13000);
-    const storage = await readStorage(cdp, workerSessionId);
+    const storage = await readStorage(cdp, storageSessionId);
     const stats = storage[STORAGE_KEY];
-    assert.equal(stats.totals["gpt-4o-mini"], 1);
-    assert.equal(stats.models["gpt-4o-mini"].apiModel, "gpt-4o-mini");
-    assert.equal(stats.sessionsByModel["gpt-4o-mini"]["e2e-conversation"].count, 1);
+    const firstRecordDiagnostic = await evaluate(
+      cdp,
+      pageSessionId,
+      `(() => ({
+        status: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-status") || "",
+        model: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-model") || "",
+        apiModel: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-api-model") || "",
+        responseModel: document.documentElement.getAttribute("data-chatgpt-model-usage-last-response-model") || "",
+        error: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-error") || ""
+      }))()`
+    );
+    const firstObservedRequest = observedConversationRequests.find((request) =>
+      request.postData.includes('"model":"gpt-4o-mini"')
+    );
+    assert.ok(firstObservedRequest, JSON.stringify(observedConversationRequests));
+    assert.equal(fulfilledChatGPTNetworkIds.has(firstObservedRequest.requestId), true);
+    assert.equal(new URL(firstObservedRequest.url).pathname, "/backend-api/f/conversation");
+    assert.equal(firstObservedRequest.method, "POST");
+    assert.equal(stats.totals["GPT-4o mini"], 1, JSON.stringify({
+      totals: stats.totals,
+      events: stats.events,
+      diagnostic: firstRecordDiagnostic
+    }));
+    assert.equal(stats.models["GPT-4o mini"].apiModel, "gpt-4o-mini");
+    assert.equal(stats.sessionsByModel["GPT-4o mini"]["e2e-conversation"].count, 1);
     assert.equal(stats.events[0].source, "send-button");
     assert.equal(stats.events[0].apiModel, "gpt-4o-mini");
+    assert.equal(stats.events[0].requestModel, "gpt-4o-mini");
+    assert.equal(stats.events[0].responseModel, "gpt-4o-mini");
+    if (firstRecordDiagnostic.responseModel) {
+      assert.equal(firstRecordDiagnostic.responseModel, "gpt-4o-mini");
+    }
     const domRecordDiagnostic = await evaluate(
       cdp,
       pageSessionId,
@@ -431,108 +678,8 @@ async function main() {
     );
     if (domRecordDiagnostic.status) {
       assert.equal(domRecordDiagnostic.status, "ok");
-      assert.equal(domRecordDiagnostic.model, "gpt-4o-mini");
+      assert.equal(domRecordDiagnostic.model, "GPT-4o mini");
       assert.equal(domRecordDiagnostic.apiModel, "gpt-4o-mini");
-    }
-
-    const networkPrompt = `codex-network-model-e2e-${Date.now()}`;
-    await evaluate(
-      cdp,
-      pageSessionId,
-      `(() => {
-        history.pushState({}, "", "/c/e2e-network-conversation");
-        document.body.innerHTML = '<main id="app"></main>';
-        const app = document.querySelector("#app");
-        const form = document.createElement("form");
-        form.setAttribute("data-testid", "composer-form");
-        const composer = document.createElement("div");
-        composer.id = "prompt-textarea";
-        composer.setAttribute("contenteditable", "true");
-        composer.setAttribute("role", "textbox");
-        composer.textContent = ${JSON.stringify(networkPrompt)};
-        const send = document.createElement("button");
-        send.type = "button";
-        send.setAttribute("data-testid", "send-button");
-        send.setAttribute("aria-label", "Send prompt");
-        send.textContent = "Send";
-        form.append(composer, send);
-        app.append(form);
-        send.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, composed: true }));
-        send.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
-        const userMessage = document.createElement("div");
-        userMessage.setAttribute("data-message-author-role", "user");
-        userMessage.textContent = ${JSON.stringify(networkPrompt)};
-        const assistantMessage = document.createElement("div");
-        assistantMessage.setAttribute("data-message-author-role", "assistant");
-        assistantMessage.textContent = "E2E network assistant response";
-        app.append(userMessage, assistantMessage);
-        fetch("/local-codex-model-probe", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            model: "future-family-2026-thinking",
-            reasoning: { effort: "high" },
-            text: { verbosity: "medium" },
-            temperature: 0.2,
-            image_generation_options: { size: "1024x1024" },
-            conversation_mode: { kind: "agent_mode" },
-            web_search_options: { search_context_size: "low" },
-            realtime_mode: true,
-            audio_mode: true,
-            voice_mode: true,
-            input_audio_transcription: { model: "gpt-realtime-whisper" },
-            modalities: ["text", "audio"],
-            tools: [{ type: "deep_research" }, { type: "web_search" }]
-          })
-        }).catch(() => {});
-        return true;
-      })()`
-    );
-    await wait(13000);
-    const networkStorage = await readStorage(cdp, workerSessionId);
-    const networkStats = networkStorage[STORAGE_KEY];
-    assert.equal(networkStats.totals["future-family-2026-thinking"], 1, JSON.stringify({
-      total: networkStats.totals["future-family-2026-thinking"],
-      events: networkStats.events.filter((event) => event.model === "future-family-2026-thinking").map((event) => ({
-        source: event.source,
-        observedSource: event.modelObservedSource,
-        promptHash: event.promptHash,
-        submittedAt: event.submittedAt,
-        parameters: event.modelParameters
-      }))
-    }));
-    assert.equal(networkStats.models["future-family-2026-thinking"].apiModel, "future-family-2026-thinking");
-    assert.equal(networkStats.models["future-family-2026-thinking"].chatgptModel, "future-family-2026-thinking");
-    assert.equal(networkStats.sessionsByModel["future-family-2026-thinking"]["e2e-network-conversation"].count, 1);
-    assert.equal(networkStats.events[0].modelParameters.model, "future-family-2026-thinking");
-    assert.equal(networkStats.events[0].modelParameters["reasoning.effort"], "high");
-    assert.equal(networkStats.events[0].modelParameters["text.verbosity"], "medium");
-    assert.equal(networkStats.events[0].modelParameters.temperature, 0.2);
-    assert.equal(networkStats.parametersByModel["future-family-2026-thinking"].total, 1);
-    assert.deepEqual(networkStats.parametersByModel["future-family-2026-thinking"].fields["reasoning.effort"], { high: 1 });
-    assert.deepEqual(networkStats.parametersByModel["future-family-2026-thinking"].fields["text.verbosity"], { medium: 1 });
-    assert.equal(networkStats.featuresByModel["future-family-2026-thinking"].features.agent_mode.count, 1);
-    assert.equal(networkStats.featuresByModel["future-family-2026-thinking"].features.deep_research.count, 1);
-    assert.equal(networkStats.featuresByModel["future-family-2026-thinking"].features.image_generation.count, 1);
-    assert.equal(networkStats.featuresByModel["future-family-2026-thinking"].features.web_search.count, 1);
-    assert.equal(networkStats.featuresByModel["future-family-2026-thinking"].features.realtime.count, 1);
-    assert.equal(networkStats.featuresByModel["future-family-2026-thinking"].features.audio.count, 1);
-    assert.deepEqual(networkStats.events[0].usageFeatures, ["agent_mode", "audio", "deep_research", "image_generation", "realtime", "web_search"]);
-    const networkRecordDiagnostic = await evaluate(
-      cdp,
-      pageSessionId,
-      `(() => ({
-        status: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-status") || "",
-        model: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-model") || "",
-        apiModel: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-api-model") || "",
-        chatgptModel: document.documentElement.getAttribute("data-chatgpt-model-usage-last-record-chatgpt-model") || ""
-      }))()`
-    );
-    if (networkRecordDiagnostic.status) {
-      assert.match(networkRecordDiagnostic.status, /^(ok|duplicate)$/);
-      assert.equal(networkRecordDiagnostic.model, "future-family-2026-thinking");
-      assert.equal(networkRecordDiagnostic.apiModel, "future-family-2026-thinking");
-      assert.equal(networkRecordDiagnostic.chatgptModel, "future-family-2026-thinking");
     }
 
     await evaluate(
@@ -543,7 +690,6 @@ async function main() {
         nav.setAttribute("aria-label", "Chat history");
         [
           ["e2e-conversation", "E2E counted conversation"],
-          ["e2e-network-conversation", "E2E network conversation"],
           ["history-only-conversation", "History only conversation"]
         ].forEach(([id, title]) => {
           const link = document.createElement("a");
@@ -579,7 +725,7 @@ async function main() {
       })()`
     );
     await wait(750);
-    const settingsAfterDates = await readStorage(cdp, workerSessionId);
+    const settingsAfterDates = await readStorage(cdp, storageSessionId);
     assert.equal(settingsAfterDates[SETTINGS_KEY].startDate, e2eDate);
     assert.equal(settingsAfterDates[SETTINGS_KEY].endDate, e2eDate);
     await cdp.send("Target.closeTarget", { targetId: popupTarget.targetId });
@@ -595,17 +741,28 @@ async function main() {
     assert.equal(reopenedPopup.startDate, e2eDate);
     assert.equal(reopenedPopup.endDate, e2eDate);
 
+    await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => {
+        const textStatistics = document.querySelector('[data-statistics-section="text"]');
+        if (!textStatistics) throw new Error("Missing text statistics visibility control");
+        if (!textStatistics.checked) {
+          textStatistics.checked = true;
+          textStatistics.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        return true;
+      })()`
+    );
+    await wait(750);
     const chartPopup = await switchPopupView(cdp, reopenedPopupSessionId, "chart");
     assert.equal(chartPopup.activeView, "true");
     assert.equal(chartPopup.chart, true);
     assert.equal(chartPopup.modelTextList, "");
-    assert.match(chartPopup.countList, /future-family-2026-thinking/);
-    assert.match(chartPopup.countList, /reasoning\.effort/);
-    assert.match(chartPopup.countList, /high/);
-    assert.doesNotMatch(chartPopup.countList, /model=future-family-2026-thinking/);
-    assert.match(chartPopup.countList, /Deep Research/);
-    assert.match(chartPopup.countList, /对话|Conversations/);
+    assert.match(chartPopup.countList, /GPT-4o mini/);
     assert.match(chartPopup.countList, /ChatGPT/);
+    assert.doesNotMatch(chartPopup.countList, /关联对话|Conversations/);
+    assert.doesNotMatch(chartPopup.countList, /Request model|请求型号/);
     assert.equal(chartPopup.sessions, "");
     assert.ok(chartPopup.points > 0);
 
@@ -613,7 +770,52 @@ async function main() {
       cdp,
       reopenedPopupSessionId,
       `(() => {
-        document.querySelector(".usage-language-toggle").click();
+        const internal = document.querySelector('[data-statistics-mode="internal"]');
+        if (!internal) throw new Error("Missing internal statistics mode option");
+        internal.click();
+        return true;
+      })()`
+    );
+    await wait(750);
+    const internalPopup = await readPopupViewState(cdp, reopenedPopupSessionId, "chart");
+    assert.equal(internalPopup.activeView, "true");
+    assert.equal(internalPopup.chart, true);
+    assert.match(internalPopup.countList, /Request model/);
+    assert.match(internalPopup.countList, /gpt-4o-mini/);
+    assert.match(internalPopup.countList, /Actual response model/);
+    assert.match(internalPopup.countList, /gpt-4o-mini/);
+    assert.ok(internalPopup.points > 0);
+
+    await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => {
+        const chinese = document.querySelector('[data-language-select="zh"]');
+        if (!chinese) throw new Error("Missing Chinese language option");
+        chinese.click();
+        return true;
+      })()`
+    );
+    await wait(750);
+    const chinesePopup = await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => ({
+        headline: document.querySelector(".usage-topline")?.textContent || "",
+        language: document.querySelector('[data-language-select="zh"]')?.getAttribute("aria-pressed") === "true"
+          ? "zh"
+          : "en"
+      }))()`
+    );
+    assert.equal(chinesePopup.language, "zh");
+    assert.match(chinesePopup.headline, /模型使用/);
+    await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => {
+        const english = document.querySelector('[data-language-select="en"]');
+        if (!english) throw new Error("Missing English language option");
+        english.click();
         return true;
       })()`
     );
@@ -623,31 +825,58 @@ async function main() {
       reopenedPopupSessionId,
       `(() => ({
         headline: document.querySelector(".usage-topline")?.textContent || "",
-        language: document.querySelector(".usage-language-toggle")?.getAttribute("data-language-toggle") === "zh" ? "en" : "zh"
+        language: document.querySelector('[data-language-select="en"]')?.getAttribute("aria-pressed") === "true"
+          ? "en"
+          : "zh"
       }))()`
     );
     assert.equal(englishPopup.language, "en");
-    assert.match(englishPopup.headline, /Usage|Model usage/);
-    const settingsStorage = await readStorage(cdp, workerSessionId);
+    assert.match(englishPopup.headline, /Model usage/);
+    const settingsStorage = await readStorage(cdp, storageSessionId);
     assert.equal(settingsStorage[SETTINGS_KEY].language, "en");
     assert.equal(settingsStorage[SETTINGS_KEY].startDate, e2eDate);
     assert.equal(settingsStorage[SETTINGS_KEY].endDate, e2eDate);
+    const completed = Boolean(
+      extension.id &&
+      stats.totals["GPT-4o mini"] === 1 &&
+      chartPopup.points > 0 &&
+      internalPopup.points > 0 &&
+      englishPopup.language === "en"
+    );
+    assert.equal(completed, true, "Extension E2E did not reach the final completion checkpoint.");
+    assert.equal(
+      interceptedChatGPTRequests.filter((request) =>
+        request.method === "POST" &&
+        /\/backend-api\/(?:f\/)?conversation\/?$/.test(new URL(request.url).pathname)
+      ).length,
+      1,
+      JSON.stringify(interceptedChatGPTRequests)
+    );
+    assert.equal(
+      observedConversationRequests.every((request) => fulfilledChatGPTNetworkIds.has(request.requestId)),
+      true,
+      "Every simulated ChatGPT backend request must be fulfilled by CDP before it can reach production."
+    );
 
     console.log(
       JSON.stringify(
         {
           ok: true,
+          completionMarker: COMPLETION_MARKER,
           extensionId: extension.id,
-          recordedTotal: stats.totals["gpt-4o-mini"],
+          recordedTotal: stats.totals["GPT-4o mini"],
           popup,
           reopenedPopup,
           chartPopup,
+          internalPopup,
+          chinesePopup,
           englishPopup
         },
         null,
         2
       )
     );
+    process.exitCode = 0;
   } finally {
     await cdp.close();
     try {
@@ -658,7 +887,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+const run = process.argv.includes("--self-test-cdp-pipe")
+  ? testCdpPipeFailureHandling
+  : main;
+
+run().catch((error) => {
   console.error(error.stack || error.message);
   process.exitCode = 1;
 });

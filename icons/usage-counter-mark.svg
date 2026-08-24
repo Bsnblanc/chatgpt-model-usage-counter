@@ -1,11 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
   <title id="title">ChatGPT Model Usage Counter</title>
-  <desc id="desc">A midnight-blue chat bubble containing three rising colored usage bars.</desc>
-  <rect x="4" y="4" width="120" height="120" rx="30" fill="#172554"/>
-  <circle cx="105" cy="24" r="9" fill="#A78BFA"/>
-  <rect x="24" y="25" width="80" height="58" rx="19" fill="#FFFFFF"/>
-  <path d="M34 78H57L30 101Z" fill="#FFFFFF"/>
-  <rect x="44" y="57" width="11" height="14" rx="5.5" fill="#22D3EE"/>
-  <rect x="61" y="48" width="11" height="23" rx="5.5" fill="#60A5FA"/>
-  <rect x="78" y="38" width="11" height="33" rx="5.5" fill="#A78BFA"/>
+  <desc id="desc">A midnight-blue model-usage mark with a conversation orbit and three rising bars.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#081234"/>
+      <stop offset="1" stop-color="#182A6A"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="29" fill="url(#tile)"/>
+  <rect x="6.5" y="6.5" width="115" height="115" rx="27" fill="none" stroke="#304C9C" stroke-width="1.5"/>
+  <path d="M96.4 38.3A41 41 0 1 0 94.5 89.4" fill="none" stroke="#FFFFFF" stroke-width="13" stroke-linecap="round"/>
+  <circle cx="100.5" cy="61.5" r="4.5" fill="#22D3EE"/>
+  <rect x="43" y="66" width="13" height="20" rx="6.5" fill="#22D3EE"/>
+  <rect x="59" y="52" width="13" height="34" rx="6.5" fill="#60A5FA"/>
+  <rect x="75" y="37" width="13" height="49" rx="6.5" fill="#C48BFA"/>
 </svg>

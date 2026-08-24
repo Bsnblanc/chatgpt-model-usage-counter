@@ -33,9 +33,9 @@ function createStats() {
     },
     relationsByModel: {
       "future-family-2026-thinking": {
-        "future-family-2026-thinking\u0001future-family-2026-pro": {
+        "future-family-2026-thinking\u0001future-family-2026-thinking": {
           requestModel: "future-family-2026-thinking",
-          responseModel: "future-family-2026-pro",
+          responseModel: "future-family-2026-thinking",
           count: 3,
           efforts: { high: 3 },
           features: { web_search: 1 },
@@ -129,9 +129,9 @@ function createDirtyStats() {
 test("popup shell uses an expanded extension popup viewport", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "src", "popup.css"), "utf8");
 
-  assert.match(css, /html\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;/);
-  assert.match(css, /body\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;/);
-  assert.match(css, /\.shell\s*\{[\s\S]*width:\s*400px;[\s\S]*height:\s*560px;[\s\S]*overflow:\s*hidden;[\s\S]*padding:\s*8px;/);
+  assert.match(css, /html\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;/);
+  assert.match(css, /body\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;/);
+  assert.match(css, /\.shell\s*\{[\s\S]*width:\s*430px;[\s\S]*height:\s*600px;[\s\S]*overflow:\s*hidden;[\s\S]*padding:\s*8px;/);
 });
 
 test("dashboard popup owns the single scroll layer", () => {
@@ -139,6 +139,21 @@ test("dashboard popup owns the single scroll layer", () => {
 
   assert.match(source, /\.usage-dashboard-popup\{[^}]*overflow:auto/);
   assert.doesNotMatch(source, /\.usage-view-panel\{[^}]*overflow:auto/);
+});
+
+test("status view uses staged fitting and never falls back to a scrollbar or hidden-row layout", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "src", "dashboard.js"), "utf8");
+
+  assert.match(source, /function fitStatusPanel\(state\)/);
+  assert.match(source, /tryColumnRange\(columnLimit\(128, 3\)\)/);
+  assert.match(source, /usage-status-dense/);
+  assert.match(source, /tryColumnRange\(columnLimit\(108, 3\)\)/);
+  assert.match(source, /usage-status-ultra/);
+  assert.match(source, /tryColumnRange\(columnLimit\(92, 4\)\)/);
+  assert.match(source, /statusPanel\.style\.setProperty\("zoom", scale\.toFixed\(3\)\)/);
+  assert.match(source, /--usage-status-font-compensation/);
+  assert.doesNotMatch(source, /usage-status-overflow/);
+  assert.doesNotMatch(source, /\.usage-active-status[^}]*overflow:auto/);
 });
 
 test("model conversations stay inside their request-response relation and are not selection controls", () => {
@@ -151,8 +166,9 @@ test("model conversations stay inside their request-response relation and are no
   assert.notEqual(sessionsStart, -1);
   assert.match(html, /usage-model-relation/);
   assert.match(html, /future-family-2026-thinking/);
-  assert.match(html, /future-family-2026-pro/);
-  assert.match(html, /Reasoning effort/);
+  assert.doesNotMatch(html, /future-family-2026-pro/);
+  assert.match(html, /usage-effort-high">high<\/b>/);
+  assert.doesNotMatch(html, />Reasoning effort</);
   assert.doesNotMatch(html, /usage-feature-row|usage-feature-list/);
   assert.match(sessionsHtml, /usage-relation-conversation/);
   assert.match(sessionsHtml, /usage-source-mode/);

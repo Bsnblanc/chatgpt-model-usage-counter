@@ -12,14 +12,14 @@ The extension stores the following data in the current Chrome profile through `c
 - Up to 500 recent event records used for auditable request/response relationships.
 - Long-term aggregates that continue to cover supported filters and dimensions after the recent-event limit is reached.
 - Conversation relationship metadata such as conversation ID, message IDs, page title, page URL, and timestamps.
-- Shared interface settings: language, active main view, date range, Chat/Work filter, Basic/Advanced mode, chart type, theme, chart/text visibility, and separate visible-model selections for Basic and Advanced.
+- Shared interface settings: language, active main view, date range, Chat/Work filter, Basic/Advanced mode, theme, independent line/donut/text visibility, and separate visible-model selections for Basic and Advanced.
 - The filter used to keep the Chrome toolbar badge consistent with the panel.
 
 The default interface language is English. Changing the language or another shared setting updates the same local settings used by the in-page entry and toolbar popup.
 
 Usage statistics do not store raw prompts, raw answers, passwords, cookies, authorization headers, access tokens, account IDs, `safety_identifier`, or `prompt_cache_key`.
 
-Short-lived duplicate-detection data stays in runtime memory. It is scoped to the relevant tab and prefers exact submission or message identifiers. It is not included in persistent statistics or exports.
+Short-lived duplicate-detection data stays in runtime memory. It is scoped to the relevant tab and keeps only submission/message identifiers plus a prompt hash and length, never the raw prompt. It is not included in persistent statistics or exports.
 
 ## Passive model observation
 
@@ -99,7 +99,7 @@ Account catalog and conversation-history requests use one extension-wide schedul
 - Model-catalog request: no automatic retry.
 - `401` or `403`: stop the current account operation.
 - `429`: apply an extension-wide cooldown; final throttling or a `Retry-After` longer than 60 seconds stops the operation.
-- One account-history operation: at most 800 requests and 10 minutes.
+- One account-history operation: at most 50 conversations, 60 requests, and 90 seconds; reaching any limit stops the operation and marks it incomplete.
 - One conversation: at most 50 older-message pages and 10,000 messages.
 
 The extension does not bypass rate limits, start background conversation crawling, replay account requests, or continue an export after a stop condition.
@@ -142,14 +142,14 @@ ChatGPT Model Usage Counter 是一个 Chrome 扩展，用于本地 ChatGPT 使�
 - 最多 500 条用于审计请求/回复关系的最近事件。
 - 最近事件达到上限后，仍覆盖受支持筛选和维度的完整长期聚合。
 - 对话 ID、消息 ID、页面标题、页面 URL 和时间戳等关系元数据。
-- 共享界面设置：语言、当前主面板、日期范围、Chat/Work、Basic/Advanced、图表类型、主题、图表/文字显示状态，以及 Basic 和 Advanced 各自的可见模型选择。
+- 共享界面设置：语言、当前主面板、日期范围、Chat/Work、Basic/Advanced、主题、折线图/环形图/文字统计的独立显示状态，以及 Basic 和 Advanced 各自的可见模型选择。
 - 使 Chrome 工具栏角标与面板保持同一口径的过滤条件。
 
 界面默认语言为英语。切换语言或其他共享设置时，页面入口和工具栏弹窗使用同一份本地设置。
 
 使用统计不保存 prompt 原文、回答原文、密码、Cookie、Authorization header、访问令牌、账号 ID、`safety_identifier` 或 `prompt_cache_key`。
 
-短时去重数据只存在于运行内存中，按相关标签页隔离并优先使用精确提交或消息标识；不会进入持久化统计或导出文件。
+短时去重数据只存在于运行内存中，按相关标签页隔离，只保留提交/消息标识、prompt 哈希和长度，不保留 prompt 原文；不会进入持久化统计或导出文件。
 
 ## 被动模型观察
 
@@ -229,7 +229,7 @@ Chat 和 Work 共用同一条被动统计事件链。扩展只观察用户原本
 - 模型目录：不自动重试。
 - `401` 或 `403`：停止当前账号操作。
 - `429`：建立扩展级全局冷却；最终仍被限流或 `Retry-After` 超过 60 秒时停止操作。
-- 单次账号历史操作：最多 800 个请求、最长 10 分钟。
+- 单次账号历史操作：最多读取 50 个对话、最多发起 60 个请求、最长 90 秒；任一上限先到即停止并标记不完整。
 - 单个对话：最多 50 个旧消息分页、最多 10,000 条消息。
 
 扩展不会绕过限流，不会在后台批量抓取对话，不会重放账号请求，也不会在触发停止条件后继续导出。

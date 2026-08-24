@@ -32,3 +32,32 @@ test("manifest is MV3 and targets ChatGPT hosts", () => {
   assert.equal(manifest.content_scripts[0].world, "ISOLATED");
   assert.equal(manifest.content_scripts[0].run_at, "document_end");
 });
+
+test("manifest defaults to widest badge-safe action icons while full brand assets remain available", () => {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const root = path.join(__dirname, "..");
+
+  assert.deepEqual(manifest.action.default_icon, {
+    16: "icons/action16.png",
+    20: "icons/action20.png",
+    24: "icons/action24.png",
+    32: "icons/action32.png",
+    48: "icons/action48.png"
+  });
+  assert.deepEqual(manifest.icons, {
+    16: "icons/icon16.png",
+    20: "icons/icon20.png",
+    24: "icons/icon24.png",
+    32: "icons/icon32.png",
+    48: "icons/icon48.png",
+    128: "icons/icon128.png"
+  });
+  const badgeSafeIcons = [16, 20, 24, 32, 48].flatMap((size) => [
+    `icons/action${size}.png`,
+    `icons/action1-${size}.png`,
+    `icons/action2-${size}.png`
+  ]);
+  for (const file of [...Object.values(manifest.action.default_icon), ...Object.values(manifest.icons), ...badgeSafeIcons]) {
+    assert.equal(fs.existsSync(path.join(root, file)), true, `${file} must exist`);
+  }
+});

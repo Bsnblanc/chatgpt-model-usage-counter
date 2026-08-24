@@ -280,7 +280,7 @@ function pngContainsRgb(buffer, expected) {
 }
 
 function assertBrandPalette(colors) {
-  for (const color of ["#172554", "#22D3EE", "#60A5FA", "#A78BFA", "#FFFFFF"]) {
+  for (const color of ["#101B4E", "#22D3EE", "#60A5FA", "#C48BFA", "#FFFFFF"]) {
     assert.ok(colors.includes(color), `canvas watermark should paint brand color ${color}`);
   }
 }
@@ -926,9 +926,10 @@ test("exports show feature usage and model parameters without internal fields", 
 
   assertNoInternalExportFields(json);
   for (const text of [markdown, pdfText, docx, image]) {
+    const compactText = text.replace(/\s+/g, " ");
     // 模型 + 功能作为附注;原始参数不进入可读面(只保留在 JSON 数据里)。
     assert.match(text, /future-family-2026-thinking/);
-    assert.match(text, /agent_mode, canvas, deep_research, image_generation, web_search/);
+    assert.match(compactText, /agent_mode, canvas, deep_research, image_generation, web_search/);
     assert.match(text, /已使用深度研究、agent mode、网页搜索和图片生成能力。/);
     assert.doesNotMatch(text, /reasoning\.effort:/);
     assert.doesNotMatch(text, /image_generation_options\.size:/);
@@ -1024,19 +1025,22 @@ test("exportSvg returns standalone escaped SVG", () => {
   assert.match(svg, /Second conversation/);
   assert.match(svg, /Assistant answer with export details\./);
   assert.match(svg, /ChatGPT Model Usage Counter/);
-  assert.match(svg, /fill="#172554"/);
+  assert.match(svg, /fill="#101B4E"/);
   assert.match(svg, /fill="#22D3EE"/);
   assert.match(svg, /fill="#60A5FA"/);
-  assert.match(svg, /fill="#A78BFA"/);
+  assert.match(svg, /fill="#C48BFA"/);
 });
 
-test("exported brand geometry keeps the compact chat-and-counter identity", () => {
+test("exported brand geometry keeps the conversation-counter identity", () => {
   assert.equal(exporter.BRAND_ICON.viewBox, 128);
-  assert.equal(exporter.BRAND_ICON.background.color, "#172554");
-  assert.equal(exporter.BRAND_ICON.bubble.color, "#FFFFFF");
+  assert.equal(exporter.BRAND_ICON.background.color, "#101B4E");
   assert.deepEqual(
-    exporter.BRAND_ICON.bars.map((bar) => [bar.height, bar.color]),
-    [[14, "#22D3EE"], [23, "#60A5FA"], [33, "#A78BFA"]]
+    exporter.BRAND_ICON.layers.filter((layer) => layer.role.startsWith("usage-")).map((layer) => [layer.width, layer.height, layer.color]),
+    [[11, 17, "#22D3EE"], [11, 29, "#60A5FA"], [11, 42, "#C48BFA"]]
+  );
+  assert.deepEqual(
+    exporter.BRAND_ICON.layers.filter((layer) => layer.kind === "triangle").map((layer) => layer.role),
+    ["counter-opening", "conversation-tail"]
   );
 });
 
@@ -1092,10 +1096,10 @@ test("exportArtifact image returns a PNG with selected content metadata", async 
   assert.ok(dimensions.width >= 640);
   assert.ok(dimensions.height > 180);
   assert.equal(pngHasDarkPixel(buffer), true);
-  assert.equal(pngContainsRgb(buffer, [23, 37, 84]), true, "PNG pixels should contain the navy icon body");
-  assert.equal(pngContainsRgb(buffer, [34, 211, 238]), true, "PNG pixels should contain the cyan counter bar");
-  assert.equal(pngContainsRgb(buffer, [96, 165, 250]), true, "PNG pixels should contain the blue counter bar");
-  assert.equal(pngContainsRgb(buffer, [167, 139, 250]), true, "PNG pixels should contain the violet counter bar");
+  assert.equal(pngContainsRgb(buffer, [16, 27, 78]), true, "PNG pixels should contain the navy icon body");
+  assert.equal(pngContainsRgb(buffer, [34, 211, 238]), true, "PNG pixels should contain the cyan usage signal");
+  assert.equal(pngContainsRgb(buffer, [96, 165, 250]), true, "PNG pixels should contain the blue usage signal");
+  assert.equal(pngContainsRgb(buffer, [196, 139, 250]), true, "PNG pixels should contain the violet usage signal");
   assert.match(text, /Escaping <check>/);
   assert.match(text, /Second conversation/);
   assert.match(text, /ChatGPT/);
@@ -1153,7 +1157,7 @@ test("PNG browser export draws Chinese text directly instead of Unicode codepoin
     const result = await exporter.createExport("image", chineseConversations);
     const buffer = await blobBuffer(result.blob);
     const metadataText = pngText(buffer);
-    const visualText = drawnText.join("\n");
+    const visualText = drawnText.join("");
 
     assert.match(result.filename, /\.png$/);
     assert.equal(result.blob.type, exporter.MIME.image);
@@ -1250,6 +1254,38 @@ test("browser canvas export renders Markdown links as readable labels and URLs",
     assert.match(visualText, /ChatGPT/);
     assert.match(visualText, /https:\/\/chatgpt\.com\//);
     assert.doesNotMatch(visualText, /\[ChatGPT\]\(/);
+  });
+});
+
+test("browser canvas readable rendering converts TeX only outside code and configuration text", async () => {
+  await withMockCanvasDocument(async (drawnText) => {
+    exporter.renderConversationsCanvas([{
+      id: "canvas-math",
+      title: "Canvas math",
+      messages: [{
+        id: "answer",
+        role: "assistant",
+        text: [
+          "\\[\\boxed{E = \\frac{mc^2}{\\alpha_1}} \\rightarrow \\text{energy}\\]",
+          "Ket \\(|\\psi\\rangle = \\ket{\\psi}\\).",
+          "Inline \\(x_{max} \\leq \\beta^2\\).",
+          "pattern=\\(literal group\\)",
+          "path=C:\\Users\\name\\config",
+          "```text",
+          "\\[\\boxed{code}\\]",
+          "```"
+        ].join("\n")
+      }]
+    }]);
+
+    const visualText = drawnText.join("");
+    assert.match(visualText, /【E = mc²\/α₁】 → energy/);
+    assert.match(visualText, /Ket \|ψ> = \|ψ>\./);
+    assert.match(visualText, /Inline xₘₐₓ ≤ β²\./);
+    assert.match(visualText, /pattern=\\\(literal group\\\)/);
+    assert.match(visualText, /C:\\Users\\name\\config/);
+    assert.match(visualText, /\\\[\\boxed\{code\}\\\]/);
+    assert.doesNotMatch(visualText, /\\boxed\{E|\\frac\{mc|\\rightarrow|\\text\{energy\}/);
   });
 });
 

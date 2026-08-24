@@ -318,7 +318,11 @@ test("flattened ChatGPT markdown is restored into readable export lines", () => 
 
   assert.match(JSON.parse(surfaces.JSON).conversations[0].messages[1].text, expectedTable);
   assert.match(surfaces.Markdown, expectedTable);
-  assert.match(surfaces.PDF, expectedTable);
+  assert.match(
+    surfaces.PDF,
+    /关键结论\n场景  \|  谁强  \|  大致差距  \|  判断\n多线程跑分 \/ 渲染 \/ 编译  \|  265K 强  \|  约 \+58%  \|  核心更多\n游戏  \|  9700X 略强或接近持平  \|  常见 0-10%  \|  功耗低\n最终答案/
+  );
+  assert.doesNotMatch(surfaces.PDF, /(?:^|\n)#{1,6}\s|\*\*|```/, "PDF should render Markdown instead of exposing syntax markers");
   assert.match(surfaces.DOCX, /## 关键结论[\s\S]*\| 场景 \| 谁强 \| 大致差距 \| 判断 \|[\s\S]*\| 游戏 \| \*\*9700X 略强或接近持平\*\* \| 常见 \*\*0-10%\*\* \| 功耗低 \|[\s\S]*## 最终答案/);
   assert.match(surfaces.PNG, expectedTable);
 
@@ -475,5 +479,65 @@ test("all public export formats preserve readable Chinese Unicode text", () => {
     assert.match(text, new RegExp(unicodePrompt), `${format} should keep the Chinese user message`);
     assert.match(text, new RegExp(unicodeAnswer), `${format} should keep the Chinese assistant message`);
     assert.doesNotMatch(text, /\uFFFD|\u9354|\u74a7|\u9286/, `${format} contains replacement or common mojibake characters`);
+  }
+});
+
+test("reading-oriented exports convert common ChatGPT TeX without changing source exports or code", async () => {
+  const texSource = [
+    "Display formula:",
+    "\\[",
+    "\\boxed{E = \\frac{mc^2}{\\alpha_1}} \\rightarrow \\text{energy} \\geq 0",
+    "\\]",
+    "Bra-ket \\(|\\psi\\rangle = \\ket{\\psi}\\), \\(\\langle\\phi| = \\bra{\\phi}\\), and \\(\\braket{\\phi|\\psi}\\).",
+    "Inline \\(x_{max} \\leq \\beta^2\\), dollar $y_1 + z^3$, and fallback \\(q_{long name}\\).",
+    "$$\\frac{a+b}{c-d}$$",
+    "Price stays $5 and $10; wrapped price stays $5$.",
+    "pattern=\\(literal group\\)",
+    "path=C:\\Users\\name\\config",
+    "    \\(\\w+\\)",
+    "Outside math stays \\text{literal}.",
+    "`\\boxed{inline_code}`",
+    "```js",
+    "const formula = \"\\\\[\\\\boxed{x}\\\\]\";",
+    "```"
+  ].join("\n");
+  const conversations = [{
+    id: "tex-readable",
+    title: "TeX readable export",
+    messages: [
+      { id: "tex-user", role: "user", text: "Render the formulas clearly." },
+      { id: "tex-assistant", role: "assistant", text: texSource }
+    ]
+  }];
+  const options = { title: "TeX Readable Export", exportedAt: "2026-08-24T12:00:00.000Z" };
+  const json = JSON.parse(exporter.exportJson(conversations, options));
+  const markdown = exporter.exportMarkdown(conversations, options);
+  const pdf = pdfText(Buffer.from(exporter.exportArtifact(conversations, "pdf", options).content));
+  const docx = parseStoredZip(Buffer.from(exporter.exportArtifact(conversations, "docx", options).content))["word/document.xml"].toString("utf8");
+  const renderedDocx = parseStoredZip(Buffer.from(await exporter.buildDocxRenderedBlob(conversations, options).arrayBuffer()))["word/document.xml"].toString("utf8");
+  const png = pngText(Buffer.from(exporter.exportArtifact(conversations, "png", options).content));
+  const html = exporter.exportHtml(conversations, options);
+  const svg = exporter.exportSvg(conversations, options);
+
+  assert.equal(json.conversations[0].messages[1].text, texSource);
+  assert.match(markdown, /\\\[\n\\boxed\{E = \\frac\{mc\^2\}\{\\alpha_1\}\} \\rightarrow \\text\{energy\} \\geq 0\n\\\]/);
+  assert.match(markdown, /Inline \\\(x_\{max\} \\leq \\beta\^2\\\), dollar \$y_1 \+ z\^3\$/);
+
+  const readableSurfaces = { PDF: pdf, DOCX: docx, "Rendered DOCX": renderedDocx, PNG: png, HTML: html, SVG: svg };
+  for (const [format, text] of Object.entries(readableSurfaces)) {
+    const visibleText = text.replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    assert.match(text, /【E = mc²\/α₁】 → energy ≥ 0/, `${format} should render boxed text, a fraction, scripts, Greek, an arrow, and a relation`);
+    assert.match(visibleText, /Bra-ket \|ψ> = \|ψ>, <φ\| = <φ\|, and <φ\|ψ>\./, `${format} should preserve visible bra-ket delimiters with fallback fonts`);
+    assert.match(text, /Inline xₘₐₓ ≤ β², dollar y₁ \+ z³/, `${format} should render inline delimiters and Unicode scripts`);
+    assert.match(text, /q_\(long[\s\S]{0,160}name\)\./, `${format} should keep an unmappable subscript readable after layout wrapping`);
+    assert.match(text, /\(a\+b\)\/\(c-d\)/, `${format} should preserve grouped fraction meaning`);
+    assert.match(text, /Price stays \$5 and \$10; wrapped price stays \$5\$\./, `${format} should not treat currency as inline math`);
+    assert.match(text, /pattern=\\\(literal group\\\)/, `${format} should keep a regex-style escaped group outside math`);
+    assert.match(text, /C:\\Users\\name\\config/, `${format} should keep backslash configuration text`);
+    assert.match(text, /\\\(\\w\+\\\)/, `${format} should keep indented code or configuration text`);
+    assert.match(text, /\\text\{literal\}/, `${format} should keep TeX-like commands outside math delimiters`);
+    assert.match(text, /\\boxed\{inline_code\}/, `${format} should keep inline code unchanged`);
+    assert.match(text, /const formula = [\s\S]*\\boxed\{x\}/, `${format} should keep fenced code unchanged`);
+    assert.doesNotMatch(text, /\\boxed\{E|\\frac\{mc|\\text\{energy\}|\\rightarrow|\\geq/, `${format} leaked source TeX from a rendered formula`);
   }
 });
