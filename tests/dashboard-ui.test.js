@@ -190,7 +190,7 @@ test("model conversations stay inside their request-response relation and are no
   assert.doesNotMatch(source, /\.usage-relation-conversation\{[^}]*box-shadow/);
 });
 
-test("usage view keeps exact and public model labels while omitting unresolved placeholders", () => {
+test("mapped usage view shows only the selected public model and omits internal or unresolved aliases", () => {
   const html = dashboard.renderActiveView(
     {
       language: "en",
@@ -206,10 +206,8 @@ test("usage view keeps exact and public model labels while omitting unresolved p
 
   assert.match(html, /gpt-5-thinking/);
   assert.match(html, /Clean/);
-  ["gpt-5-5-preview", "GPT-5.5", "GPT-5 5"].forEach((value) => {
-    assert.match(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), value);
-  });
-  ["Unknown model"].forEach((value) => {
+  ["gpt-5-5-preview", "GPT-5.5", "GPT-5 5", "Unknown model", "Dirty"].forEach((value) => {
     assert.doesNotMatch(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), value);
   });
+  assert.doesNotMatch(html, /usage-chart-legend|data-model-toggle=/);
 });

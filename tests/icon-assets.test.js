@@ -194,11 +194,12 @@ test("full brand icons keep exact dimensions, normal optical size, and all ident
   }
 });
 
-test("vector master carries the same monogram and statistics geometry", () => {
+test("vector master carries the same orbital counter geometry", () => {
   const svg = fs.readFileSync(path.join(root, "icons", "usage-counter-mark.svg"), "utf8");
   assert.match(svg, /#121214/);
   assert.match(svg, /#F7F4EC/);
   assert.match(svg, /#1818FF/);
-  assert.match(svg, /<circle[^>]+stroke="#F7F4EC"/);
+  assert.equal((svg.match(/<path[^>]+stroke="#F7F4EC"/g) || []).length, 3);
   assert.equal((svg.match(/fill="#1818FF"/g) || []).length, 3);
+  assert.doesNotMatch(svg, /<text|font-family|>B<|>C</);
 });

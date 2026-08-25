@@ -455,7 +455,8 @@ test("multi-select export makes one separate single-conversation file per conver
 test("Markdown export contains hierarchy, model parameters, and no internal field leakage", () => {
   const markdown = exporter.exportMarkdown(formatConversations, {
     title: "Format Verification Export",
-    exportedAt: "2026-05-30T13:00:00.000Z"
+    exportedAt: "2026-05-30T13:00:00.000Z",
+    language: "zh"
   });
 
   // 单对话:YAML frontmatter(Obsidian 属性)+ H1 对话标题 + 粗体说话人标签

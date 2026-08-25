@@ -31,10 +31,10 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function localDateKey(date = new Date()) {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
+function utcDateKey(date = new Date()) {
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${month}-${day}`;
 }
 
 class CdpPipe {
@@ -308,10 +308,12 @@ async function pollPopup(cdp, popupSessionId) {
       popupSessionId,
       `(() => ({
         headline: document.querySelector(".usage-topline")?.textContent || "",
-        models: document.querySelector(".usage-chart-legend")?.textContent || "",
+        models: Array.from(document.querySelectorAll(
+          ".usage-line-direct-label,.usage-donut-label,.usage-view-model-option,.usage-count-list"
+        )).map((node) => node.textContent || "").join(" "),
         chart: Boolean(document.querySelector(".usage-chart")),
-        modelTextVisible: Boolean(document.querySelector(".usage-model-text-list")),
-        sessionsVisible: Boolean(document.querySelector(".usage-sessions")),
+        countListVisible: Boolean(document.querySelector(".usage-count-list")),
+        externalLegendVisible: Boolean(document.querySelector(".usage-chart-legend")),
         startDate: document.querySelector(".usage-start-date")?.value || "",
         endDate: document.querySelector(".usage-end-date")?.value || "",
         tabs: Array.from(document.querySelectorAll("[data-view-tab]")).map((button) => ({
@@ -331,8 +333,8 @@ async function pollPopup(cdp, popupSessionId) {
       state.headline.includes("Model usage") &&
       state.models.includes("GPT-4o mini") &&
       state.chart &&
-      !state.modelTextVisible &&
-      !state.sessionsVisible &&
+      state.countListVisible &&
+      !state.externalLegendVisible &&
       state.tabs.some((tab) => tab.view === "chart" && tab.selected === "true") &&
       state.tabs.some((tab) => tab.view === "status") &&
       state.tabs.some((tab) => tab.view === "export") &&
@@ -385,11 +387,12 @@ async function readPopupViewState(cdp, popupSessionId, view) {
       activeView: document.querySelector(${JSON.stringify(`[data-view-tab="${view}"]`)})?.getAttribute("aria-selected") || "",
       chart: Boolean(document.querySelector(".usage-chart")),
       points: document.querySelectorAll(".usage-point").length,
-      modelTextList: document.querySelector(".usage-model-text-list")?.textContent || "",
-      eventTextList: document.querySelector(".usage-event-text-list")?.textContent || "",
+      directLabels: Array.from(document.querySelectorAll(
+        ".usage-line-direct-label,.usage-donut-label"
+      )).map((node) => node.textContent || "").join(" "),
+      externalLegendVisible: Boolean(document.querySelector(".usage-chart-legend")),
       countList: document.querySelector(".usage-count-list")?.textContent || "",
       recordSessions: document.querySelector(".usage-record-sessions")?.textContent || "",
-      sessions: document.querySelector(".usage-sessions")?.textContent || "",
       startDate: document.querySelector(".usage-start-date")?.value || "",
       endDate: document.querySelector(".usage-end-date")?.value || ""
     }))()`
@@ -702,6 +705,18 @@ async function main() {
       })()`
     );
 
+    const e2eDate = utcDateKey();
+    await evaluate(
+      cdp,
+      storageSessionId,
+      `new Promise((resolve) => chrome.runtime.sendMessage({
+        type:"settings.set",
+        settings:{
+          startDate:${JSON.stringify(e2eDate)},
+          endDate:${JSON.stringify(e2eDate)}
+        }
+      }, resolve))`
+    );
     const popupTarget = await cdp.send("Target.createTarget", {
       url: `chrome-extension://${extension.id}/src/popup.html`
     });
@@ -710,7 +725,8 @@ async function main() {
     await cdp.send("Page.enable", {}, popupSessionId);
     await wait(750);
     const popup = await pollPopup(cdp, popupSessionId);
-    const e2eDate = localDateKey();
+    assert.equal(popup.startDate, e2eDate);
+    assert.equal(popup.endDate, e2eDate);
     await evaluate(
       cdp,
       popupSessionId,
@@ -747,9 +763,8 @@ async function main() {
       `(() => {
         const textStatistics = document.querySelector('[data-statistics-section="text"]');
         if (!textStatistics) throw new Error("Missing text statistics visibility control");
-        if (!textStatistics.checked) {
-          textStatistics.checked = true;
-          textStatistics.dispatchEvent(new Event("change", { bubbles: true }));
+        if (textStatistics.getAttribute("aria-pressed") !== "true") {
+          textStatistics.click();
         }
         return true;
       })()`
@@ -758,12 +773,12 @@ async function main() {
     const chartPopup = await switchPopupView(cdp, reopenedPopupSessionId, "chart");
     assert.equal(chartPopup.activeView, "true");
     assert.equal(chartPopup.chart, true);
-    assert.equal(chartPopup.modelTextList, "");
+    assert.equal(chartPopup.externalLegendVisible, false);
+    assert.match(chartPopup.directLabels, /GPT-4o mini/);
     assert.match(chartPopup.countList, /GPT-4o mini/);
     assert.match(chartPopup.countList, /ChatGPT/);
     assert.doesNotMatch(chartPopup.countList, /关联对话|Conversations/);
     assert.doesNotMatch(chartPopup.countList, /Request model|请求型号/);
-    assert.equal(chartPopup.sessions, "");
     assert.ok(chartPopup.points > 0);
 
     await evaluate(

@@ -584,7 +584,7 @@
         generatedBy: {
           name: EXPORT_PROMO_NAME,
           url: EXPORT_PROMO_URL,
-          description: EXPORT_PROMO_DESC
+          description: exportPromoDescription(options)
         },
         formatVersion: 4,
         conversationCount: normalized.length,
@@ -609,12 +609,30 @@
   }
 
   // 导出按"聊天记录"而非字段表来排版:说话人显示名 + 左右分栏(用户靠右、助手靠左)。
-  function speakerName(role) {
+  function exportLanguage(options) {
+    return options && options.language === "zh" ? "zh" : "en";
+  }
+
+  function exportSummary(options, conversationCount, messageCount) {
+    return exportLanguage(options) === "zh"
+      ? "导出于 " + exportTimestamp(options) + " · " + conversationCount + " 段对话 · " + messageCount + " 条消息"
+      : "Exported " + exportTimestamp(options) + " · " + conversationCount + " conversations · " + messageCount + " messages";
+  }
+
+  function exportMessageCount(options, count) {
+    return String(count) + (exportLanguage(options) === "zh" ? " 条消息" : " messages");
+  }
+
+  function exportConversationCount(options, count) {
+    return String(count) + (exportLanguage(options) === "zh" ? " 段对话" : " conversations");
+  }
+
+  function speakerName(role, options) {
     var clean = normalizedRoleKey(role);
-    if (clean === "user") return "你";
+    if (clean === "user") return exportLanguage(options) === "zh" ? "你" : "You";
     if (clean === "assistant") return "ChatGPT";
-    if (clean === "system") return "系统";
-    if (clean === "tool") return "工具";
+    if (clean === "system") return exportLanguage(options) === "zh" ? "系统" : "System";
+    if (clean === "tool") return exportLanguage(options) === "zh" ? "工具" : "Tool";
     return roleLabel(role);
   }
 
@@ -623,25 +641,28 @@
   }
 
   // 一条消息只保留有信息量的附注:模型 + 功能(助手消息才有);ID / Role / 时间一律省略。
-  function messageFootnote(message) {
+  function messageFootnote(message, options) {
     if (!message || normalizedRoleKey(message.role) !== "assistant") {
       return "";
     }
     var responseModel = sanitizeExportModel(message.responseModel);
     var requestModel = sanitizeExportModel(message.requestModel);
+    var zh = exportLanguage(options) === "zh";
+    var unknown = zh ? "未知" : "Unknown";
     var parts = [
-      "请求型号：" + (requestModel || "未知"),
-      "实际回复型号：" + (responseModel || "未知"),
-      "思考强度：" + (message.reasoningEffort ? String(message.reasoningEffort) : "未知")
+      (zh ? "请求型号：" : "Request model: ") + (requestModel || unknown),
+      (zh ? "实际回复型号：" : "Actual response model: ") + (responseModel || unknown),
+      (zh ? "思考强度：" : "Reasoning effort: ") +
+        (message.reasoningEffort ? String(message.reasoningEffort) : unknown)
     ];
     if (message.selectedPublicModel) {
-      parts.push("公开选择：" + String(message.selectedPublicModel));
+      parts.push((zh ? "公开选择：" : "Public selection: ") + String(message.selectedPublicModel));
     }
     if (message.selectedPublicModeLabel || message.selectedPublicMode) {
-      parts.push("公开模式：" + String(message.selectedPublicModeLabel || message.selectedPublicMode));
+      parts.push((zh ? "公开模式：" : "Public mode: ") + String(message.selectedPublicModeLabel || message.selectedPublicMode));
     }
     if (hasFeatures(message.features)) {
-      parts.push("功能：" + featureDisplay(message.features));
+      parts.push((zh ? "功能：" : "Features: ") + featureDisplay(message.features));
     }
     return parts.join(" · ");
   }
@@ -1647,14 +1668,14 @@
     return s;
   }
 
-  function appendMarkdownDialogue(lines, conversation) {
+  function appendMarkdownDialogue(lines, conversation, options) {
     conversation.messages.forEach(function appendMessage(message) {
       // 说话人用粗体标签(不是标题,避免污染 Obsidian 大纲),正文紧跟其后。
-      lines.push("**" + speakerName(message.role) + "**", "");
+      lines.push("**" + speakerName(message.role, options) + "**", "");
       contentLines(message.text || message.content || "").forEach(function appendContentLine(line) {
         lines.push(line);
       });
-      var foot = messageFootnote(message);
+      var foot = messageFootnote(message, options);
       if (foot) {
         lines.push("", "*" + foot + "*");
       }
@@ -1687,22 +1708,24 @@
       lines.push("messages: " + c.messages.length);
       lines.push("---", "");
       lines.push("# " + title, "");
-      appendMarkdownDialogue(lines, c);
+      appendMarkdownDialogue(lines, c, options);
     } else {
       // 多对话同文件兜底。
       lines.push("# " + exportTitle(options), "");
-      lines.push("> 导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + messageCount + " 条消息", "");
+      lines.push("> " + (exportLanguage(options) === "zh"
+        ? "导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + messageCount + " 条消息"
+        : "Exported " + exportTimestamp(options) + " · " + list.length + " conversations · " + messageCount + " messages"), "");
       list.forEach(function conversationToMarkdown(conversation, conversationIndex) {
         if (conversationIndex > 0) { lines.push("", "---", ""); }
         lines.push("## " + conversation.title, "");
         if (conversation.url) { lines.push("<" + conversation.url + ">", ""); }
-        appendMarkdownDialogue(lines, conversation);
+        appendMarkdownDialogue(lines, conversation, options);
       });
     }
 
     // 推广页脚:简要介绍 + GitHub 链接(放在正文末尾)。
     lines.push("", "---", "");
-    lines.push("> **" + EXPORT_PROMO_NAME + "** — " + EXPORT_PROMO_DESC);
+    lines.push("> **" + EXPORT_PROMO_NAME + "** — " + exportPromoDescription(options));
     lines.push("> GitHub · <" + EXPORT_PROMO_URL + ">");
     return lines.join("\n").replace(/\n+$/, "") + "\n";
   }
@@ -1714,7 +1737,7 @@
     }, 0);
     var lines = [
       documentTitle(list, options),
-      "导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + messageCount + " 条消息",
+      exportSummary(options, list.length, messageCount),
       ""
     ];
 
@@ -1723,17 +1746,18 @@
         lines.push("", "————————————", "");
       }
       lines.push(conversation.title);
-      var sub = [conversationTimeText(conversation), conversation.messages.length + " 条消息"].filter(Boolean).join(" · ");
+      var sub = [conversationTimeText(conversation), exportMessageCount(options, conversation.messages.length)]
+        .filter(Boolean).join(" · ");
       if (sub) lines.push(sub);
       if (conversation.url) lines.push(conversation.url);
       lines.push("");
 
       conversation.messages.forEach(function messageToText(message) {
-        lines.push(speakerName(message.role) + ":");
+        lines.push(speakerName(message.role, options) + ":");
         contentLines(readableMessageText(message)).forEach(function appendLine(line) {
           lines.push(line || " ");
         });
-        var foot = messageFootnote(message);
+        var foot = messageFootnote(message, options);
         if (foot) lines.push("— " + foot);
         lines.push("");
       });
@@ -1752,10 +1776,10 @@
     var body = list.map(function conversationToHtml(conversation, conversationIndex) {
       var messages = conversation.messages.map(function messageToHtml(message) {
         var user = isUserMessage(message.role);
-        var foot = messageFootnote(message);
+        var foot = messageFootnote(message, options);
         return [
           '<div class="msg ' + (user ? "user" : "assistant") + '">',
-          '<div class="row"><span class="who">' + escapeHtml(speakerName(message.role)) + "</span></div>",
+          '<div class="row"><span class="who">' + escapeHtml(speakerName(message.role, options)) + "</span></div>",
           '<div class="bubble"><div class="content">' + escapeHtml(readableMessageText(message)) + "</div>",
           foot ? '<div class="foot">' + escapeHtml(foot) + "</div>" : "",
           "</div>",
@@ -1768,7 +1792,7 @@
         '<article class="conversation">',
         '<header class="conv-head">',
         "<h2>" + escapeHtml(conversation.title) + "</h2>",
-        '<p class="conv-sub">' + escapeHtml([conversationTime, conversation.messages.length + " 条消息"].filter(Boolean).join(" · ")) + "</p>",
+        '<p class="conv-sub">' + escapeHtml([conversationTime, exportMessageCount(options, conversation.messages.length)].filter(Boolean).join(" · ")) + "</p>",
         conversation.url ? '<p class="conv-sub"><a href="' + escapeHtml(conversation.url) + '">' + escapeHtml(conversation.url) + "</a></p>" : "",
         "</header>",
         '<div class="thread">' + messages + "</div>",
@@ -1777,11 +1801,11 @@
     }).join("");
 
     return [
-      "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" + escapeHtml(title) + "</title>",
+      "<!doctype html><html lang=\"" + exportLanguage(options) + "\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" + escapeHtml(title) + "</title>",
       "<style>:root{--ink:#0f172a;--muted:#64748b;--paper:#f7f8fa;--card:#fff;--user-bg:#1f6feb;--user-ink:#fff;--bot-bg:#eef1f5;--bot-ink:#0f172a;--rule:#e6e9ef;--accent:#1f4f9f}*{box-sizing:border-box}body{font:15px/1.7 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"Microsoft YaHei\",\"PingFang SC\",\"Noto Sans CJK SC\",sans-serif;color:var(--ink);background:var(--paper);margin:0;padding:28px 16px}.doc{max-width:760px;margin:0 auto}.doc-title{font-size:26px;line-height:1.2;margin:0 0 6px;font-weight:750}.doc-sub{color:var(--muted);margin:0 0 26px;font-size:13px}.conversation{background:var(--card);border:1px solid var(--rule);border-radius:16px;padding:18px 18px 8px;margin:0 0 22px;box-shadow:0 1px 2px rgba(15,23,42,.04)}.conv-head{padding:0 4px 8px;border-bottom:1px solid var(--rule);margin-bottom:12px}h2{font-size:18px;line-height:1.3;margin:0 0 4px;color:var(--accent);font-weight:720}.conv-sub{color:var(--muted);font-size:12px;margin:2px 0;overflow-wrap:anywhere}.conv-sub a{color:var(--muted)}.thread{display:flex;flex-direction:column;gap:14px;padding:4px 2px 12px}.msg{display:flex;flex-direction:column;max-width:82%}.msg.assistant{align-self:flex-start;align-items:flex-start}.msg.user{align-self:flex-end;align-items:flex-end}.row{padding:0 6px 3px}.who{font-size:12px;color:var(--muted);font-weight:600}.bubble{padding:10px 14px;border-radius:16px;overflow-wrap:anywhere}.assistant .bubble{background:var(--bot-bg);color:var(--bot-ink);border-bottom-left-radius:5px}.user .bubble{background:var(--user-bg);color:var(--user-ink);border-bottom-right-radius:5px}.content{white-space:pre-wrap;line-height:1.62}.foot{margin-top:7px;padding-top:6px;border-top:1px solid rgba(148,163,184,.28);font-size:11px;opacity:.75}@media print{body{background:#fff;padding:0}.conversation{break-inside:auto;border:none;box-shadow:none;border-radius:0}.msg{break-inside:avoid}}</style>",
       "</head><body><main class=\"doc\">",
       "<h1 class=\"doc-title\">" + escapeHtml(title) + "</h1>",
-      '<p class="doc-sub">' + escapeHtml([exportedAt, list.length + " 段对话", messageCount + " 条消息"].filter(Boolean).join(" · ")) + "</p>",
+      '<p class="doc-sub">' + escapeHtml([exportedAt, exportConversationCount(options, list.length), exportMessageCount(options, messageCount)].filter(Boolean).join(" · ")) + "</p>",
       body,
       "</main></body></html>"
     ].join("");
@@ -1892,7 +1916,7 @@
     els.push(svgText(margin, y + 22, documentTitle(list, options), { size: 26, weight: 700 }));
     y += 36;
     var msgCount = list.reduce(function countMessages(t, c) { return t + c.messages.length; }, 0);
-    els.push(svgText(margin, y + 12, "导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + msgCount + " 条消息", { size: 12.5, fill: "#64748b" }));
+    els.push(svgText(margin, y + 12, exportSummary(options, list.length, msgCount), { size: 12.5, fill: "#64748b" }));
     y += 30;
 
     list.forEach(function conversationToSvg(conv, ci) {
@@ -1903,7 +1927,7 @@
       }
       els.push(svgText(margin, y + 18, conv.title, { size: 18, weight: 700, fill: "#1f4f9f" }));
       y += 24;
-      var sub = [conversationTimeText(conv), conv.messages.length + " 条消息"].filter(Boolean).join(" · ");
+      var sub = [conversationTimeText(conv), exportMessageCount(options, conv.messages.length)].filter(Boolean).join(" · ");
       if (sub) {
         els.push(svgText(margin, y + 12, sub, { size: 12, fill: "#94a3b8" }));
         y += 20;
@@ -1919,11 +1943,11 @@
         if (!lines.length) { lines = [""]; }
         var maxLineUnits = lines.reduce(function widest(m, l) { return Math.max(m, svgTextUnits(l)); }, 0);
         var bubbleW = Math.min(bubbleMaxW, Math.max(64, Math.round(maxLineUnits * unitPx) + padX * 2));
-        var foot = messageFootnote(message);
+        var foot = messageFootnote(message, options);
         var bubbleH = padY * 2 + lines.length * lineH + (foot ? 18 : 0);
         var bx = user ? (width - margin - bubbleW) : margin;
 
-        els.push(svgText(user ? (width - margin) : margin, y + 11, speakerName(message.role), { size: 12, weight: 600, fill: "#64748b", anchor: user ? "end" : "start" }));
+        els.push(svgText(user ? (width - margin) : margin, y + 11, speakerName(message.role, options), { size: 12, weight: 600, fill: "#64748b", anchor: user ? "end" : "start" }));
         y += 17;
         els.push('<rect x="' + bx + '" y="' + y + '" width="' + bubbleW + '" height="' + bubbleH + '" rx="15" fill="' + (user ? "#1f6feb" : "#eef1f5") + '"/>');
         var tx = bx + padX;
@@ -1947,7 +1971,7 @@
     var brandTextX = margin + brandIconSize + 12;
     els.push(brandIconSvg(margin, y, brandIconSize));
     els.push(svgText(brandTextX, y + 13, EXPORT_PROMO_NAME, { size: 12.5, weight: 700, fill: "#1f4f9f" }));
-    els.push(svgText(brandTextX, y + 29, EXPORT_PROMO_DESC, { size: 10.5, fill: "#64748b" }));
+    els.push(svgText(brandTextX, y + 29, exportPromoDescription(options), { size: 10.5, fill: "#64748b" }));
     els.push(svgText(brandTextX, y + 45, "GitHub · " + EXPORT_PROMO_URL, { size: 10.5, fill: "#1f4f9f" }));
     y += 53;
 
@@ -2873,7 +2897,7 @@
     }, 0);
     // Word 面向「人阅读/可编辑的文档」:阅读式排版(说话人当小标题 + 段落正文),不是聊天气泡。
     paragraphs.push(paragraph(documentTitle(list, options), "Title"));
-    paragraphs.push(paragraph("导出于 " + exportTimestamp(options) + " · " + messageCount + " 条消息", "Meta"));
+    paragraphs.push(paragraph(exportSummary(options, list.length, messageCount), "Meta"));
 
     list.forEach(function appendConversation(conversation, conversationIndex) {
       if (conversationIndex > 0) {
@@ -2882,14 +2906,15 @@
       // 单对话时文档标题即对话标题,不再重复;多对话才加对话小标题。
       if (list.length > 1) {
         paragraphs.push(paragraph(conversation.title, "Heading1"));
-        var sub = [conversationTimeText(conversation), conversation.messages.length + " 条消息"].filter(Boolean).join(" · ");
+        var sub = [conversationTimeText(conversation), exportMessageCount(options, conversation.messages.length)]
+          .filter(Boolean).join(" · ");
         if (sub) paragraphs.push(paragraph(sub, "Meta"));
       }
 
       conversation.messages.forEach(function appendMessage(message) {
         var user = isUserMessage(message.role);
         var readableText = readableMessageText(message) || " ";
-        paragraphs.push(paragraph(speakerName(message.role), user ? "SpeakerUser" : "SpeakerBot"));
+        paragraphs.push(paragraph(speakerName(message.role, options), user ? "SpeakerUser" : "SpeakerBot"));
         // renderMarkdown 时按 Markdown 渲染成 Word 结构(标题/加粗/行内代码/代码块/列表/表格);
         // 否则保留原始文本分段(单测与机器可读路径走这条,保证结构化内容逐字保留)。
         if (renderMd) {
@@ -2901,7 +2926,7 @@
             paragraphs.push(paragraph(block || " ", "MsgBody"));
           });
         }
-        var foot = messageFootnote(message);
+        var foot = messageFootnote(message, options);
         if (foot) {
           paragraphs.push(paragraph(foot, "Footnote"));
         }
@@ -3203,7 +3228,7 @@
     context.fillText(EXPORT_PROMO_NAME, margin + 76, y + 22);
     context.fillStyle = "#64748b";
     context.font = "18px system-ui, Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif";
-    context.fillText(EXPORT_PROMO_DESC, margin + 76, y + 46);
+    context.fillText(exportPromoDescription(null), margin + 76, y + 46);
     context.fillStyle = "#1f4f9f";
     context.font = "17px system-ui, Microsoft YaHei, Noto Sans CJK SC, PingFang SC, sans-serif";
     context.fillText("GitHub · " + EXPORT_PROMO_URL, margin + 76, y + 68);
@@ -3283,7 +3308,16 @@
   }
 
   function pdfUtf16HexText(text) {
-    var value = String(text || "").replace(/\r/g, "");
+    // The built-in CID font used by the compact PDF writer is UCS-2. Feeding
+    // it UTF-16 surrogate pairs corrupts every following glyph. Preserve
+    // supplementary-plane characters as an explicit readable code-point
+    // token instead of silently dropping them or damaging adjacent CJK text.
+    var value = Array.from(String(text || "").replace(/\r/g, "")).map(function pdfSafeCharacter(character) {
+      var codePoint = character.codePointAt(0);
+      return codePoint > 0xffff
+        ? "[U+" + codePoint.toString(16).toUpperCase() + "]"
+        : character;
+    }).join("");
     var hex = "FEFF";
     for (var index = 0; index < value.length; index += 1) {
       hex += value.charCodeAt(index).toString(16).toUpperCase().padStart(4, "0");
@@ -3574,7 +3608,7 @@
     pushText(margin, y - 18, documentTitle(list, options), 20, INK, true);
     y -= 30;
     var msgCount = list.reduce(function countMessages(t, c) { return t + c.messages.length; }, 0);
-    pushText(margin, y - 11, "导出于 " + exportTimestamp(options) + " · " + msgCount + " 条消息", 9.5, MUTED);
+    pushText(margin, y - 11, exportSummary(options, list.length, msgCount), 9.5, MUTED);
     y -= 18;
     currentPage().push({ type: "line", x1: margin, x2: pageWidth - margin, y: y });
     y -= 20;
@@ -3586,7 +3620,7 @@
         ensureSpace(30);
         pushText(margin, y - 14, conv.title, 15, USER_COLOR, true);
         y -= 22;
-        var sub = [conversationTimeText(conv), conv.messages.length + " 条消息"].filter(Boolean).join(" · ");
+        var sub = [conversationTimeText(conv), exportMessageCount(options, conv.messages.length)].filter(Boolean).join(" · ");
         if (sub) { pushText(margin, y - 9, sub, 9, MUTED); y -= 16; }
         y -= 6;
       }
@@ -3598,11 +3632,11 @@
         var messageBlocks = pdfMarkdownBlocks(readableText);
         ensureSpace(lineH + 12 + firstBlockHeight(messageBlocks[0]));
         y -= 10;
-        pushText(margin, y - fontSize, speakerName(message.role), 11.5, user ? USER_COLOR : BOT_COLOR, true);
+        pushText(margin, y - fontSize, speakerName(message.role, options), 11.5, user ? USER_COLOR : BOT_COLOR, true);
         y -= lineH + 2;
         renderMarkdownBlocks(readableText);
         // 助手脚注(模型 / 功能)
-        var foot = messageFootnote(message);
+        var foot = messageFootnote(message, options);
         if (foot) {
           drawWrappedText(foot, margin, contentW, 8.5, 13, MUTED, false, 2);
         }
@@ -3615,7 +3649,7 @@
     y -= 17;
     pushText(margin, y, EXPORT_PROMO_NAME, 9.5, ACCENT, true);
     y -= 14;
-    drawWrappedText(EXPORT_PROMO_DESC, margin, contentW, 8.5, 12, MUTED, false, 0);
+    drawWrappedText(exportPromoDescription(options), margin, contentW, 8.5, 12, MUTED, false, 0);
     drawWrappedText(EXPORT_PROMO_URL, margin, contentW, 8.5, 12, ACCENT, false, 0);
 
     var filteredPages = pages.filter(function hasContent(page) { return page.length > 0; });
@@ -4018,8 +4052,13 @@
   // ============================================================================
   // 导出推广页脚:简要介绍 + 链接。Chrome 商店链接尚未过审,暂用 GitHub 宣传链接。
   var EXPORT_PROMO_NAME = "ChatGPT Model Usage Counter";
-  var EXPORT_PROMO_DESC = "按模型和日期统计 ChatGPT 用量,并把所选对话本地导出为 JSON / Markdown / PDF / Word / PNG。";
+  var EXPORT_PROMO_DESC_ZH = "按模型和日期统计 ChatGPT 用量，并把所选对话本地导出为 JSON / Markdown / PDF / Word / PNG。";
+  var EXPORT_PROMO_DESC_EN = "Count ChatGPT usage by model and date, then export selected conversations locally as JSON, Markdown, PDF, Word, or PNG.";
   var EXPORT_PROMO_URL = "https://github.com/Bsnblanc/chatgpt-model-usage-counter";
+
+  function exportPromoDescription(options) {
+    return exportLanguage(options) === "zh" ? EXPORT_PROMO_DESC_ZH : EXPORT_PROMO_DESC_EN;
+  }
 
   var CV_FONT = "'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Segoe UI',system-ui,sans-serif";
   var CV_MONO = "'Cascadia Code','Consolas','SFMono-Regular',Menlo,monospace";
@@ -4318,7 +4357,7 @@
     var title = documentTitle(list, options);
     var msgCount = list.reduce(function (t, c) { return t + c.messages.length; }, 0);
     addText(margin, title, 27, INK, { bold: true }); gap(36);
-    addText(margin, "导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + msgCount + " 条消息", 12.5, MUTED); gap(20);
+    addText(margin, exportSummary(options, list.length, msgCount), 12.5, MUTED); gap(20);
     rule(margin, width - margin); gap(18);
     list.forEach(function (conv, ci) {
       if (ci > 0) { gap(6); rule(margin, width - margin); gap(16); }
@@ -4327,9 +4366,9 @@
       }
       conv.messages.forEach(function (msg) {
         gap(6);
-        addText(margin, speakerName(msg.role), 13, isUserMessage(msg.role) ? USERC : ACCENT, { bold: true }); gap(20);
+        addText(margin, speakerName(msg.role, options), 13, isUserMessage(msg.role) ? USERC : ACCENT, { bold: true }); gap(20);
         drawBlocks(cvParseBlocks(readableMessageText(msg)), margin, contentW);
-        var foot = messageFootnote(msg);
+        var foot = messageFootnote(msg, options);
         if (foot) { addText(margin, foot, 11, MUTED, { italic: true }); gap(16); }
         gap(4);
       });
@@ -4343,7 +4382,7 @@
       ops.push({ kind: "brandIcon", x: margin, y: footerStart, w: 36, h: 36 });
     }
     addText(footerTextX, EXPORT_PROMO_NAME, 13, ACCENT, { bold: true }); gap(19);
-    drawSpans(cvParseInline(EXPORT_PROMO_DESC), footerTextX, width - margin - footerTextX, 11.5, MUTED, false); gap(3);
+    drawSpans(cvParseInline(exportPromoDescription(options)), footerTextX, width - margin - footerTextX, 11.5, MUTED, false); gap(3);
     addText(footerTextX, "GitHub · " + EXPORT_PROMO_URL, 11.5, ACCENT); gap(4);
     var footerEnd = Math.max(y, footerStart + (includeBrandIcon ? 40 : 0));
     y = footerEnd;

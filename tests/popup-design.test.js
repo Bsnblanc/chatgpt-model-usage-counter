@@ -54,7 +54,7 @@ test("statistics typography has a stable primary, secondary, and dimension hiera
   );
   assert.match(
     dashboard,
-    /\.usage-internal-response-value code,\.usage-internal-efforts-inline>span,\.usage-internal-efforts-inline b,\.usage-internal-subcount,\.usage-subcount\{font-size:12px;line-height:1\.4;font-weight:650\}/
+    /\.usage-internal-response-value code,\.usage-internal-effort-values>span,\.usage-internal-effort-values b,\.usage-internal-subcount,\.usage-subcount\{font-size:12px;line-height:1\.4;font-weight:650\}/
   );
   assert.match(
     dashboard,
@@ -69,9 +69,11 @@ test("statistics typography has a stable primary, secondary, and dimension hiera
   assert.match(dashboard, /\.usage-internal-request-head\{[^}]*padding:5px 0/);
   assert.match(dashboard, /\.usage-internal-response-section\{display:grid;gap:1px;padding:3px 0 8px 12px\}/);
   assert.match(dashboard, /\.usage-count-details\{display:grid;gap:5px;padding:0 0 8px 12px\}/);
-  assert.match(dashboard, /\.usage-internal-response\{[^}]*padding:3px 0 4px;[^}]*border:0;[^}]*border-top:1px solid[^}]*border-radius:0;[^}]*background:transparent/);
+  assert.match(dashboard, /\.usage-internal-response\{display:grid;gap:4px;padding:3px 0 4px;[^}]*border:0;[^}]*border-top:1px solid[^}]*border-radius:0;[^}]*background:transparent/);
   assert.doesNotMatch(dashboard, /\.usage-count-details\{[^}]*animation:/);
-  assert.match(dashboard, /\.usage-model-chip span,\.usage-model-chip b\{font-size:11px;line-height:1\.3;font-weight:650\}/);
+  assert.match(dashboard, /\.usage-view-model-option\{[^}]*font:650 11px\/1\.35 system-ui,sans-serif;[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap/);
+  assert.match(dashboard, /\.usage-view-model-option\.active\{[^}]*color:var\(--series\);[^}]*font-weight:750/);
+  assert.doesNotMatch(dashboard, /\.usage-view-model-option (?:i|span|b|small)\{/);
   assert.match(dashboard, /\.usage-chart-head small\{font-size:9px;line-height:1\.3;font-weight:650/);
   assert.match(dashboard, /\.usage-axis\{[^}]*font-size:9px;[^}]*font-weight:500/);
   assert.match(dashboard, /\.usage-axis-label\{font-size:9px;font-weight:650\}/);
@@ -80,7 +82,20 @@ test("statistics typography has a stable primary, secondary, and dimension hiera
   assert.match(dashboard, /\.usage-param-row b,\.usage-param-row span,\.usage-variant-row b,\.usage-variant-row span\{font-size:11px;line-height:1\.4;font-weight:650\}/);
   assert.match(dashboard, /\.usage-index-link\{[^}]*font-size:12px;[^}]*line-height:1\.4;[^}]*font-weight:650/);
   assert.match(dashboard, /\.usage-internal-response \.usage-index-link\{font-size:11px;line-height:1\.35;font-weight:600\}/);
-  assert.match(dashboard, /\.usage-internal-efforts-inline\{[^}]*display:inline-flex;[^}]*align-items:baseline;[^}]*flex-wrap:wrap/);
+  assert.match(
+    dashboard,
+    /\.usage-internal-response-value>\.usage-internal-response-copy\{[^}]*display:grid;[^}]*grid-template-rows:auto auto;[^}]*align-items:baseline/
+  );
+  assert.match(
+    dashboard,
+    /\.usage-internal-response-headings,\.usage-internal-response-data\{display:grid;grid-template-columns:minmax\(0,1fr\) minmax\(96px,1fr\);align-items:baseline;column-gap:10px;min-width:0\}/
+  );
+  assert.match(dashboard, /\.usage-internal-response-headings\{grid-row:1;white-space:nowrap\}/);
+  assert.match(dashboard, /\.usage-internal-response-data\{grid-row:2\}/);
+  assert.match(dashboard, /\.usage-internal-response-heading\{grid-column:1;[^}]*white-space:nowrap\}/);
+  assert.match(dashboard, /\.usage-internal-effort-heading\{grid-column:2\}/);
+  assert.match(dashboard, /\.usage-internal-response-data>code\{grid-column:1\}/);
+  assert.match(dashboard, /\.usage-internal-effort-values\{grid-column:2;display:inline-flex;[^}]*align-items:baseline;[^}]*flex-wrap:wrap/);
   assert.match(dashboard, /\.usage-relation-dimension\{[^}]*grid-template-columns:72px minmax\(0,1fr\);[^}]*align-items:baseline/);
   assert.match(dashboard, /\.usage-internal-response-summary\{[^}]*grid-template-columns:minmax\(0,1fr\)/);
   assert.match(dashboard, /\.usage-internal-response-model-row\{[^}]*display:block/);
@@ -88,8 +103,12 @@ test("statistics typography has a stable primary, secondary, and dimension hiera
   assert.match(dashboard, /class="usage-settings-popover"/);
   assert.match(dashboard, /renderSettingsCategory\(\s*state,\s*"sections"/);
   assert.doesNotMatch(dashboard, /usage-statistics-display-menu|usage-statistics-display-popover/);
-  assert.match(dashboard, /type="checkbox" data-statistics-section=/);
-  assert.doesNotMatch(dashboard, /<button[^>]*data-statistics-section=/);
+  assert.match(dashboard, /"data-statistics-section"/);
+  assert.match(dashboard, /return '<button type="button" class="usage-settings-option/);
+  assert.doesNotMatch(dashboard, /<input[^>]*data-statistics-section=/);
+  assert.match(dashboard, /return '<button type="button" class="usage-view-model-option/);
+  assert.doesNotMatch(dashboard, /<input[^>]*data-model-toggle=/);
+  assert.doesNotMatch(dashboard, /usage-chart-legend/);
   const fractionalStatisticsFonts = Array.from(
     dashboard.matchAll(
       /"(\.usage-(?:statistics-warning|empty|donut-legend-row small|count-features span,\.usage-count-features b|index-number|index-content small)\{[^"]*?font-size:(\d+\.\d+)px[^"]*?\})"/g
@@ -121,17 +140,28 @@ test("status panel stays flat and scoped to ChatGPT web components", () => {
 test("interactive elements expose visible focus, hover, and reduced-motion handling", () => {
   const dashboard = dashboardSource();
 
-  // 键盘焦点可见(无障碍 P1)
   assert.match(dashboard, /:focus-visible\{outline:2px solid/);
-  // 标签页 / 输入 / 模型 chip 的交互态
   assert.match(dashboard, /\.usage-view-tab:hover:not\(\.active\)/);
   assert.match(dashboard, /\.usage-date-controls input:focus/);
   assert.match(dashboard, /\.usage-date-controls input:invalid/);
-  assert.match(dashboard, /\.usage-settings-item:not\(\.is-closing\):hover>\.usage-settings-submenu,\.usage-settings-item:not\(\.is-closing\):focus-within>\.usage-settings-submenu/);
-  assert.match(dashboard, /\.usage-model-chip:hover/);
-  // 尊重系统减少动画偏好
+  assert.match(
+    dashboard,
+    /\.usage-settings-menu \.usage-settings-item\[open\]:not\(\.is-closing\)>\.usage-settings-submenu,\.usage-settings-menu:not\(\[data-interaction-mode=\\"click\\"\]\) \.usage-settings-item:not\(\.is-closing\):hover>\.usage-settings-submenu,\.usage-settings-menu:not\(\[data-interaction-mode=\\"click\\"\]\) \.usage-settings-item:not\(\.is-closing\):focus-within>\.usage-settings-submenu/
+  );
+  assert.match(
+    dashboard,
+    /\.usage-view-tab-item-chart\[data-model-menu-open=\\"true\\"\]>\.usage-view-model-menu/
+  );
+  assert.match(dashboard, /\.usage-view-model-menu\{[^}]*top:100%;[^}]*width:100%;/);
+  assert.match(dashboard, /\.usage-view-model-option:hover,\.usage-view-model-option:focus-visible/);
+  assert.match(dashboard, /\.usage-line-direct-label-hit\{fill:transparent;pointer-events:all\}/);
+  assert.match(dashboard, /data-view-preview="' \+ \(state\.viewPreviewActive \? "true" : "false"\)/);
+  assert.match(dashboard, /data-interaction-mode="' \+/);
+  assert.match(
+    dashboard,
+    /\.usage-settings-submenu\{[^}]*top:-5px;[^}]*right:calc\(100% - 1px\);[^}]*width:192px;[^}]*max-height:min\(320px,calc\(100vh - 96px\)\);[^}]*overflow:auto/
+  );
   assert.match(dashboard, /@media \(prefers-reduced-motion:reduce\)/);
-  // 导出面板按钮也有焦点环
   assert.match(dashboard, /\.usage-export-btn:focus-visible\{outline:2px solid/);
 });
 
@@ -157,14 +187,29 @@ test("chart trajectory and points use synchronized, position-stable animation", 
   assert.match(dashboard, /while \(occupied\[index\] && attempts < COLORS\.length\)/);
   assert.match(dashboard, /result\[key\] = COLORS\[index\]/);
   assert.match(dashboard, /result\[key\] = "hsl\(" \+ hue\.toFixed\(1\) \+ " 72% 48%\)"/);
-  assert.match(dashboard, /lineStyleByModel\[model\] = LINE_STYLES\[stableVisualIndex\("line:" \+ model, LINE_STYLES\.length\)\]/);
-  assert.match(dashboard, /series\.lineStyle = lineStyleByModel\[series\.model\] \|\| "none"/);
+  assert.match(dashboard, /var CHART_SIZE = \{ width: 360, height: 174 \}/);
+  assert.match(
+    dashboard,
+    /lineStyleByModel\[series\.model\] = LINE_STYLES\[\s*stableVisualIndex\(interactionType \+ ":" \+ series\.model, LINE_STYLES\.length\)\s*\]/
+  );
+  assert.match(dashboard, /series\.lineStyle = interactionType === "effort" && series\.model === "unknown"[\s\S]*\? "3 3"[\s\S]*: \(lineStyleByModel\[series\.model\] \|\| "none"\)/);
   assert.match(dashboard, /<g class="usage-series"[^>]*style="--usage-line-dash:/);
   assert.match(dashboard, /\.usage-line\{[^}]*stroke-dasharray:var\(--usage-line-dash,none\)/);
+  assert.match(dashboard, /class="usage-plot-background"/);
+  assert.match(dashboard, /\.usage-grid-horizontal\{stroke-opacity:\.72\}/);
+  assert.match(dashboard, /\.usage-grid-vertical\{stroke-opacity:\.34\}/);
   assert.match(dashboard, /class="usage-overlap-ring"[^>]*data-overlap-count=/);
   assert.match(dashboard, /\.usage-overlap-ring\{[^}]*stroke-dasharray:2 2/);
   assert.match(dashboard, /class="usage-line-focus usage-line-focus-halo"/);
   assert.match(dashboard, /class="usage-line-focus usage-line-focus-color"/);
+  assert.match(dashboard, /class="usage-line-direct-label"/);
+  assert.match(dashboard, /class="usage-donut-labels"/);
+  assert.match(dashboard, /class="usage-donut-label"/);
+  assert.match(dashboard, /\.usage-line-direct-label text\{font-size:9px;font-weight:750/);
+  assert.match(dashboard, /\.usage-donut-label span\{[^}]*font-size:12px;[^}]*font-weight:700/);
+  assert.match(dashboard, /\.usage-donut-label b\{font-size:17px;[^}]*font-weight:780/);
+  assert.match(dashboard, /\.usage-donut-label small\{[^}]*font-size:14px;[^}]*font-weight:700/);
+  assert.doesNotMatch(dashboard, /usage-chart-legend/);
 
   assert.match(dashboard, /<mask id="' \+ maskId[\s\S]*?<path class="usage-line-mask"/);
   assert.match(dashboard, /mask="url\(#' \+ maskId/);
@@ -178,6 +223,10 @@ test("chart trajectory and points use synchronized, position-stable animation", 
   assert.match(dashboard, /point\.style\.setProperty\("--usage-point-delay", \(progress \* 0\.56\)\.toFixed\(3\) \+ "s"\)/);
   assert.match(dashboard, /\.usage-line-mask\{[^}]*stroke-dasharray:1;[^}]*stroke-dashoffset:1;[^}]*animation:usage-line-reveal \.56s linear forwards\}/);
   assert.match(dashboard, /\.usage-point\{[^}]*animation:usage-point-in \.18s ease-out var\(--usage-point-delay,\.06s\)/);
+  assert.match(dashboard, /\.usage-donut-slice\{[^}]*animation:usage-donut-draw \.52s cubic-bezier\(\.22,\.72,\.25,1\)/);
+  assert.match(dashboard, /\.usage-view-panel\{[^}]*animation:usage-panel-in \.16s ease-out both\}/);
+  assert.match(dashboard, /\.usage-settings-popover\{[^}]*transition:opacity \.16s ease,transform \.16s ease,visibility 0s linear \.16s/);
+  assert.match(dashboard, /\.usage-settings-submenu\{[^}]*transition:opacity \.15s ease,transform \.15s ease,visibility 0s linear \.15s/);
   assert.doesNotMatch(dashboard, /\.usage-point\{[^}]*transform:/);
   assert.match(dashboard, /@keyframes usage-line-reveal\{to\{stroke-dashoffset:0\}\}/);
   assert.match(dashboard, /@keyframes usage-point-in\{from\{opacity:0\}to\{opacity:1\}\}/);

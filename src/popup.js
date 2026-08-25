@@ -1,15 +1,81 @@
 (function initPopupDashboard() {
   "use strict";
 
+  function isChatGPTTab(tab) {
+    if (!tab || typeof tab.url !== "string") {
+      return false;
+    }
+    try {
+      var url = new URL(tab.url);
+      return url.protocol === "https:" &&
+        (url.hostname === "chatgpt.com" || url.hostname === "chat.openai.com");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function ensureActiveTabCatalog() {
+    if (typeof chrome === "undefined" ||
+        !chrome.tabs ||
+        typeof chrome.tabs.query !== "function" ||
+        typeof chrome.tabs.sendMessage !== "function") {
+      return;
+    }
+
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, function handleActiveTabs(tabs) {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          return;
+        }
+        var tab = tabs && tabs[0];
+        if (!isChatGPTTab(tab) || typeof tab.id !== "number") {
+          return;
+        }
+        try {
+          chrome.tabs.sendMessage(tab.id, { type: "usage.catalog.ensure" }, function ignoreEnsureResult() {
+            // Reading lastError prevents an absent or outdated content script from surfacing
+            // an unchecked error. Catalog assurance is optional and never blocks the popup.
+            if (chrome.runtime && chrome.runtime.lastError) {
+              return;
+            }
+          });
+        } catch (error) {
+          // The popup remains usable when the active tab has no message receiver.
+        }
+      });
+    } catch (error) {
+      // Missing tab access or a closing browser window must not block popup startup.
+    }
+  }
+
+  var catalogEnsureStarted = false;
+  function ensureUsageCatalogOnce() {
+    if (catalogEnsureStarted) {
+      return;
+    }
+    catalogEnsureStarted = true;
+    ensureActiveTabCatalog();
+  }
+
   var root = document.getElementById("dashboard-root");
   if (!root || !window.ChatGPTUsageDashboard) {
     return;
   }
 
-  window.ChatGPTUsageDashboard.init(root, {
+  var dashboard = window.ChatGPTUsageDashboard.init(root, {
     surface: "popup",
     onLanguageChange: function syncPopupLanguage(language) {
       document.documentElement.lang = language === "en" ? "en" : "zh-CN";
-    }
+    },
+    onUsageViewActivate: ensureUsageCatalogOnce
   });
+  if (
+    dashboard &&
+    typeof dashboard.cancelPendingExportConversationList === "function" &&
+    typeof window.addEventListener === "function"
+  ) {
+    window.addEventListener("pagehide", function cancelUnneededConversationIndex() {
+      dashboard.cancelPendingExportConversationList();
+    });
+  }
 })();

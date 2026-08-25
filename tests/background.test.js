@@ -5,6 +5,8 @@ const test = require("node:test");
 const vm = require("node:vm");
 const background = require("../src/background");
 
+const TEST_CATALOG_ACCOUNT_KEY = "acct-aaaaaaaaaaaaaaaa";
+const TEST_CATALOG_CONTEXT_KEY = "ctx-1111111111111111";
 function runtimeModelCatalog() {
   return {
     observedAt: "2026-08-22T12:00:00.000Z",
@@ -89,10 +91,23 @@ function completeAccountPermit(tabId, permitId, status = 200, retryAfterMs = 0, 
   });
 }
 
-test("two ChatGPT tabs share one global request-start interval", async () => {
+function markAccountPermitStarted(tabId, permitId, url = "https://chatgpt.com/") {
+  return new Promise((resolve) => {
+    background._testAccountRequests.started(
+      { permitId },
+      { tab: { id: tabId, url }, url },
+      resolve
+    );
+  });
+}
+
+test("two ChatGPT tabs share one interval measured from the real request start", async () => {
   background._testAccountRequests.reset();
   const first = await acquireAccountPermit(101);
   assert.equal(first.granted, true);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const started = await markAccountPermitStarted(101, first.permitId);
+  assert.equal(started.started, true);
   const startedAt = Date.now();
   const secondPromise = acquireAccountPermit(202, "https://chat.openai.com/");
   await completeAccountPermit(101, first.permitId);
@@ -102,6 +117,25 @@ test("two ChatGPT tabs share one global request-start interval", async () => {
   assert.equal(second.granted, true);
   assert.ok(elapsed >= 900, `second tab started after only ${elapsed} ms`);
   await completeAccountPermit(202, second.permitId, 200, 0, "https://chat.openai.com/");
+  background._testAccountRequests.reset();
+});
+
+test("an unconfirmed real start keeps a full conservative gap after completion", async () => {
+  background._testAccountRequests.reset();
+  const first = await acquireAccountPermit(211);
+  assert.equal(first.granted, true);
+  const secondPromise = acquireAccountPermit(212);
+  const completedAt = Date.now();
+  await completeAccountPermit(211, first.permitId);
+  const second = await secondPromise;
+  const elapsed = Date.now() - completedAt;
+
+  assert.equal(second.granted, true);
+  assert.ok(
+    elapsed >= 900,
+    `unconfirmed-start fallback allowed the next tab after only ${elapsed} ms`
+  );
+  await completeAccountPermit(212, second.permitId);
   background._testAccountRequests.reset();
 });
 
@@ -176,6 +210,10 @@ test("statistics import rebuilds events from a strict whitelist and drops sensit
   rawEvent.prompt = "private prompt";
   rawEvent.response = "private response";
   rawEvent.runtimeModelCatalog = { accountId: "private-account" };
+  rawEvent.runtimeModelCatalogAccountKey = "acct-0123456789abcdef";
+  rawEvent.runtimeModelCatalogContextKey = "ctx-0123456789abcdef";
+  rawEvent.catalogAccountKey = "acct-fedcba9876543210";
+  rawEvent.catalogContextKey = "ctx-fedcba9876543210";
   rawEvent.unknownNestedState = { secret: "must-not-persist" };
   rawEvent.constructor = { prototype: { polluted: true } };
   rawEvent.prototype = { polluted: true };
@@ -206,6 +244,10 @@ test("statistics import rebuilds events from a strict whitelist and drops sensit
   assert.equal(event.prompt, undefined);
   assert.equal(event.response, undefined);
   assert.equal(event.runtimeModelCatalog, undefined);
+  assert.equal(event.runtimeModelCatalogAccountKey, undefined);
+  assert.equal(event.runtimeModelCatalogContextKey, undefined);
+  assert.equal(event.catalogAccountKey, undefined);
+  assert.equal(event.catalogContextKey, undefined);
   assert.equal(event.unknownNestedState, undefined);
   assert.equal(Object.prototype.hasOwnProperty.call(event, "__proto__"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(event, "prototype"), false);
@@ -213,7 +255,7 @@ test("statistics import rebuilds events from a strict whitelist and drops sensit
   assert.equal(Object.prototype.polluted, undefined);
   assert.doesNotMatch(
     serialized,
-    /must-not-persist|private prompt|private response|private-account|cache-secret|account-secret/
+    /must-not-persist|private prompt|private response|private-account|acct-|ctx-|cache-secret|account-secret/
   );
 });
 
@@ -237,6 +279,66 @@ test("computeBadgeCount shows only the selected date range, not the all-time tot
   assert.equal(background.computeBadgeCount(stats, { startDate: "2026-06-03", endDate: "2026-06-02" }), 38);
   // 空过滤器视为无过滤
   assert.equal(background.sanitizeBadgeFilter({ startDate: "", endDate: "", models: [] }), null);
+});
+
+test("filtered badge counts do not present partial analytics as complete history", () => {
+  const stats = background.createEmptyStats();
+  stats.totals = { "GPT-5.6 Sol": 8 };
+  stats.byDate = { "2026-06-02": { "GPT-5.6 Sol": 8 } };
+  stats.analyticsByDate = {
+    "2026-06-02": {
+      chat: {
+        "GPT-5.6 Sol": {
+          "gpt-5-6-thinking\u0001gpt-5-6-pro": {
+            requestModel: "gpt-5-6-thinking",
+            responseModel: "gpt-5-6-pro",
+            count: 3,
+            efforts: { high: 3 },
+            features: {},
+            sourceModes: { chat: 3 },
+            conversations: {},
+            firstSubmittedAt: "2026-06-02T00:00:00.000Z",
+            lastSubmittedAt: "2026-06-02T00:00:02.000Z"
+          }
+        }
+      }
+    }
+  };
+  stats.analyticsHistoryComplete = false;
+
+  assert.equal(
+    background.computeBadgeCount(stats, {
+      startDate: "2026-06-02",
+      endDate: "2026-06-02",
+      statisticsMode: "mapped",
+      sourceModeFilter: "all",
+      models: ["GPT-5.6 Sol"]
+    }),
+    8,
+    "the complete date/model aggregate remains usable"
+  );
+  assert.equal(
+    background.computeBadgeCount(stats, {
+      startDate: "2026-06-02",
+      endDate: "2026-06-02",
+      statisticsMode: "mapped",
+      sourceModeFilter: "chat",
+      models: ["GPT-5.6 Sol"]
+    }),
+    null,
+    "a partial source aggregate must not be displayed as the complete value"
+  );
+  assert.equal(
+    background.computeBadgeCount(stats, {
+      startDate: "2026-06-02",
+      endDate: "2026-06-02",
+      statisticsMode: "internal",
+      sourceModeFilter: "all",
+      models: ["gpt-5-6-thinking"]
+    }),
+    null,
+    "a partial internal-model aggregate must not be displayed as the complete value"
+  );
 });
 
 test("OpenAI status refresh forces a fresh fetch instead of serving a stale failed cache", () => {
@@ -303,6 +405,8 @@ test("GPT-5.6 Sol is the primary count while gpt-5-6-thinking remains an interna
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6-thinking", "reasoning.effort": "xhigh" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       source: "enter-key",
       submittedAt: now.toISOString(),
       pageUrl: "https://chatgpt.com/c/gpt56-sol",
@@ -394,6 +498,8 @@ test("Work keeps its explicit public model while preserving exact request, respo
         "reasoning.effort": "xhigh",
       },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       usageFeatures: ["file_upload"],
       sourceMode: "chat",
       source: "enter-key",
@@ -694,6 +800,8 @@ test("GPT-5.6 Pro effort counts under Sol while the internal pro slug remains a 
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6-pro" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       source: "enter-key",
       submittedAt: now.toISOString(),
       pageUrl: "https://chatgpt.com/c/gpt56-pro",
@@ -730,6 +838,8 @@ test("a missing selector snapshot is recovered from the exact request and live a
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6-pro" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       source: "enter-key",
       submittedAt: now.toISOString(),
       pageUrl: "https://chatgpt.com/c/inferred-selector",
@@ -747,6 +857,8 @@ test("a missing selector snapshot is recovered from the exact request and live a
 test("actual response slug overrides the requested route while preserving the request parameter", () => {
   const base = {
     runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
     modelObservedSource: "webRequest",
     source: "send-button",
     pageUrl: "https://chatgpt.com/c/response-first",
@@ -857,6 +969,8 @@ test("visible labels and answer text cannot override exact response metadata", (
       modelMode: "pro",
       modelParameters: { model: "gpt-5-6-mini" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       modelObservedSource: "webRequest",
       source: "send-button",
       pageUrl: "https://chatgpt.com/c/body-claim",
@@ -912,6 +1026,8 @@ test("Auto remains the selected request route while the actual response decides 
       apiModel: "auto",
       modelParameters: { model: "auto" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       modelObservedSource: "webRequest",
       source: "send-button",
       pageUrl: "https://chatgpt.com/c/auto-pending",
@@ -940,6 +1056,8 @@ test("Auto remains the selected request route while the actual response decides 
       apiModel: "auto",
       modelParameters: { model: "auto" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       modelObservedSource: "webRequest",
       source: "send-button",
       pageUrl: "https://chatgpt.com/c/auto-routed",
@@ -972,6 +1090,8 @@ test("an unknown new response slug is preserved exactly and never renamed by sta
       apiModel: "gpt-5-6-pro",
       modelParameters: { model: "gpt-5-6-pro" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       modelObservedSource: "webRequest",
       source: "send-button",
       pageUrl: "https://chatgpt.com/c/future-response",
@@ -1007,6 +1127,8 @@ test("late response reconciliation moves one existing count without incrementing
       modelParameters: { model: "gpt-5-6-mini", "reasoning.effort": "xhigh" },
       usageFeatures: ["web_search"],
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       modelObservedSource: "webRequest",
       source: "send-button",
       pageUrl: "https://chatgpt.com/c/late-response",
@@ -1026,6 +1148,8 @@ test("late response reconciliation moves one existing count without incrementing
       conversationId: "late-response",
       responseModel: "gpt-5-6-pro",
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       observedSource: "message-dom:model-slug",
       observedAt: "2026-08-22T15:05:20.000Z"
     },
@@ -1081,6 +1205,8 @@ test("a response-only event later accepts exact request evidence without increme
       modelIdentitySource: "response-model",
       modelObservedSource: "pending-webRequest",
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       source: "send-button",
       sourceMode: "chat",
       pageUrl: "https://chatgpt.com/c/response-only-conversation",
@@ -1109,6 +1235,8 @@ test("a response-only event later accepts exact request evidence without increme
       modelObservedSource: "webRequest",
       requestMessageId: "user-response-only",
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       usageFeatures: ["web_search"],
       source: "send-button",
       sourceMode: "chat",
@@ -1253,6 +1381,8 @@ test("research and agent request routes survive final-response migration and kee
         conversationId: `mode-conversation-${index}`,
         responseModel: "gpt-5-6-pro",
         runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
         observedSource: "message-dom:model-slug",
         observedAt: new Date(submittedAt.getTime() + 5000).toISOString()
       },
@@ -1356,6 +1486,8 @@ test("late response reconciliation updates the tracked event even when older eve
       apiModel: "gpt-5-6-mini",
       modelParameters: { model: "gpt-5-6-mini" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       modelObservedSource: "webRequest",
       pageUrl: "https://chatgpt.com/c/partial-history",
       submittedAt,
@@ -1394,6 +1526,8 @@ test("late response reconciliation updates the tracked event even when older eve
       submissionId: "partial-late-response",
       responseModel: "gpt-5-6-thinking",
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       observedSource: "message-dom:model-slug",
       observedAt: "2026-08-22T15:06:30.000Z"
     },
@@ -1413,7 +1547,7 @@ test("late response reconciliation updates the tracked event even when older eve
   assert.equal(reconciled.sessionsByModel["GPT-5.6 Sol"]["partial-history"].count, 1);
 });
 
-test("account model catalog remaps existing GPT-5.6 internal counts without losing aggregates", () => {
+test("an account catalog does not guess mappings for unbound legacy aggregates", () => {
   const existing = background.createEmptyStats();
   existing.totals["gpt-5-6-thinking"] = 2;
   existing.totals["gpt-5-6"] = 3;
@@ -1439,11 +1573,255 @@ test("account model catalog remaps existing GPT-5.6 internal counts without losi
 
   const remapped = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
 
-  assert.deepEqual(remapped.totals, { "GPT-5.6 Sol": 5 });
-  assert.deepEqual(remapped.byDate["2026-08-22"], { "GPT-5.6 Sol": 5 });
-  assert.equal(remapped.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 2);
-  assert.equal(remapped.models["GPT-5.6 Sol"].requestModel, "gpt-5-6-thinking");
+  assert.deepEqual(remapped.totals, {
+    "gpt-5-6": 3,
+    "gpt-5-6-thinking": 2
+  });
+  assert.deepEqual(remapped.byDate["2026-08-22"], {
+    "gpt-5-6": 3,
+    "gpt-5-6-thinking": 2
+  });
+  assert.equal(remapped.variantsByModel["gpt-5-6-thinking"].variants["gpt-5-6-thinking"].count, 2);
   assert.equal(remapped.runtimeModelCatalog, undefined, "the account catalog is session-only, not persisted with usage stats");
+});
+
+test("session model catalogs are returned only to the matching ephemeral account binding", () => {
+  const catalog = runtimeModelCatalog();
+  const stored = {
+    accountKey: "acct-aaaaaaaaaaaaaaaa",
+    catalog
+  };
+
+  assert.ok(background.catalogForAccountKey(stored, "acct-aaaaaaaaaaaaaaaa"));
+  assert.equal(
+    background.catalogForAccountKey(stored, "acct-bbbbbbbbbbbbbbbb"),
+    null
+  );
+  assert.equal(
+    background.catalogForAccountKey(catalog, "acct-aaaaaaaaaaaaaaaa"),
+    null,
+    "a legacy unbound catalog must not be reused for a signed-in account"
+  );
+});
+
+test("a new event never falls back to another account's active catalog", () => {
+  background.applyRuntimeModelCatalog(
+    background.createEmptyStats(),
+    runtimeModelCatalog(),
+    TEST_CATALOG_ACCOUNT_KEY,
+    TEST_CATALOG_CONTEXT_KEY
+  );
+  const next = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "account-b-unbound-event",
+      model: "gpt-5-6-pro",
+      requestModel: "gpt-5-6-pro",
+      responseModel: "gpt-5-6-pro",
+      responseObservedAt: "2026-08-24T12:00:10.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      modelIdentitySource: "response-model",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-pro" },
+      runtimeModelCatalog: null,
+      sourceMode: "chat",
+      submittedAt: "2026-08-24T12:00:00.000Z"
+    },
+    new Date("2026-08-24T12:00:00.000Z")
+  );
+
+  assert.deepEqual(next.totals, { "gpt-5-6-pro": 1 });
+  assert.equal(next.events[0].modelMappingStatus, "unmapped");
+  assert.equal(next.events[0].responseModel, "gpt-5-6-pro");
+});
+
+test("publishing account B catalog preserves account A history and maps only B-bound events", () => {
+  function catalogNamed(name) {
+    const catalog = runtimeModelCatalog();
+    catalog.versions[0].display_text_for_intelligence = name;
+    catalog.versions[0].short_display_text_for_intelligence = name;
+    return catalog;
+  }
+
+  const accountA = "acct-aaaaaaaaaaaaaaaa";
+  const accountB = "acct-bbbbbbbbbbbbbbbb";
+  const contextA = "ctx-aaaaaaaaaaaaaaaa";
+  const contextB = "ctx-bbbbbbbbbbbbbbbb";
+  const catalogA = catalogNamed("Account A Sol");
+  const catalogB = catalogNamed("Account B Sol");
+  const submittedAt = "2026-08-24T13:00:00.000Z";
+
+  const mappedA = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "account-a-mapped-event",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      responseObservedAt: submittedAt,
+      responseObservedSource: "message-dom:model-slug",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      runtimeModelCatalog: catalogA,
+      runtimeModelCatalogAccountKey: accountA,
+      runtimeModelCatalogContextKey: contextA,
+      submittedAt
+    },
+    new Date(submittedAt)
+  );
+  assert.deepEqual(mappedA.totals, { "Account A Sol": 1 });
+
+  const afterCatalogB = background.applyRuntimeModelCatalog(
+    mappedA,
+    catalogB,
+    accountB,
+    contextB
+  );
+  assert.deepEqual(
+    afterCatalogB.totals,
+    { "Account A Sol": 1 },
+    "another account's directory must not reclassify catalog-proven history"
+  );
+  assert.equal(afterCatalogB.events[0].catalogAccountKey, accountA);
+
+  const pendingB = background.applyIncrement(
+    afterCatalogB,
+    {
+      submissionId: "account-b-unmapped-event",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      responseObservedAt: "2026-08-24T13:01:00.000Z",
+      responseObservedSource: "message-dom:model-slug",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      runtimeModelCatalog: null,
+      runtimeModelCatalogAccountKey: accountB,
+      runtimeModelCatalogContextKey: contextB,
+      submittedAt: "2026-08-24T13:01:00.000Z"
+    },
+    new Date("2026-08-24T13:01:00.000Z")
+  );
+  assert.deepEqual(pendingB.totals, {
+    "Account A Sol": 1,
+    "gpt-5-6-thinking": 1
+  });
+
+  const mappedB = background.applyRuntimeModelCatalog(
+    pendingB,
+    catalogB,
+    accountB,
+    contextB
+  );
+  assert.deepEqual(mappedB.totals, {
+    "Account A Sol": 1,
+    "Account B Sol": 1
+  });
+  assert.equal(
+    mappedB.events.find((event) => event.submissionId === "account-a-mapped-event").model,
+    "Account A Sol"
+  );
+  assert.equal(
+    mappedB.events.find((event) => event.submissionId === "account-b-unmapped-event").model,
+    "Account B Sol"
+  );
+});
+
+test("a late account A response never uses account B's currently active catalog", () => {
+  function catalogNamed(name) {
+    const catalog = runtimeModelCatalog();
+    catalog.versions[0].display_text_for_intelligence = name;
+    catalog.versions[0].short_display_text_for_intelligence = name;
+    return catalog;
+  }
+
+  const accountA = "acct-aaaaaaaaaaaaaaaa";
+  const accountB = "acct-bbbbbbbbbbbbbbbb";
+  const contextA = "ctx-aaaaaaaaaaaaaaaa";
+  const contextB = "ctx-bbbbbbbbbbbbbbbb";
+  const catalogA = catalogNamed("Account A Sol");
+  const catalogB = catalogNamed("Account B Sol");
+  const submittedAt = "2026-08-24T13:05:00.000Z";
+
+  const pendingA = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "account-a-late-response",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      runtimeModelCatalog: catalogA,
+      runtimeModelCatalogAccountKey: accountA,
+      runtimeModelCatalogContextKey: contextA,
+      sourceMode: "chat",
+      pageUrl: "https://chatgpt.com/c/account-a-late-response",
+      submittedAt
+    },
+    new Date(submittedAt)
+  );
+  assert.deepEqual(pendingA.totals, { "Account A Sol": 1 });
+
+  const accountBActive = background.applyRuntimeModelCatalog(
+    pendingA,
+    catalogB,
+    accountB,
+    contextB
+  );
+  assert.deepEqual(accountBActive.totals, { "Account A Sol": 1 });
+
+  const resolvedA = background.applyResponseObservation(
+    accountBActive,
+    {
+      submissionId: "account-a-late-response",
+      conversationId: "account-a-late-response",
+      responseModel: "gpt-5-6-thinking",
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-08-24T13:05:20.000Z"
+    },
+    new Date("2026-08-24T13:05:20.000Z")
+  );
+
+  assert.equal(background.totalCount(resolvedA), 1);
+  assert.deepEqual(resolvedA.totals, { "Account A Sol": 1 });
+  assert.equal(resolvedA.totals["Account B Sol"], undefined);
+  assert.equal(resolvedA.events[0].responseModel, "gpt-5-6-thinking");
+  assert.equal(resolvedA.events[0].modelMappingStatus, "mapped");
+  assert.equal(resolvedA.events[0].catalogAccountKey, accountA);
+  assert.equal(resolvedA.events[0].catalogContextKey, contextA);
+});
+
+test("statistics backups exclude local catalog bindings while preserving proven public mappings", () => {
+  const submittedAt = "2026-08-24T13:10:00.000Z";
+  const stats = background.applyIncrement(
+    background.createEmptyStats(),
+    {
+      submissionId: "catalog-backup-event",
+      requestModel: "gpt-5-6-thinking",
+      responseModel: "gpt-5-6-thinking",
+      responseObservedAt: submittedAt,
+      responseObservedSource: "message-dom:model-slug",
+      modelObservedSource: "webRequest",
+      modelParameters: { model: "gpt-5-6-thinking" },
+      runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
+      submittedAt
+    },
+    new Date(submittedAt)
+  );
+  assert.match(JSON.stringify(stats), /catalogAccountKey/);
+
+  const backup = background.createStatisticsBackup(stats, {
+    exportedAt: "2026-08-24T13:11:00.000Z",
+    extensionVersion: "1.5.0"
+  });
+  const serialized = JSON.stringify(backup);
+  assert.doesNotMatch(serialized, /catalogAccountKey|catalogContextKey|runtimeModelCatalogAccountKey|runtimeModelCatalogContextKey|acct-|ctx-/);
+
+  const restored = background.sanitizeStatisticsBackup(backup).statistics;
+  assert.deepEqual(restored.totals, { "GPT-5.6 Sol": 1 });
+  assert.equal(restored.events[0].catalogAccountKey, undefined);
+  assert.equal(restored.events[0].catalogContextKey, undefined);
+  assert.match(restored.events[0].publicModelSource, /account-catalog/);
 });
 
 test("complete event history corrects both paid Instant and Pro routes to Sol", () => {
@@ -1506,8 +1884,16 @@ test("complete event history corrects both paid Instant and Pro routes to Sol", 
       usageFeatures: []
     }
   ];
+  existing.events.forEach((event) => {
+    event.catalogContextKey = TEST_CATALOG_CONTEXT_KEY;
+  });
 
-  const remapped = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+  const remapped = background.applyRuntimeModelCatalog(
+    existing,
+    runtimeModelCatalog(),
+    TEST_CATALOG_ACCOUNT_KEY,
+    TEST_CATALOG_CONTEXT_KEY
+  );
 
   assert.deepEqual(remapped.totals, { "GPT-5.6 Sol": 2 });
   assert.deepEqual(remapped.byDate["2026-08-22"], { "GPT-5.6 Sol": 2 });
@@ -1594,8 +1980,16 @@ test("publishing the live catalog rebuilds stale variant and request-parameter d
       usageFeatures: []
     }
   ];
+  existing.events.forEach((event) => {
+    event.catalogContextKey = TEST_CATALOG_CONTEXT_KEY;
+  });
 
-  const rebuilt = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+  const rebuilt = background.applyRuntimeModelCatalog(
+    existing,
+    runtimeModelCatalog(),
+    TEST_CATALOG_ACCOUNT_KEY,
+    TEST_CATALOG_CONTEXT_KEY
+  );
 
   assert.deepEqual(rebuilt.totals, { "GPT-5.6 Sol": 2 });
   assert.equal(rebuilt.variantsByModel["GPT-5.6 Sol"].variants["gpt-5-6-thinking"].count, 1);
@@ -1625,6 +2019,8 @@ test("catalog rebuild drops unmatched small legacy aggregates and keeps auditabl
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6-pro" },
       runtimeModelCatalog: catalog,
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       submittedAt: submittedAt.toISOString(),
       pageUrl: "https://chatgpt.com/c/auditable-small-history",
       pageTitle: "Auditable small history",
@@ -1645,7 +2041,11 @@ test("catalog rebuild drops unmatched small legacy aggregates and keeps auditabl
 
   const rebuilt = background.applyIncrement(
     existing,
-    { runtimeModelCatalog: catalog },
+    {
+      runtimeModelCatalog: catalog,
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY
+    },
     submittedAt
   );
 
@@ -1707,13 +2107,18 @@ test("catalog rebuild removes legacy pending events whose request model came onl
     }
   ];
 
-  const rebuilt = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+  const rebuilt = background.applyRuntimeModelCatalog(
+    existing,
+    runtimeModelCatalog(),
+    TEST_CATALOG_ACCOUNT_KEY,
+    TEST_CATALOG_CONTEXT_KEY
+  );
 
-  assert.deepEqual(rebuilt.totals, { "GPT-5.6 Sol": 1 });
+  assert.deepEqual(rebuilt.totals, { "gpt-5-6-thinking": 1 });
   assert.equal(rebuilt.events.length, 1);
   assert.equal(rebuilt.events[0].submissionId, "auditable-request-response");
   assert.equal(
-    rebuilt.relationsByModel["GPT-5.6 Sol"]["gpt-5-6-thinking\u0001gpt-5-6-thinking"].count,
+    rebuilt.relationsByModel["gpt-5-6-thinking"]["gpt-5-6-thinking\u0001gpt-5-6-thinking"].count,
     1
   );
 });
@@ -1750,16 +2155,21 @@ test("catalog rebuild preserves an exact legacy response while marking an unprov
     }
   ];
 
-  const rebuilt = background.applyRuntimeModelCatalog(existing, runtimeModelCatalog());
+  const rebuilt = background.applyRuntimeModelCatalog(
+    existing,
+    runtimeModelCatalog(),
+    TEST_CATALOG_ACCOUNT_KEY,
+    TEST_CATALOG_CONTEXT_KEY
+  );
 
-  assert.deepEqual(rebuilt.totals, { "GPT-5.6 Sol": 1 });
+  assert.deepEqual(rebuilt.totals, { "gpt-5-6-thinking": 1 });
   assert.equal(rebuilt.events.length, 1);
   assert.equal(rebuilt.events[0].requestModel, "");
   assert.equal(rebuilt.events[0].requestModelEvidence, "unavailable");
   assert.equal(rebuilt.events[0].responseModel, "gpt-5-6-thinking");
   assert.equal(rebuilt.events[0].modelParameters.model, undefined);
   assert.equal(rebuilt.events[0].modelParameters["reasoning.effort"], "high");
-  const relation = rebuilt.relationsByModel["GPT-5.6 Sol"]["\u0001gpt-5-6-thinking"];
+  const relation = rebuilt.relationsByModel["gpt-5-6-thinking"]["\u0001gpt-5-6-thinking"];
   assert.equal(relation.requestModel, "");
   assert.equal(relation.responseModel, "gpt-5-6-thinking");
   assert.equal(relation.count, 1);
@@ -1847,6 +2257,8 @@ test("cloning a public-model aggregate preserves every exact request model inste
       modelObservedSource: "webRequest",
       modelParameters: { model: "gpt-5-6" },
       runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
       submittedAt: "2026-08-22T16:02:00.000Z",
       promptHash: "instant-new",
       promptLength: 7
@@ -4571,19 +4983,48 @@ test("applyIncrement stores daily counts using submittedAt date", () => {
   assert.equal(next.byDate["2026-05-24"], undefined);
 });
 
-test("applyIncrement limits stored event history", () => {
+test("an archived event beyond the 500-item detail limit keeps reversible idempotent late-response contributions", () => {
   let stats = background.createEmptyStats();
   const now = new Date("2026-05-23T12:00:00.000Z");
 
-  for (let index = 0; index < 510; index += 1) {
+  stats = background.applyIncrement(
+    stats,
+    {
+      submissionId: "archived-late-response",
+      model: "GPT-5.6 Luna",
+      publicModel: "GPT-5.6 Luna",
+      selectedPublicModel: "GPT-5.6 Luna",
+      requestModel: "gpt-5-6-mini",
+      apiModel: "gpt-5-6-mini",
+      modelObservedSource: "webRequest",
+      modelParameters: {
+        model: "gpt-5-6-mini",
+        "reasoning.effort": "low"
+      },
+      usageFeatures: ["web_search"],
+      runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
+      sourceMode: "chat",
+      source: "enter-key",
+      submittedAt: now.toISOString(),
+      pageUrl: "https://chatgpt.com/c/archived-late-response",
+      pageTitle: "Archived late response"
+    },
+    now
+  );
+
+  for (let index = 0; index < 500; index += 1) {
     stats = background.applyIncrement(
       stats,
       {
+        submissionId: `retained-event-${index}`,
         model: "GPT-4o",
         modelObservedSource: "fetch-request",
         modelParameters: { model: "gpt-4o" },
+        sourceMode: "work",
         source: "enter-key",
-        submittedAt: new Date(now.getTime() + index).toISOString(),
+        submittedAt: new Date(now.getTime() + index + 1).toISOString(),
         promptHash: String(index),
         promptLength: index
       },
@@ -4591,10 +5032,112 @@ test("applyIncrement limits stored event history", () => {
     );
   }
 
-  assert.equal(stats.totals["gpt-4o"], 510);
+  assert.equal(background.totalCount(stats), 501);
+  assert.equal(stats.totals["gpt-4o"], 500);
+  assert.equal(stats.totals["GPT-5.6 Luna"], 1);
   assert.equal(stats.events.length, 500);
+  assert.equal(stats.events.some((event) => event.submissionId === "archived-late-response"), false);
+  assert.equal(Object.keys(stats.responseMigrationIndex).length, 1);
+  assert.equal(stats.responseMigrationIndexComplete, true);
+  assert.equal(stats.analyticsHistoryComplete, true);
   assert.equal(stats.events[0].promptHash, undefined);
   assert.equal(stats.events[0].promptLength, undefined);
+
+  const reconciled = background.applyResponseObservation(
+    stats,
+    {
+      submissionId: "archived-late-response",
+      responseModel: "gpt-5-6-pro",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-05-23T12:05:00.000Z"
+    },
+    new Date("2026-05-23T12:05:00.000Z")
+  );
+
+  assert.equal(background.totalCount(reconciled), 501);
+  assert.equal(reconciled.totals["GPT-5.6 Luna"], undefined);
+  assert.equal(reconciled.totals["GPT-5.6 Sol"], 1);
+  assert.equal(reconciled.totals["gpt-4o"], 500);
+  assert.equal(reconciled.events.length, 500);
+  assert.equal(
+    reconciled.responseMigrationIndex["submission:archived-late-response"],
+    undefined,
+    "the long-term index retains only response-pending events"
+  );
+  assert.equal(
+    Object.values(reconciled.relationsByModel["GPT-5.6 Sol"])[0].count,
+    1
+  );
+  assert.equal(
+    Object.values(reconciled.relationsByModel["GPT-5.6 Sol"])[0].requestModel,
+    "gpt-5-6-mini"
+  );
+  assert.equal(
+    Object.values(reconciled.relationsByModel["GPT-5.6 Sol"])[0].responseModel,
+    "gpt-5-6-pro"
+  );
+  assert.equal(
+    background.computeBadgeCount(reconciled, {
+      startDate: "2026-05-23",
+      endDate: "2026-05-23",
+      statisticsMode: "mapped",
+      sourceModeFilter: "chat",
+      models: ["GPT-5.6 Sol"]
+    }),
+    1
+  );
+  assert.equal(
+    background.computeBadgeCount(reconciled, {
+      startDate: "2026-05-23",
+      endDate: "2026-05-23",
+      statisticsMode: "internal",
+      sourceModeFilter: "chat",
+      models: ["gpt-5-6-mini"]
+    }),
+    1
+  );
+
+  const repeated = background.applyResponseObservation(
+    reconciled,
+    {
+      submissionId: "archived-late-response",
+      responseModel: "gpt-5-6-pro",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-05-23T12:05:01.000Z"
+    },
+    new Date("2026-05-23T12:05:01.000Z")
+  );
+  assert.deepEqual(repeated.totals, reconciled.totals);
+  assert.deepEqual(repeated.analyticsByDate, reconciled.analyticsByDate);
+  assert.deepEqual(repeated.relationsByModel, reconciled.relationsByModel);
+
+  const laterConflictingObservation = background.applyResponseObservation(
+    repeated,
+    {
+      submissionId: "archived-late-response",
+      responseModel: "gpt-5-6-mini",
+      runtimeModelCatalog: runtimeModelCatalog(),
+      runtimeModelCatalogAccountKey: TEST_CATALOG_ACCOUNT_KEY,
+      runtimeModelCatalogContextKey: TEST_CATALOG_CONTEXT_KEY,
+      observedSource: "message-dom:model-slug",
+      observedAt: "2026-05-23T12:05:02.000Z"
+    },
+    new Date("2026-05-23T12:05:02.000Z")
+  );
+  assert.equal(background.totalCount(laterConflictingObservation), 501);
+  assert.deepEqual(laterConflictingObservation.totals, reconciled.totals);
+  assert.deepEqual(
+    laterConflictingObservation.analyticsByDate,
+    reconciled.analyticsByDate
+  );
+  assert.equal(laterConflictingObservation.responseMigrationIndexComplete, true);
+  assert.equal(laterConflictingObservation.analyticsHistoryComplete, true);
 });
 
 test("badgeText keeps action badge compact", () => {
@@ -4608,12 +5151,77 @@ test("badgeText keeps action badge compact", () => {
   assert.equal(background.actionIconPaths(true)[16], "/icons/action16.png");
   assert.equal(background.actionIconPaths(true)[24], "/icons/action24.png");
   assert.equal(background.actionIconPaths("1")[16], "/icons/action1-16.png");
-  assert.equal(background.actionIconPaths("?")[24], "/icons/action1-24.png");
+  assert.equal(background.actionIconPaths("8")[24], "/icons/action1-24.png");
   assert.equal(background.actionIconPaths("28")[32], "/icons/action2-32.png");
   assert.equal(background.actionIconPaths("99+")[48], "/icons/action48.png");
 });
 
-test("OpenAI status records drive compact abnormal badge and title", () => {
+test("download completion waits for Chrome's final state instead of trusting the numeric id", async () => {
+  let listener = null;
+  let removed = false;
+  const downloads = {
+    onChanged: {
+      addListener(next) {
+        listener = next;
+      },
+      removeListener(next) {
+        removed = next === listener;
+      }
+    },
+    search(_query, callback) {
+      callback([{ id: 71, state: "in_progress" }]);
+    }
+  };
+
+  const pending = new Promise((resolve) => {
+    background.waitForDownloadFinalState(downloads, 71, resolve);
+  });
+  assert.equal(typeof listener, "function");
+  listener({ id: 71, state: { current: "complete" } });
+  const result = await pending;
+
+  assert.deepEqual(result, {
+    ok: true,
+    state: "complete",
+    error: "",
+    downloadId: 71
+  });
+  assert.equal(removed, true);
+});
+
+test("download interruption reports the final Chrome error and never becomes success", async () => {
+  let listener = null;
+  const downloads = {
+    onChanged: {
+      addListener(next) {
+        listener = next;
+      },
+      removeListener() {}
+    },
+    search(_query, callback) {
+      callback([{ id: 72, state: "in_progress" }]);
+    }
+  };
+
+  const pending = new Promise((resolve) => {
+    background.waitForDownloadFinalState(downloads, 72, resolve);
+  });
+  listener({
+    id: 72,
+    state: { current: "interrupted" },
+    error: { current: "FILE_FAILED" }
+  });
+  const result = await pending;
+
+  assert.deepEqual(result, {
+    ok: false,
+    state: "interrupted",
+    error: "FILE_FAILED",
+    downloadId: 72
+  });
+});
+
+test("OpenAI status changes badge color and title without replacing the selected numeric count", () => {
   const major = background.createOpenAIStatusRecord({
     ok: true,
     status: background.sanitizeOpenAIStatusPayload({
@@ -4626,7 +5234,7 @@ test("OpenAI status records drive compact abnormal badge and title", () => {
 
   assert.equal(major.state, "major");
   assert.equal(background.isAbnormalOpenAIStatus(major), true);
-  assert.equal(background.statusBadgeText(major, 42), "!");
+  assert.equal(background.statusBadgeText(major, 42), "42");
   assert.equal(background.statusBadgeColor(major), "#dc2626");
   assert.match(background.actionTitle({ totals: { "gpt-5-thinking": 42 } }, major), /OpenAI status: Major outage/);
 
@@ -4646,13 +5254,13 @@ test("OpenAI status records drive compact abnormal badge and title", () => {
   assert.equal(timeout.state, "timeout");
   assert.match(timeout.label, /timed out/);
   assert.equal(background.isAbnormalOpenAIStatus(timeout), true);
-  assert.equal(background.statusBadgeText(timeout, 0), "?");
+  assert.equal(background.statusBadgeText(timeout, 0), "");
   assert.equal(background.statusBadgeColor(timeout), "#d97706");
 
   const fetchFail = background.createOpenAIStatusRecord({ ok: false, error: "Fetch is not available in this Chrome runtime." }, "2026-06-04T04:00:03.000Z");
   assert.equal(fetchFail.state, "fetch-failure");
   assert.equal(background.isAbnormalOpenAIStatus(fetchFail), true);
-  assert.equal(background.statusBadgeText(fetchFail, 0), "?");
+  assert.equal(background.statusBadgeText(fetchFail, 7), "7");
 });
 
 test("sanitizeSettings keeps only supported UI languages, main views, and statistics modes", () => {
@@ -4669,6 +5277,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
+    statisticsSectionOrder: ["text", "line", "text", "invalid"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
     mappedModelSelectionInitialized: true,
@@ -4689,6 +5298,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
+    statisticsSectionOrder: ["text", "line", "donut"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
     mappedModelSelectionInitialized: true,
@@ -4722,6 +5332,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
     mappedModelSelectionInitialized: false,
@@ -4744,6 +5355,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
     mappedModelSelectionInitialized: false,
@@ -4810,6 +5422,7 @@ test("sanitizeSettings clamps stored future dates to the current UTC calendar da
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
     mappedModelSelectionInitialized: false,
@@ -4834,6 +5447,7 @@ test("mergeSettings updates one shared UI preference without resetting the other
     showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
+    statisticsSectionOrder: ["donut", "text", "line"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
     mappedModelSelectionInitialized: true,
@@ -4856,6 +5470,7 @@ test("mergeSettings updates one shared UI preference without resetting the other
     showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
+    statisticsSectionOrder: ["donut", "text", "line"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
     mappedModelSelectionInitialized: true,
@@ -5677,9 +6292,23 @@ test("runtime reinjection loads the same complete content-script stack as the ma
   assert.ok(background.ISOLATED_CONTENT_SCRIPT_FILES.includes("src/conversation-source.js"));
 });
 
-test("status alarm stores latest OpenAI status and updates toolbar abnormal state", async () => {
+test("status alarm stores latest OpenAI status while preserving the numeric toolbar count", async () => {
   const listeners = [];
-  const stored = {};
+  const countedAt = new Date("2026-08-24T12:00:00.000Z");
+  const stored = {
+    [background.STORAGE_KEY]: background.applyIncrement(
+      background.createEmptyStats(),
+      {
+        submissionId: "status-badge-count",
+        model: "GPT-4o",
+        modelObservedSource: "fetch-request",
+        modelParameters: { model: "gpt-4o" },
+        sourceMode: "chat",
+        submittedAt: countedAt.toISOString()
+      },
+      countedAt
+    )
+  };
   const badgeTexts = [];
   const badgeColors = [];
   const actionIcons = [];
@@ -5763,7 +6392,7 @@ test("status alarm stores latest OpenAI status and updates toolbar abnormal stat
   await updated;
 
   assert.equal(stored[background.STATUS_KEY].state, "major");
-  assert.equal(badgeTexts.at(-1), "!");
+  assert.equal(badgeTexts.at(-1), "1");
   assert.equal(badgeColors.at(-1), "#dc2626");
   assert.equal(actionIcons.at(-1)[16], "/icons/action1-16.png");
   assert.equal(actionIconFailureHandled, true);
@@ -5907,4 +6536,529 @@ test("mergeRecentNetworkObservation still lets a specific network model override
     now
   );
   assert.equal(merged.model, "gpt-5-5-instant", "specific network model wins over bare DOM base");
+});
+
+function cloneProtocolValue(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function createBackgroundProtocolHarness(options = {}) {
+  const storageState = cloneProtocolValue(options.initialStorage || {});
+  const storageOperations = [];
+  const messageListeners = [];
+  const downloadChangedListeners = new Set();
+  const pendingDownloadStarts = [];
+  const downloadItems = new Map();
+  const downloadCalls = [];
+  const cancelCalls = [];
+  let importSequence = 0;
+
+  const runtime = {
+    lastError: null,
+    onMessage: { addListener: (listener) => messageListeners.push(listener) },
+    onInstalled: { addListener: () => {} },
+    onStartup: { addListener: () => {} }
+  };
+
+  function requestedStorageKeys(keys) {
+    if (keys == null) {
+      return Object.keys(storageState);
+    }
+    if (typeof keys === "string") {
+      return [keys];
+    }
+    if (Array.isArray(keys)) {
+      return keys.slice();
+    }
+    if (typeof keys === "object") {
+      return Object.keys(keys);
+    }
+    return [];
+  }
+
+  const localStorage = {
+    get(keys, callback) {
+      const requested = requestedStorageKeys(keys);
+      const result = {};
+      if (keys && !Array.isArray(keys) && typeof keys === "object") {
+        Object.keys(keys).forEach((key) => {
+          result[key] = Object.prototype.hasOwnProperty.call(storageState, key)
+            ? cloneProtocolValue(storageState[key])
+            : cloneProtocolValue(keys[key]);
+        });
+      } else {
+        requested.forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(storageState, key)) {
+            result[key] = cloneProtocolValue(storageState[key]);
+          }
+        });
+      }
+      storageOperations.push({ type: "get", keys: requested, result: cloneProtocolValue(result) });
+      callback(result);
+    },
+    set(values, callback) {
+      Object.keys(values || {}).forEach((key) => {
+        storageState[key] = cloneProtocolValue(values[key]);
+      });
+      storageOperations.push({
+        type: "set",
+        keys: Object.keys(values || {}),
+        snapshot: cloneProtocolValue(storageState)
+      });
+      if (callback) callback();
+    },
+    remove(keys, callback) {
+      const removed = Array.isArray(keys) ? keys.slice() : [keys];
+      removed.forEach((key) => delete storageState[key]);
+      storageOperations.push({
+        type: "remove",
+        keys: removed,
+        snapshot: cloneProtocolValue(storageState)
+      });
+      if (callback) callback();
+    }
+  };
+
+  const downloads = {
+    download(downloadOptions, callback) {
+      downloadCalls.push(cloneProtocolValue(downloadOptions));
+      pendingDownloadStarts.push(callback);
+    },
+    cancel(downloadId, callback) {
+      cancelCalls.push(downloadId);
+      if (callback) callback();
+    },
+    search(query, callback) {
+      const item = downloadItems.get(Number(query && query.id));
+      callback(item ? [cloneProtocolValue(item)] : []);
+    },
+    onChanged: {
+      addListener(listener) {
+        downloadChangedListeners.add(listener);
+      },
+      removeListener(listener) {
+        downloadChangedListeners.delete(listener);
+      }
+    }
+  };
+
+  const context = {
+    chrome: {
+      runtime,
+      storage: {
+        local: localStorage,
+        session: {
+          get: (_keys, callback) => callback({}),
+          set: (_values, callback) => callback && callback(),
+          remove: (_keys, callback) => callback && callback()
+        }
+      },
+      downloads,
+      alarms: {
+        create: () => {},
+        onAlarm: { addListener: () => {} }
+      },
+      action: {
+        setBadgeBackgroundColor: () => {},
+        setBadgeTextColor: () => {},
+        setBadgeText: () => {},
+        setTitle: () => {},
+        setIcon: () => Promise.resolve()
+      },
+      tabs: {
+        onUpdated: { addListener: () => {} },
+        onRemoved: { addListener: () => {} }
+      },
+      webRequest: {
+        onBeforeRequest: { addListener: () => {} }
+      }
+    },
+    crypto: {
+      randomUUID() {
+        importSequence += 1;
+        return `00000000-0000-4000-8000-${String(importSequence).padStart(12, "0")}`;
+      }
+    },
+    console,
+    Date,
+    Math,
+    Number,
+    Object,
+    String,
+    Array,
+    Promise,
+    URL,
+    setTimeout,
+    clearTimeout
+  };
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
+  vm.createContext(context);
+  vm.runInContext(script, context);
+  assert.equal(messageListeners.length, 1, "background registers one runtime message listener");
+  storageOperations.length = 0;
+
+  function dispatch(message, sendResponse) {
+    const keepsChannelOpen = messageListeners[0](
+      message,
+      { url: "chrome-extension://test/popup.html" },
+      sendResponse
+    );
+    assert.equal(keepsChannelOpen, true, `${message.type} keeps its response channel open`);
+  }
+
+  function send(message) {
+    return new Promise((resolve) => dispatch(message, resolve));
+  }
+
+  function startNextDownload(downloadId, state = "in_progress") {
+    const callback = pendingDownloadStarts.shift();
+    assert.equal(typeof callback, "function", "a download start callback is pending");
+    downloadItems.set(downloadId, { id: downloadId, state });
+    callback(downloadId);
+  }
+
+  function emitDownloadChange(delta) {
+    const downloadId = Number(delta && delta.id);
+    const current = downloadItems.get(downloadId) || { id: downloadId };
+    if (delta && delta.state && delta.state.current) {
+      current.state = delta.state.current;
+    }
+    if (delta && delta.error && delta.error.current) {
+      current.error = delta.error.current;
+    }
+    downloadItems.set(downloadId, current);
+    Array.from(downloadChangedListeners).forEach((listener) => listener(cloneProtocolValue(delta)));
+  }
+
+  return {
+    storageState,
+    storageOperations,
+    downloadCalls,
+    cancelCalls,
+    pendingDownloadStarts,
+    dispatch,
+    send,
+    startNextDownload,
+    emitDownloadChange
+  };
+}
+
+function importedConversationFixture(id, title) {
+  return {
+    id,
+    title,
+    url: `https://chatgpt.com/c/${id}`,
+    createTime: "2026-08-24T12:00:00.000Z",
+    updateTime: "2026-08-24T12:05:00.000Z",
+    messages: [
+      {
+        id: `${id}-message`,
+        role: "assistant",
+        content: `${title} content`,
+        responseModel: "gpt-5-6"
+      }
+    ]
+  };
+}
+
+test("conversation import failure and abort preserve the previously committed cache", async () => {
+  const oldImportId = "old-import";
+  const oldConversation = importedConversationFixture("old-chat", "Old cached chat");
+  const oldRecordKey = background.importedConversationRecordKey(oldImportId, oldConversation.id);
+  const harness = createBackgroundProtocolHarness({
+    initialStorage: {
+      [background.IMPORTED_CONVERSATION_INDEX_KEY]: {
+        version: 1,
+        importId: oldImportId,
+        sourceName: "old-conversations.json",
+        importedAt: "2026-08-20T10:00:00.000Z",
+        complete: true,
+        count: 1,
+        conversations: [{ id: oldConversation.id, title: oldConversation.title }],
+        recordKeys: [oldRecordKey]
+      },
+      [oldRecordKey]: oldConversation
+    }
+  });
+
+  const started = await harness.send({
+    type: "conversation.import.start",
+    sourceName: "replacement.json",
+    expectedCount: 2
+  });
+  assert.equal(started.ok, true);
+  assert.ok(started.importId);
+
+  const replacement = importedConversationFixture("new-chat", "Incomplete replacement");
+  const replacementRecordKey = background.importedConversationRecordKey(started.importId, replacement.id);
+  const chunked = await harness.send({
+    type: "conversation.import.chunk",
+    importId: started.importId,
+    conversations: [replacement]
+  });
+  assert.equal(chunked.ok, true);
+  assert.equal(chunked.importedCount, 1);
+
+  const failed = await harness.send({
+    type: "conversation.import.finish",
+    importId: started.importId
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, "conversation-import-count-mismatch");
+  assert.equal(failed.importedCount, 1);
+
+  const listed = await harness.send({ type: "conversation.import.list" });
+  assert.deepEqual(Array.from(listed.conversations, (item) => item.id), ["old-chat"]);
+  assert.equal(listed.sourceName, "old-conversations.json");
+  const collected = await harness.send({
+    type: "conversation.import.collect",
+    ids: ["old-chat", "new-chat"]
+  });
+  assert.deepEqual(Array.from(collected.conversations, (item) => item.id), ["old-chat"]);
+  assert.deepEqual(Array.from(collected.failures, (item) => item.id), ["new-chat"]);
+
+  const aborted = await harness.send({
+    type: "conversation.import.abort",
+    importId: started.importId
+  });
+  assert.deepEqual(
+    { ok: aborted.ok, removed: aborted.removed },
+    { ok: true, removed: true }
+  );
+  assert.ok(harness.storageState[oldRecordKey], "abort leaves the old committed record intact");
+  assert.equal(
+    harness.storageState[background.IMPORTED_CONVERSATION_INDEX_KEY].importId,
+    oldImportId,
+    "abort leaves the old committed index intact"
+  );
+  assert.equal(harness.storageState[replacementRecordKey], undefined);
+  assert.equal(harness.storageState[background.IMPORTED_CONVERSATION_STAGING_KEY], undefined);
+});
+
+test("conversation import finish atomically publishes the new index before old records are removed", async () => {
+  const oldImportId = "old-atomic-import";
+  const oldConversation = importedConversationFixture("old-atomic-chat", "Old atomic chat");
+  const oldRecordKey = background.importedConversationRecordKey(oldImportId, oldConversation.id);
+  const harness = createBackgroundProtocolHarness({
+    initialStorage: {
+      [background.IMPORTED_CONVERSATION_INDEX_KEY]: {
+        version: 1,
+        importId: oldImportId,
+        sourceName: "old.json",
+        importedAt: "2026-08-20T10:00:00.000Z",
+        complete: true,
+        count: 1,
+        conversations: [{ id: oldConversation.id, title: oldConversation.title }],
+        recordKeys: [oldRecordKey]
+      },
+      [oldRecordKey]: oldConversation
+    }
+  });
+
+  const started = await harness.send({
+    type: "conversation.import.start",
+    sourceName: "new.json",
+    expectedCount: 1
+  });
+  const newConversation = importedConversationFixture("new-atomic-chat", "New atomic chat");
+  const newRecordKey = background.importedConversationRecordKey(started.importId, newConversation.id);
+  await harness.send({
+    type: "conversation.import.chunk",
+    importId: started.importId,
+    conversations: [newConversation]
+  });
+
+  const beforeFinishList = await harness.send({ type: "conversation.import.list" });
+  assert.deepEqual(Array.from(beforeFinishList.conversations, (item) => item.id), ["old-atomic-chat"]);
+  const beforeFinishCollect = await harness.send({
+    type: "conversation.import.collect",
+    ids: ["old-atomic-chat", "new-atomic-chat"]
+  });
+  assert.deepEqual(
+    Array.from(beforeFinishCollect.conversations, (item) => item.id),
+    ["old-atomic-chat"],
+    "staged records stay invisible until finish"
+  );
+
+  harness.storageOperations.length = 0;
+  const finished = await harness.send({
+    type: "conversation.import.finish",
+    importId: started.importId
+  });
+  assert.deepEqual(
+    { ok: finished.ok, count: finished.count, warning: finished.warning },
+    { ok: true, count: 1, warning: "" }
+  );
+
+  const commitPosition = harness.storageOperations.findIndex(
+    (operation) =>
+      operation.type === "set" &&
+      operation.keys.includes(background.IMPORTED_CONVERSATION_INDEX_KEY)
+  );
+  const cleanupPosition = harness.storageOperations.findIndex(
+    (operation) => operation.type === "remove" && operation.keys.includes(oldRecordKey)
+  );
+  assert.ok(commitPosition >= 0, "finish writes the replacement index");
+  assert.ok(cleanupPosition > commitPosition, "old records are removed only after the replacement index is stored");
+
+  const committedSnapshot = harness.storageOperations[commitPosition].snapshot;
+  assert.equal(
+    committedSnapshot[background.IMPORTED_CONVERSATION_INDEX_KEY].importId,
+    started.importId
+  );
+  assert.ok(committedSnapshot[oldRecordKey], "the old record still exists at the index commit point");
+  assert.ok(committedSnapshot[newRecordKey], "the new record exists before its index is published");
+
+  const cleanedSnapshot = harness.storageOperations[cleanupPosition].snapshot;
+  assert.equal(cleanedSnapshot[oldRecordKey], undefined);
+  assert.ok(cleanedSnapshot[newRecordKey]);
+  assert.equal(
+    cleanedSnapshot[background.IMPORTED_CONVERSATION_INDEX_KEY].importId,
+    started.importId
+  );
+
+  const afterFinishList = await harness.send({ type: "conversation.import.list" });
+  assert.deepEqual(Array.from(afterFinishList.conversations, (item) => item.id), ["new-atomic-chat"]);
+  const afterFinishCollect = await harness.send({
+    type: "conversation.import.collect",
+    ids: ["old-atomic-chat", "new-atomic-chat"]
+  });
+  assert.deepEqual(Array.from(afterFinishCollect.conversations, (item) => item.id), ["new-atomic-chat"]);
+  assert.deepEqual(Array.from(afterFinishCollect.failures, (item) => item.id), ["old-atomic-chat"]);
+});
+
+test("conversation.import.collect reads and returns only the selected unique conversation ids", async () => {
+  const importId = "selected-import";
+  const conversations = [
+    importedConversationFixture("chat-a", "Chat A"),
+    importedConversationFixture("chat-b", "Chat B"),
+    importedConversationFixture("chat-c", "Chat C")
+  ];
+  const recordKeys = conversations.map((conversation) =>
+    background.importedConversationRecordKey(importId, conversation.id)
+  );
+  const initialStorage = {
+    [background.IMPORTED_CONVERSATION_INDEX_KEY]: {
+      version: 1,
+      importId,
+      sourceName: "selected.json",
+      importedAt: "2026-08-24T10:00:00.000Z",
+      complete: true,
+      count: conversations.length,
+      conversations: conversations.map((conversation) => ({
+        id: conversation.id,
+        title: conversation.title
+      })),
+      recordKeys
+    }
+  };
+  conversations.forEach((conversation, index) => {
+    initialStorage[recordKeys[index]] = conversation;
+  });
+  const harness = createBackgroundProtocolHarness({ initialStorage });
+
+  const result = await harness.send({
+    type: "conversation.import.collect",
+    ids: ["chat-b", "chat-a", "chat-b", "missing-chat"]
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.requestedCount, 3);
+  assert.equal(result.complete, false);
+  assert.deepEqual(Array.from(result.conversations, (item) => item.id), ["chat-b", "chat-a"]);
+  assert.deepEqual(Array.from(result.failures, (item) => item.id), ["missing-chat"]);
+
+  const recordRead = harness.storageOperations
+    .filter((operation) => operation.type === "get")
+    .at(-1);
+  assert.deepEqual(Array.from(recordRead.keys), [recordKeys[1], recordKeys[0]]);
+  assert.equal(recordRead.keys.includes(recordKeys[2]), false, "an unselected conversation is not read");
+});
+
+test("usage.download.cancel keeps an interrupted result final when complete arrives later", async () => {
+  const harness = createBackgroundProtocolHarness();
+  const responses = [];
+  harness.dispatch(
+    {
+      type: "usage.download",
+      operationId: "cancel-after-start",
+      url: "blob:test-download",
+      filename: "conversation.zip"
+    },
+    (response) => responses.push(response)
+  );
+  assert.equal(harness.downloadCalls.length, 1);
+  harness.startNextDownload(71);
+
+  const cancelled = await harness.send({
+    type: "usage.download.cancel",
+    operationId: "cancel-after-start"
+  });
+  assert.deepEqual(
+    { ok: cancelled.ok, downloadId: cancelled.downloadId, cancelled: cancelled.cancelled },
+    { ok: true, downloadId: 71, cancelled: true }
+  );
+  assert.deepEqual(harness.cancelCalls, [71]);
+
+  harness.emitDownloadChange({
+    id: 71,
+    state: { current: "interrupted" },
+    error: { current: "USER_CANCELED" }
+  });
+  harness.emitDownloadChange({ id: 71, state: { current: "complete" } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1, "the later complete event cannot send a second success response");
+  assert.deepEqual(
+    {
+      ok: responses[0].ok,
+      state: responses[0].state,
+      error: responses[0].error,
+      downloadId: responses[0].downloadId
+    },
+    {
+      ok: false,
+      state: "interrupted",
+      error: "USER_CANCELED",
+      downloadId: 71
+    }
+  );
+});
+
+test("usage.download.cancel queues cancellation until Chrome assigns the download id", async () => {
+  const harness = createBackgroundProtocolHarness();
+  const responses = [];
+  harness.dispatch(
+    {
+      type: "usage.download",
+      operationId: "cancel-before-start",
+      url: "blob:test-pending-download",
+      filename: "statistics.json"
+    },
+    (response) => responses.push(response)
+  );
+
+  const pendingCancellation = await harness.send({
+    type: "usage.download.cancel",
+    operationId: "cancel-before-start"
+  });
+  assert.deepEqual(
+    { ok: pendingCancellation.ok, pending: pendingCancellation.pending },
+    { ok: true, pending: true }
+  );
+  assert.deepEqual(harness.cancelCalls, []);
+
+  harness.startNextDownload(72);
+  assert.deepEqual(harness.cancelCalls, [72], "the queued cancellation runs as soon as the id exists");
+  harness.emitDownloadChange({
+    id: 72,
+    state: { current: "interrupted" },
+    error: { current: "USER_CANCELED" }
+  });
+  harness.emitDownloadChange({ id: 72, state: { current: "complete" } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].ok, false);
+  assert.equal(responses[0].state, "interrupted");
+  assert.equal(responses[0].error, "USER_CANCELED");
 });

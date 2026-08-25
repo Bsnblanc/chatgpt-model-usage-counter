@@ -10,7 +10,7 @@ test("manifest is MV3 and targets ChatGPT hosts", () => {
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.background.service_worker, "src/background.js");
-  assert.deepEqual(manifest.permissions, ["alarms", "downloads", "scripting", "storage", "webRequest"]);
+  assert.deepEqual(manifest.permissions, ["alarms", "downloads", "scripting", "storage", "unlimitedStorage", "webRequest"]);
   assert.ok(manifest.host_permissions.includes("https://chatgpt.com/*"));
   assert.ok(manifest.host_permissions.includes("https://chat.openai.com/*"));
   assert.ok(manifest.host_permissions.includes("https://status.openai.com/*"));
@@ -25,6 +25,7 @@ test("manifest is MV3 and targets ChatGPT hosts", () => {
     "src/model-catalog.js",
     "src/detector.js",
     "src/exporter.js",
+    "src/conversation-importer.js",
     "src/conversation-source.js",
     "src/dashboard.js",
     "src/content.js"

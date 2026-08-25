@@ -35,6 +35,46 @@ function runtimeCatalog() {
   };
 }
 
+function sharedSlugRuntimeCatalog() {
+  return {
+    observedAt: "2026-08-24T12:00:00.000Z",
+    models: [
+      { slug: "gpt-shared-7", title: "GPT Shared Base", reasoning_type: "auto" }
+    ],
+    versions: [
+      {
+        id: "shared-alpha",
+        display_text_for_intelligence: "GPT Alpha",
+        short_display_text_for_intelligence: "Alpha",
+        slugs: ["gpt-shared-7"],
+        intelligence_presets: [
+          {
+            title: "Instant",
+            selected_display_title: "Instant",
+            model_slug: "gpt-shared-7",
+            lane: "instant"
+          }
+        ]
+      },
+      {
+        id: "shared-beta",
+        display_text_for_intelligence: "GPT Beta",
+        short_display_text_for_intelligence: "Beta",
+        slugs: ["gpt-shared-7"],
+        intelligence_presets: [
+          {
+            title: "Pro",
+            selected_display_title: "Pro",
+            model_slug: "gpt-shared-7",
+            lane: "pro"
+          }
+        ]
+      }
+    ],
+    categories: []
+  };
+}
+
 test("catalog derives metadata from exact slugs without hardcoded model inventory", () => {
   const thinking = catalog.resolveModelInfo("future-family-2026-thinking");
   assert.equal(thinking.label, "future-family-2026-thinking");
@@ -283,6 +323,72 @@ test("live version bindings prevent stale selector or fallback titles from movin
   assert.equal(pro.source, "account-catalog:version-intelligence");
   assert.equal(instant.publicModel, "GPT-5.6 Sol");
   assert.equal(instant.source, "selector+account-catalog");
+});
+
+test("shared runtime slugs use the submit-time public model to select the matching version", () => {
+  [sharedSlugRuntimeCatalog(), {
+    ...sharedSlugRuntimeCatalog(),
+    versions: sharedSlugRuntimeCatalog().versions.reverse()
+  }].forEach((runtime) => {
+    const info = catalog.resolveRuntimePublicModelInfo(runtime, "gpt-shared-7", {
+      selectedPublicModel: "GPT Beta"
+    });
+
+    assert.equal(info.publicModel, "GPT Beta");
+    assert.equal(info.requestModel, "gpt-shared-7");
+    assert.equal(info.mappingStatus, "mapped");
+    assert.equal(info.source, "selector+account-catalog");
+  });
+});
+
+test("shared runtime slugs use the submit-time public mode when the public model is unavailable", () => {
+  const info = catalog.resolveRuntimePublicModelInfo(sharedSlugRuntimeCatalog(), "gpt-shared-7", {
+    selectedPublicMode: "pro",
+    selectedPublicModeLabel: "Pro",
+    selectedPublicModeSource: "selector-dom:model-control"
+  });
+
+  assert.equal(info.publicModel, "GPT Beta");
+  assert.equal(info.mode, "pro");
+  assert.equal(info.selectedPublicMode, "pro");
+  assert.equal(info.mappingStatus, "mapped");
+});
+
+test("shared runtime slugs combine public model and public mode when either hint alone is not unique", () => {
+  const runtime = sharedSlugRuntimeCatalog();
+  runtime.versions.forEach((version) => {
+    version.display_text_for_intelligence = "GPT Shared";
+    version.short_display_text_for_intelligence = "Shared";
+  });
+
+  const info = catalog.resolveRuntimePublicModelInfo(runtime, "gpt-shared-7", {
+    selectedPublicModel: "GPT Shared",
+    selectedPublicMode: "pro"
+  });
+
+  assert.equal(info.publicModel, "GPT Shared");
+  assert.equal(info.mode, "pro");
+  assert.equal(info.mappingStatus, "mapped");
+});
+
+test("shared runtime slugs remain exact and unmapped when submit-time evidence cannot make the mapping unique", () => {
+  const info = catalog.resolveRuntimePublicModelInfo(sharedSlugRuntimeCatalog(), "gpt-shared-7");
+
+  assert.equal(info.publicModel, "gpt-shared-7");
+  assert.equal(info.requestModel, "gpt-shared-7");
+  assert.equal(info.baseModel, "gpt-shared-7");
+  assert.equal(info.mappingStatus, "unmapped");
+  assert.equal(info.source, "unmapped-request-slug");
+});
+
+test("shared runtime slugs do not guess from catalog order or the fallback model title", () => {
+  const info = catalog.resolveRuntimePublicModelInfo(sharedSlugRuntimeCatalog(), "gpt-shared-7", {
+    selectedPublicModel: "GPT Missing"
+  });
+
+  assert.equal(info.publicModel, "gpt-shared-7");
+  assert.equal(info.mappingStatus, "unmapped");
+  assert.equal(info.source, "unmapped-request-slug");
 });
 
 test("submit-time public mode remains separate from a different internal response mode", () => {

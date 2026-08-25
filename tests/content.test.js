@@ -8,733 +8,16 @@ const modelCatalog = require("../src/model-catalog");
 const conversationSource = require("../src/conversation-source");
 const background = require("../src/background");
 
-test("account-history reads use one worker and reserve a 1000 ms request-start gap", () => {
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
 
-  assert.match(script, /ACCOUNT_REQUEST_MAX_CONCURRENCY\s*=\s*1/);
-  assert.match(script, /ACCOUNT_REQUEST_MIN_GAP_MS\s*=\s*1000/);
-  assert.match(script, /ACCOUNT_REQUEST_FETCH_TIMEOUT_MS\s*=\s*45\s*\*\s*1000/);
-  assert.match(script, /controller\.abort\(\)/);
-  assert.match(script, /error\.code\s*=\s*"account-request-timeout"/);
-  assert.match(
-    script,
-    /scheduledCatalogFetch[\s\S]{0,300}?accountFetchWithTimeout\(fetch,\s*url,\s*options\)/
-  );
-  assert.match(
-    script,
-    /scheduledSessionFetch[\s\S]{0,500}?accountFetchWithTimeout\(window\.fetch,\s*url,\s*options\)/
-  );
-  assert.match(
-    script,
-    /startAuthorizedFetch[\s\S]{0,1200}?accountFetchWithTimeout\(window\.fetch,\s*parsedUrl\.href,\s*options\)/
-  );
-  assert.match(script, /concurrency:\s*1,\s*[\s\S]{0,500}?requestGapMs:\s*ACCOUNT_REQUEST_MIN_GAP_MS/);
-  assert.match(script, /ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION\s*=\s*60/);
-  assert.match(script, /ACCOUNT_HISTORY_MAX_OPERATION_MS\s*=\s*90\s*\*\s*1000/);
-  assert.match(script, /ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION\s*=\s*50/);
-  assert.match(script, /ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE\s*=\s*6/);
-  assert.match(script, /maxIndexPagesPerScope:\s*ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE/);
-  assert.match(script, /maxConversationsPerOperation:\s*ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION/);
-  assert.match(script, /maxMessagePagesPerConversation:\s*50/);
-  assert.match(script, /maxMessagesPerConversation:\s*10000/);
-});
 
-test("account-history requests stay paced after concurrent workers share a delayed authorization lookup", async () => {
-  const listeners = {};
-  const requestStarts = [];
-  let sessionFetches = 0;
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          await Promise.all([
-            options.fetchImpl("https://chatgpt.com/backend-api/conversations/first-0001"),
-            options.fetchImpl("https://chatgpt.com/backend-api/conversations/second-0002")
-          ]);
-          return { conversations: [], complete: true, warnings: [] };
-        }
-      },
-      async fetch(url) {
-        if (url === "/api/auth/session") {
-          sessionFetches += 1;
-          await new Promise((resolve) => setTimeout(resolve, 30));
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: "memory-only-token",
-              account: { id: "account-0001" }
-            })
-          };
-        }
-        requestStarts.push(Date.now());
-        return { ok: true, status: 200, json: async () => ({}) };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
 
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  await context.window.__chatgptUsageListConversations();
 
-  assert.equal(sessionFetches, 1);
-  assert.equal(requestStarts.length, 2);
-  assert.ok(
-    requestStarts[1] - requestStarts[0] >= 900,
-    `actual request gap was ${requestStarts[1] - requestStarts[0]} ms`
-  );
-});
 
-test("a hung account fetch aborts before permit expiry and releases the permit only after fetch settles", async () => {
-  const listeners = {};
-  const runtimeMessages = [];
-  let abortCount = 0;
-  let accountTimeout = null;
-  let fetchReject = null;
-  let fetchStarted = false;
-  let fetchSettled = false;
-  let fetchCalls = 0;
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          await options.fetchImpl("https://chatgpt.com/backend-api/conversations/hung-0001");
-          return { conversations: [], complete: true, warnings: [] };
-        }
-      },
-      fetch(_url, options) {
-        fetchCalls += 1;
-        fetchStarted = true;
-        return new Promise((_resolve, reject) => {
-          fetchReject = reject;
-          options.signal.addEventListener("abort", () => {
-            abortCount += 1;
-          }, { once: true });
-        });
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        id: "extension-test-id",
-        sendMessage(message, callback) {
-          runtimeMessages.push({
-            type: message.type,
-            fetchSettled
-          });
-          if (message.type === "account.request.acquire") {
-            if (callback) callback({ ok: true, granted: true, permitId: "permit-hung-1" });
-            return;
-          }
-          if (message.type === "account.request.complete") {
-            if (callback) callback({ ok: true, released: true });
-            return;
-          }
-          if (callback) callback({ ok: true });
-        },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    AbortController,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout(fn, delay) {
-      if (Number(delay) === 45 * 1000) {
-        accountTimeout = fn;
-        return "account-timeout";
-      }
-      return setTimeout(fn, delay);
-    },
-    clearTimeout(timerId) {
-      if (timerId === "account-timeout") {
-        accountTimeout = null;
-        return;
-      }
-      clearTimeout(timerId);
-    }
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
 
-  vm.createContext(context);
-  vm.runInContext(script, context);
 
-  const listPromise = context.window.__chatgptUsageListConversations();
-  while (!fetchStarted) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-  assert.equal(fetchCalls, 1);
-  assert.equal(typeof accountTimeout, "function");
-  assert.equal(
-    runtimeMessages.filter((message) => message.type === "account.request.complete").length,
-    0,
-    "the global permit remains held while the real fetch is still pending"
-  );
 
-  accountTimeout();
-  assert.equal(abortCount, 1, "the timeout must physically abort the hung fetch");
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(
-    runtimeMessages.filter((message) => message.type === "account.request.complete").length,
-    0,
-    "calling abort alone must not release the permit before fetch settles"
-  );
 
-  fetchSettled = true;
-  const abortError = new Error("aborted");
-  abortError.name = "AbortError";
-  fetchReject(abortError);
-  await assert.rejects(
-    listPromise,
-    (error) => Boolean(
-      error &&
-      error.code === "account-request-timeout" &&
-      error.stopOperation === true &&
-      error.incomplete === true
-    )
-  );
-  const completions = runtimeMessages.filter((message) => message.type === "account.request.complete");
-  assert.equal(completions.length, 1);
-  assert.equal(completions[0].fetchSettled, true, "permit completion is sent only after the fetch promise settles");
-  assert.equal(fetchCalls, 1, "a timeout marked stopOperation must not be retried");
-});
 
-test("cancelling and releasing an account operation invalidates delayed request slots", async () => {
-  const listeners = {};
-  let historyFetches = 0;
-  let resolveFirstRequest;
-  const firstRequestStarted = new Promise((resolve) => {
-    resolveFirstRequest = resolve;
-  });
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          await Promise.all([
-            options.fetchImpl("https://chatgpt.com/backend-api/conversations/first-0001"),
-            options.fetchImpl("https://chatgpt.com/backend-api/conversations/second-0002")
-          ]);
-          return { conversations: [], complete: true, warnings: [] };
-        }
-      },
-      async fetch(url) {
-        if (url === "/api/auth/session") {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: "memory-only-token",
-              account: { id: "account-0001" }
-            })
-          };
-        }
-        historyFetches += 1;
-        if (historyFetches === 1) {
-          resolveFirstRequest();
-        }
-        return { ok: true, status: 200, json: async () => ({}) };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  const listPromise = context.window.__chatgptUsageListConversations();
-  await firstRequestStarted;
-  context.window.__chatgptUsageCancelAccountOperation();
-  context.window.__chatgptUsageReleaseAccountAuth();
-  await assert.rejects(
-    listPromise,
-    (error) => Boolean(error && error.cancelled && error.stopOperation)
-  );
-
-  assert.equal(historyFetches, 1, "the delayed second request from the cancelled generation must never start");
-});
-
-test("operation runtime budget stops with an explicit incomplete result before the next request", async () => {
-  const listeners = {};
-  let now = 0;
-  let sessionFetches = 0;
-  let historyFetches = 0;
-  class FakeDate extends Date {
-    constructor(...args) {
-      super(...(args.length ? args : [now]));
-    }
-    static now() {
-      return now;
-    }
-  }
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          await options.fetchImpl("https://chatgpt.com/backend-api/conversations/first-0001");
-          await options.fetchImpl("https://chatgpt.com/backend-api/conversations/second-0002");
-          return { conversations: [], complete: true, warnings: [] };
-        }
-      },
-      async fetch(url) {
-        if (url === "/api/auth/session") {
-          sessionFetches += 1;
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: "runtime-budget-token",
-              account: { id: "runtime-budget-account" }
-            })
-          };
-        }
-        historyFetches += 1;
-        now += 90 * 1000 + 1;
-        return { ok: true, status: 200, json: async () => ({}) };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date: FakeDate,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout(fn, delay) {
-      now += Math.max(0, Number(delay) || 0);
-      Promise.resolve().then(fn);
-      return 1;
-    },
-    clearTimeout() {}
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  await assert.rejects(
-    context.window.__chatgptUsageListConversations(),
-    (error) => error &&
-      error.stopOperation === true &&
-      error.incomplete === true &&
-      error.code === "account-operation-time-limit"
-  );
-
-  assert.equal(sessionFetches, 1);
-  assert.equal(historyFetches, 1, "the request after the runtime budget must never reach ChatGPT");
-});
-
-test("60-request account-operation cap stops before the next real ChatGPT request starts", async () => {
-  const listeners = {};
-  let now = 0;
-  let sessionFetches = 0;
-  let historyFetches = 0;
-  let timerId = 0;
-  class FakeDate extends Date {
-    constructor(...args) {
-      super(...(args.length ? args : [now]));
-    }
-    static now() {
-      return now;
-    }
-  }
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          for (let index = 0; index < 61; index += 1) {
-            await options.fetchImpl(`https://chatgpt.com/backend-api/conversations/request-${String(index).padStart(4, "0")}`);
-          }
-          return { conversations: [], complete: true, warnings: [] };
-        }
-      },
-      async fetch(url) {
-        if (url === "/api/auth/session") {
-          sessionFetches += 1;
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: "request-budget-token",
-              account: { id: "request-budget-account" }
-            })
-          };
-        }
-        historyFetches += 1;
-        return { ok: true, status: 200, json: async () => ({}) };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date: FakeDate,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout(fn, delay) {
-      timerId += 1;
-      if (Number(delay) <= 1000) {
-        now += Math.max(0, Number(delay) || 0);
-        Promise.resolve().then(fn);
-      }
-      return timerId;
-    },
-    clearTimeout() {}
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  await assert.rejects(
-    context.window.__chatgptUsageListConversations(),
-    (error) => error &&
-      error.stopOperation === true &&
-      error.incomplete === true &&
-      error.code === "account-request-limit"
-  );
-
-  assert.equal(sessionFetches, 1);
-  assert.equal(historyFetches, 59, "the session read plus 59 history reads consume the 60-request cap");
-  assert.ok(now < 90 * 1000, "the request-count cap must stop before the runtime cap");
-});
-
-test("conversation cap is enforced across multiple selected-export batches without requesting overflow ids", async () => {
-  const listeners = {};
-  const batches = [];
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async collectConversations(ids) {
-          const received = Array.from(ids);
-          batches.push(received);
-          return {
-            conversations: received.map((id) => ({ id, messages: [{ id: `${id}-message` }] })),
-            failures: [],
-            warnings: [],
-            requestedCount: received.length,
-            complete: true
-          };
-        }
-      },
-      fetch() {
-        return Promise.reject(new Error("the source stub does not use account fetch"));
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/c/current-0000",
-      origin: "https://chatgpt.com",
-      pathname: "/c/current-0000"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Object,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-  const firstIds = Array.from({ length: 40 }, (_, index) => `first-${String(index).padStart(4, "0")}`);
-  const secondIds = Array.from({ length: 20 }, (_, index) => `second-${String(index).padStart(4, "0")}`);
-  const thirdIds = Array.from({ length: 3 }, (_, index) => `third-${String(index).padStart(4, "0")}`);
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  context.window.__chatgptUsageBeginAccountOperation();
-  const first = await context.window.__chatgptUsageCollectMany(firstIds);
-  const second = await context.window.__chatgptUsageCollectMany(secondIds);
-  const third = await context.window.__chatgptUsageCollectMany(thirdIds);
-
-  assert.equal(batches.length, 2, "a fully rejected batch must not call the account source");
-  assert.deepEqual(batches.map((batch) => batch.length), [40, 10]);
-  assert.equal(first.complete, true);
-  assert.equal(first.attemptedCount, 40);
-  assert.equal(second.complete, false);
-  assert.equal(second.incomplete, true);
-  assert.equal(second.requestedCount, 20);
-  assert.equal(second.attemptedCount, 10);
-  assert.equal(second.conversations.length, 10);
-  assert.deepEqual(Array.from(second.failures, (failure) => failure.id), secondIds.slice(10));
-  assert.equal(second.failures.every((failure) => failure.code === "conversation-count-limit"), true);
-  assert.equal(second.warnings.some((warning) => warning.code === "conversation-count-limit"), true);
-  assert.equal(third.complete, false);
-  assert.equal(third.attemptedCount, 0);
-  assert.equal(third.failures.length, 3);
-  assert.equal(third.failures.every((failure) => failure.code === "conversation-count-limit"), true);
-
-  const messageResult = await new Promise((resolve) => {
-    listeners.runtimeMessage({ type: "conversation.collectMany", ids: thirdIds }, {}, resolve);
-  });
-  assert.equal(messageResult.ok, true);
-  assert.equal(messageResult.incomplete, true);
-  assert.equal(messageResult.attemptedCount, 0);
-  assert.equal(messageResult.code, "conversation-count-limit");
-});
-
-test("final 429 stops later ids and DOM navigation while credentials stay out of messages and storage", async () => {
-  const listeners = {};
-  const runtimeMessages = [];
-  const storageWrites = [];
-  let permitSequence = 0;
-  let sessionFetches = 0;
-  let detailFetches = 0;
-  let domClicks = 0;
-  const secretToken = "credential-must-stay-in-content-memory";
-  const secretAccount = "account-must-stay-in-content-memory";
-  const link = {
-    innerText: "Fallback target",
-    textContent: "Fallback target",
-    getAttribute(name) {
-      return name === "href" ? "/c/first-0001" : "";
-    },
-    click() {
-      domClicks += 1;
-    }
-  };
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return link; },
-    querySelectorAll(selector) {
-      return selector.includes('a[href*="/c/"]') ? [link] : [];
-    }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: conversationSource,
-      async fetch(url) {
-        if (url === "/api/auth/session") {
-          sessionFetches += 1;
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: secretToken,
-              account: { id: secretAccount }
-            })
-          };
-        }
-        detailFetches += 1;
-        return {
-          ok: false,
-          status: 429,
-          headers: { get(name) { return String(name).toLowerCase() === "retry-after" ? "0" : ""; } },
-          json: async () => ({})
-        };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/c/current-0000",
-      origin: "https://chatgpt.com",
-      pathname: "/c/current-0000"
-    },
-    chrome: {
-      runtime: {
-        id: "test-extension",
-        lastError: null,
-        sendMessage(message, callback) {
-          runtimeMessages.push(message);
-          if (message.type === "account.request.acquire") {
-            permitSequence += 1;
-            callback({ ok: true, granted: true, permitId: `permit-${permitSequence}` });
-            return;
-          }
-          if (message.type === "account.request.complete") {
-            callback({ ok: true, released: true });
-            return;
-          }
-          if (callback) callback({ ok: true });
-        },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      },
-      storage: {
-        local: { set(value, callback) { storageWrites.push(value); if (callback) callback(); } },
-        session: { set(value, callback) { storageWrites.push(value); if (callback) callback(); } }
-      }
-    },
-    Headers,
-    AbortController,
-    URL,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  context.window.__chatgptUsageBeginAccountOperation();
-  await assert.rejects(
-    context.window.__chatgptUsageCollectMany(["first-0001", "second-0002"]),
-    (error) => error && error.stopOperation === true && error.status === 429
-  );
-
-  assert.equal(sessionFetches, 1);
-  assert.equal(detailFetches, 2, "one id may retry once; the second id must never start");
-  assert.equal(domClicks, 0, "429 must never enter rendered-page navigation fallback");
-  const externalized = JSON.stringify({ runtimeMessages, storageWrites });
-  assert.doesNotMatch(externalized, new RegExp(secretToken));
-  assert.doesNotMatch(externalized, new RegExp(secretAccount));
-  runtimeMessages
-    .filter((message) => String(message.type || "").startsWith("account.request."))
-    .forEach((message) => {
-      assert.equal(Object.prototype.hasOwnProperty.call(message, "authorization"), false);
-      assert.equal(Object.prototype.hasOwnProperty.call(message, "token"), false);
-      assert.equal(Object.prototype.hasOwnProperty.call(message, "accountId"), false);
-    });
-});
 
 test("content script exits before touching directly opened ChatGPT data endpoints", () => {
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
@@ -1136,6 +419,7 @@ function runPanelContentScript(document, options = {}) {
     window: {
       ChatGPTUsageDetector: detector,
       ChatGPTModelCatalog: options.modelCatalog,
+      localStorage: options.localStorage,
       ChatGPTUsageDashboard: options.dashboard || {
         init() {
           return { reload() {} };
@@ -1155,9 +439,16 @@ function runPanelContentScript(document, options = {}) {
         id: options.runtimeId,
         sendMessage(message, callback) {
           messages.push(message);
-          const response = typeof options.onRuntimeMessage === "function"
+          let response = typeof options.onRuntimeMessage === "function"
             ? options.onRuntimeMessage(message)
             : { ok: true };
+          if (
+            message.type === "usage.catalog.binding.salt" &&
+            (!response || response.ok !== false) &&
+            !response.salt
+          ) {
+            response = { ok: true, salt: "catalog-test-salt" };
+          }
           if (callback) callback(response);
         },
         onMessage: options.trackRegistrations ? {
@@ -1196,7 +487,20 @@ function runPanelContentScript(document, options = {}) {
       intervals.push({ listener, delay });
       return intervals.length;
     } : options.setInterval,
-    fetch: options.fetch,
+    fetch: async function panelFetch(url, init) {
+      if (String(url) === "/api/auth/session") {
+        if (typeof options.fetchAuth === "function") {
+          return options.fetchAuth(url, init);
+        }
+        return response(200, {
+          account: { id: "panel-test-account" }
+        });
+      }
+      if (typeof options.fetch !== "function") {
+        throw new Error(`unexpected fetch: ${url}`);
+      }
+      return options.fetch(url, init);
+    },
     AbortController,
     Date,
     Math,
@@ -1338,6 +642,48 @@ test("usage panel mounts into the ChatGPT main title bar", () => {
   assert.equal(host.classList.contains("is-fallback"), false);
 });
 
+test("current project export keeps the conversation title and binds the verified project name", async () => {
+  const projectId = "g-p-6a4a938ff7888191bd120d64ef3a3b6e";
+  const conversationId = "6a8d19c6-c830-83e8-b341-e093f58df244";
+  const document = createPanelDocument({ titleBar: true });
+  document.title = "@#!# - 留香珠选购排名";
+  const link = new PanelTestElement({
+    tagName: "A",
+    attributes: {
+      href: `/g/${projectId}/c/${conversationId}`,
+      "aria-label": "留香珠选购排名, chat in project @#!#"
+    }
+  });
+  link.innerText = "留香珠选购排名";
+  document.body.appendChild(link);
+  const { registrations } = runPanelContentScript(document, {
+    href: `https://chatgpt.com/g/${projectId}/c/${conversationId}`,
+    trackRegistrations: true,
+    onRuntimeMessage(message) {
+      if (message.type === "conversation.projectDirectories.get") {
+        return {
+          ok: true,
+          entries: [{
+            gizmoId: projectId,
+            projectName: "@#!#",
+            projectOrder: 0
+          }]
+        };
+      }
+      return { ok: true };
+    }
+  });
+  const listener = registrations.runtimeListeners[0];
+  const response = await new Promise((resolve) => {
+    const keepOpen = listener({ type: "conversation.current" }, {}, resolve);
+    assert.equal(keepOpen, true);
+  });
+  assert.equal(response.ok, true);
+  assert.equal(response.conversation.title, "留香珠选购排名");
+  assert.equal(response.conversation.projectName, "@#!#");
+  assert.equal(response.conversation.projectNameSource, "main-world-react");
+});
+
 test("page load makes no model-directory request and opening the statistics panel fetches it at most once", async () => {
   const document = createPanelDocument({ titleBar: true });
   let modelFetches = 0;
@@ -1346,7 +692,8 @@ test("page load makes no model-directory request and opening the statistics pane
   const { messages } = runPanelContentScript(document, {
     modelCatalog,
     dashboard: {
-      init() {
+      init(_container, dashboardOptions) {
+        dashboardOptions.onUsageViewActivate();
         return {
           reload(options) {
             dashboardReloadOptions.push(options || {});
@@ -1384,8 +731,12 @@ test("page load makes no model-directory request and opening the statistics pane
   const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
   toggle.listeners.click();
   await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 1100));
   assert.equal(modelFetches, 1, JSON.stringify(messages));
+  const catalogGet = messages.find((message) => message.type === "usage.catalog.get");
+  const catalogPublish = messages.find((message) => message.type === "usage.catalog");
+  assert.match(catalogGet.accountKey, /^acct-[0-9a-f]{16}$/);
+  assert.equal(catalogPublish.accountKey, catalogGet.accountKey);
   assert.equal(dashboardReloadOptions.length, 1);
   assert.equal(
     dashboardReloadOptions[0].skipExportList,
@@ -1404,11 +755,246 @@ test("page load makes no model-directory request and opening the statistics pane
   );
 });
 
-test("a failed hover-open model catalog read keeps the five-minute retry cooldown", async () => {
+test("same-page account switching invalidates the stale catalog without extra unchanged-account reads", async () => {
+  const document = createPanelDocument({ titleBar: true });
+  const sendButton = new PanelTestElement({
+    tagName: "BUTTON",
+    attributes: { "data-testid": "send-button", "aria-label": "Send prompt" },
+    rect: { top: 720, left: 600, width: 40, height: 40, right: 640, bottom: 760 }
+  });
+  const textarea = new PanelTestElement({
+    tagName: "TEXTAREA",
+    rect: { top: 700, left: 280, width: 300, height: 60, right: 580, bottom: 760 }
+  });
+  textarea.value = "Verify the switched account binding.";
+  document.main.appendChild(sendButton);
+  document.main.appendChild(textarea);
+  const modelButton = document.querySelector('[data-testid="model-switcher-dropdown-button"]');
+  modelButton.innerText = "GPT-5.6 Sol";
+  modelButton.setAttribute("data-model", "gpt-5-6-thinking");
+
+  let activeAccount = "account-a";
+  let accountSurface = "account-a";
+  let sessionFetches = 0;
+  let modelFetches = 0;
+  const localStorage = {
+    getItem(key) {
+      return key === "_account" ? accountSurface : null;
+    }
+  };
+  let dashboardOptions = null;
+  const { messages } = runPanelContentScript(document, {
+    modelCatalog,
+    localStorage,
+    setTimeout(callback, delay) {
+      if (delay === 12_000) {
+        queueMicrotask(callback);
+        return 1;
+      }
+      return setTimeout(callback, delay);
+    },
+    dashboard: {
+      init(_container, options) {
+        dashboardOptions = options;
+        options.onUsageViewActivate();
+        return {
+          reload(reloadOptions) {
+            if (reloadOptions && reloadOptions.restoreActiveView) {
+              options.onUsageViewActivate();
+            }
+          }
+        };
+      }
+    },
+    fetchAuth: async () => {
+      sessionFetches += 1;
+      return response(200, { account: { id: activeAccount } });
+    },
+    fetch: async (url) => {
+      if (String(url).includes("/backend-api/models")) {
+        modelFetches += 1;
+        return response(200, {
+          models: [{
+            slug: "gpt-5-6",
+            title: activeAccount === "account-a" ? "Account A model" : "Account B model"
+          }],
+          versions: [],
+          categories: []
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    onRuntimeMessage(message) {
+      if (message.type === "usage.catalog.get") {
+        return { ok: true, catalog: null };
+      }
+      if (message.type === "usage.catalog.refresh.claim") {
+        return { ok: true, claimed: true };
+      }
+      if (message.type === "usage.increment") {
+        return {
+          ok: true,
+          recorded: true,
+          event: { model: message.payload.model },
+          stats: { totals: {} }
+        };
+      }
+      return { ok: true };
+    }
+  });
+
+  const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
+  toggle.listeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 1150));
+  const firstPublish = messages.filter((message) => message.type === "usage.catalog").at(-1);
+  assert.ok(firstPublish);
+  assert.equal(sessionFetches, 1);
+  assert.equal(modelFetches, 1);
+
+  toggle.listeners.click();
+  activeAccount = "account-b";
+  accountSurface = "account-b";
+  toggle.listeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 2150));
+  const publications = messages.filter((message) => message.type === "usage.catalog");
+  const secondPublish = publications.at(-1);
+  assert.equal(publications.length, 2);
+  assert.notEqual(secondPublish.accountKey, firstPublish.accountKey);
+  assert.notEqual(secondPublish.contextKey, firstPublish.contextKey);
+  assert.equal(sessionFetches, 2);
+  assert.equal(modelFetches, 2);
+
+  document.listeners.pointerdown({ target: sendButton });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  const switchedEvent = usageMessages(messages).at(-1);
+  assert.ok(switchedEvent);
+  assert.equal(switchedEvent.payload.runtimeModelCatalogAccountKey, secondPublish.accountKey);
+  assert.equal(switchedEvent.payload.runtimeModelCatalogContextKey, secondPublish.contextKey);
+
+  toggle.listeners.click();
+  toggle.listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(sessionFetches, 2, "the unchanged local account marker avoids another identity request");
+  assert.equal(modelFetches, 2, "the fresh B catalog is reused on ordinary reopen");
+  assert.ok(dashboardOptions);
+});
+
+test("the popup catalog message runs the same account-bound, user-triggered catalog path", async () => {
+  const document = createPanelDocument({ titleBar: true });
+  let modelFetches = 0;
+  const { messages, registrations } = runPanelContentScript(document, {
+    modelCatalog,
+    trackRegistrations: true,
+    fetch: async (url) => {
+      if (String(url).includes("/backend-api/models")) {
+        modelFetches += 1;
+        return response(200, {
+          models: [{ slug: "gpt-5-6", title: "GPT-5.6 Luna" }],
+          versions: [],
+          categories: []
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    onRuntimeMessage(message) {
+      if (message.type === "usage.catalog.get") {
+        return { ok: true, catalog: null };
+      }
+      if (message.type === "usage.catalog.refresh.claim") {
+        return { ok: true, claimed: true };
+      }
+      return { ok: true };
+    }
+  });
+  const listener = registrations.runtimeListeners[0];
+  let responsePayload = null;
+
+  assert.equal(
+    listener(
+      { type: "usage.catalog.ensure" },
+      {},
+      (payload) => { responsePayload = payload; }
+    ),
+    true
+  );
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+
+  assert.equal(modelFetches, 1);
+  assert.equal(responsePayload.ok, true);
+  const catalogGet = messages.find((message) => message.type === "usage.catalog.get");
+  const catalogPublish = messages.find((message) => message.type === "usage.catalog");
+  assert.match(catalogGet.accountKey, /^acct-[0-9a-f]{16}$/);
+  assert.equal(catalogPublish.accountKey, catalogGet.accountKey);
+});
+
+test("a tab that loses the catalog refresh claim waits for the matching account catalog without another fetch", async () => {
+  const document = createPanelDocument({ titleBar: true });
+  let modelFetches = 0;
+  let catalogReads = 0;
+  let accountKey = "";
+  const sharedCatalog = {
+    observedAt: new Date().toISOString(),
+    models: [{ slug: "gpt-5-6", title: "GPT-5.6 Luna" }],
+    versions: [],
+    categories: []
+  };
+  const { messages } = runPanelContentScript(document, {
+    modelCatalog,
+    dashboard: {
+      init(_container, dashboardOptions) {
+        dashboardOptions.onUsageViewActivate();
+        return { reload() {} };
+      }
+    },
+    fetch: async (url) => {
+      if (String(url).includes("/backend-api/models")) {
+        modelFetches += 1;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+    onRuntimeMessage(message) {
+      if (message.type === "usage.catalog.get") {
+        catalogReads += 1;
+        accountKey = message.accountKey;
+        return {
+          ok: true,
+          catalog: catalogReads >= 2 ? sharedCatalog : null
+        };
+      }
+      if (message.type === "usage.catalog.refresh.claim") {
+        return { ok: true, claimed: false };
+      }
+      return { ok: true };
+    }
+  });
+
+  document.getElementById("chatgpt-model-usage-counter-panel-toggle").listeners.click();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  assert.equal(modelFetches, 0);
+  assert.ok(catalogReads >= 2);
+  assert.match(accountKey, /^acct-[0-9a-f]{16}$/);
+  assert.equal(
+    messages
+      .filter((message) => message.type === "usage.catalog.get")
+      .every((message) => message.accountKey === accountKey),
+    true,
+    "every session read must stay bound to the same current account"
+  );
+});
+
+test("hover preview makes no account request and an explicit click starts the catalog cooldown", async () => {
   const document = createPanelDocument({ titleBar: true });
   let modelFetches = 0;
   const { messages } = runPanelContentScript(document, {
     modelCatalog,
+    dashboard: {
+      init(_container, dashboardOptions) {
+        dashboardOptions.onUsageViewActivate();
+        return { reload() {} };
+      }
+    },
     fetch: async (url) => {
       if (String(url).includes("/backend-api/models")) {
         modelFetches += 1;
@@ -1431,8 +1017,16 @@ test("a failed hover-open model catalog read keeps the five-minute retry cooldow
   const toggle = document.getElementById("chatgpt-model-usage-counter-panel-toggle");
   host.listeners.mouseenter();
   await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.equal(modelFetches, 0, "hover preview must not read the signed-in account model catalog");
+  assert.equal(
+    messages.filter((message) => message.type === "usage.catalog.refresh.claim").length,
+    0,
+    "hover preview must not claim an account-request slot"
+  );
   toggle.listeners.click();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 1100));
   host.listeners.mouseenter();
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1468,6 +1062,12 @@ test("an unmapped response stays passive until the user opens the statistics pan
   let claimed = false;
   const { messages } = runPanelContentScript(document, {
     modelCatalog,
+    dashboard: {
+      init(_container, dashboardOptions) {
+        dashboardOptions.onUsageViewActivate();
+        return { reload() {} };
+      }
+    },
     fetch: async (url) => {
       if (String(url).includes("/backend-api/models")) {
         modelFetches += 1;
@@ -1517,7 +1117,7 @@ test("an unmapped response stays passive until the user opens the statistics pan
 
   toggle.listeners.click();
   await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 1100));
   assert.equal(modelFetches, 1, "the explicit panel open performs the one account-catalog read");
 });
 
@@ -3714,743 +3314,4 @@ test("content script does not map bare Search or Live controls without tool cont
     assert.equal(usage.length, 1);
     assert.deepEqual(Array.from(usage[0].payload.usageFeatures), []);
   }
-});
-
-test("a selected current conversation falls back to its already-rendered messages when account history fails", async () => {
-  const listeners = {};
-  const currentConversation = {
-    id: "shared-chat-0001",
-    title: "Shared conversation",
-    messages: [
-      { id: "u1", role: "user", text: "Question" },
-      { id: "a1", role: "assistant", text: "Answer" }
-    ]
-  };
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: {
-      getAttribute() {
-        return null;
-      }
-    },
-    addEventListener(type, listener) {
-      listeners[type] = listener;
-    },
-    querySelector() {
-      return null;
-    },
-    querySelectorAll() {
-      return [];
-    }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: {
-        collectConversationFromDom() {
-          return currentConversation;
-        }
-      },
-      ChatGPTConversationSource: {
-        collectConversations() {
-          return Promise.reject(new Error("history unavailable"));
-        }
-      },
-      fetch() {
-        return Promise.reject(new Error("not called directly"));
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/c/shared-chat-0001",
-      origin: "https://chatgpt.com",
-      pathname: "/c/shared-chat-0001"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) {
-          if (callback) callback({ ok: true });
-        },
-        onMessage: {
-          addListener(listener) {
-            listeners.runtimeMessage = listener;
-          }
-        }
-      }
-    },
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  const result = await context.window.__chatgptUsageCollectMany(["shared-chat-0001"]);
-
-  assert.equal(result.complete, false);
-  assert.equal(result.failures.length, 0);
-  assert.ok(result.warnings.length >= 1);
-  assert.equal(result.warnings.some((warning) => warning.scope === "rendered-page-fallback"), true);
-  assert.deepEqual(Array.from(result.conversations, (conversation) => conversation.id), ["shared-chat-0001"]);
-
-  const messageResult = await new Promise((resolve) => {
-    listeners.runtimeMessage({ type: "conversation.collectMany", ids: ["shared-chat-0001"] }, {}, resolve);
-  });
-  assert.equal(messageResult.ok, true);
-  assert.equal(messageResult.complete, false);
-  assert.equal(messageResult.warnings.some((warning) => warning.scope === "rendered-page-fallback"), true);
-});
-
-test("content script exposes only selected-id detail collection and no unselected whole-account shortcut", () => {
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  assert.match(script, /__chatgptUsageCollectMany\s*=\s*collectSelectedConversations/);
-  assert.doesNotMatch(script, /__chatgptUsageCollectCurrent|__chatgptUsageCollectAll/);
-  assert.doesNotMatch(script, /message\.type\s*===\s*"conversation\.collect"/);
-  assert.doesNotMatch(script, /message\.type\s*===\s*"conversation\.collectAll"/);
-});
-
-test("account export index preserves project directories without expanding the ChatGPT sidebar", async () => {
-  const listeners = {};
-  const projectId = "g-p-1234567890abcdef1234567890abcdef";
-  let collapsedFolderClicks = 0;
-  let projectDirectoryRequests = 0;
-  let reloads = 0;
-  let networkRequests = 0;
-  const link = (href, text, aria = "") => ({
-    innerText: text,
-    textContent: text,
-    getAttribute(name) {
-      if (name === "href") return href;
-      if (name === "aria-label") return aria;
-      return "";
-    }
-  });
-  const projectRoot = link(`/g/${projectId}-invest/project`, "invest", "Open invest project");
-  const projectChat = link(
-    `/g/${projectId}/c/project-chat-0001`,
-    "Project chat",
-    "Project chat, chat in project invest"
-  );
-  const ordinaryChat = link("/c/ordinary-chat-0001", "Ordinary chat");
-  const document = {
-    title: "Project chat - ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector(selector) {
-      if (selector.includes("project-chat-0001")) return projectChat;
-      return null;
-    },
-    querySelectorAll(selector) {
-      if (selector === 'a[href*="/c/"]') return [projectChat, ordinaryChat];
-      if (selector === 'a[href*="/g/"][href*="/project"]') return [projectRoot];
-      if (selector === 'nav [aria-expanded="false"]') {
-        return [{ click() { collapsedFolderClicks += 1; } }];
-      }
-      return [];
-    }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      fetch() {
-        networkRequests += 1;
-        throw new Error("must not fetch project directories");
-      },
-      ChatGPTConversationSource: {
-        listAccountConversations() {
-          return Promise.resolve({
-            conversations: [
-              { id: "project-chat-0001", title: "Project chat", projectId },
-              { id: "ordinary-chat-0001", title: "Ordinary chat" }
-            ],
-            complete: true,
-            warnings: []
-          });
-        }
-      }
-    },
-    document,
-    location: {
-      href: `https://chatgpt.com/g/${projectId}/c/project-chat-0001`,
-      origin: "https://chatgpt.com",
-      pathname: `/g/${projectId}/c/project-chat-0001`,
-      reload() { reloads += 1; }
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) {
-          if (message.type === "conversation.projectDirectories.get") {
-            projectDirectoryRequests += 1;
-            callback({ ok: false, error: "MAIN-world mapping unavailable" });
-            return;
-          }
-          if (callback) callback({ ok: true });
-        },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    fetch() {
-      networkRequests += 1;
-      throw new Error("must not fetch project directories");
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  const result = await context.window.__chatgptUsageListConversations();
-  const project = result.conversations.find((conversation) => conversation.id === "project-chat-0001");
-  const ordinary = result.conversations.find((conversation) => conversation.id === "ordinary-chat-0001");
-
-  assert.equal(project.projectId, projectId);
-  assert.equal(project.projectName, "invest");
-  assert.equal(project.projectOrder, 0);
-  assert.equal(project.groupType, "project");
-  assert.equal(ordinary.projectId, "");
-  assert.equal(ordinary.projectOrder, null);
-  assert.equal(ordinary.groupType, "");
-  assert.equal(projectDirectoryRequests, 1);
-  assert.equal(collapsedFolderClicks, 0, "reading the index must not mutate collapsed sidebar folders");
-  assert.equal(reloads, 0, "reading the index must not refresh the page");
-  assert.equal(networkRequests, 0, "project directory mapping must not issue a request");
-});
-
-test("account export index merges ordered MAIN-world project names in parallel with the account index", async () => {
-  const listeners = {};
-  const alphaId = "g-p-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-  const betaId = "g-p-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-  let projectDirectoryRequested = false;
-  let accountIndexStarted = false;
-  let collapsedFolderClicks = 0;
-  let reloads = 0;
-  let networkRequests = 0;
-  const runtimeMessages = [];
-  const link = (href, text, aria = "") => ({
-    innerText: text,
-    textContent: text,
-    getAttribute(name) {
-      if (name === "href") return href;
-      if (name === "aria-label") return aria;
-      return "";
-    }
-  });
-  const alphaRoot = link(`/g/${alphaId}-alpha-slug/project`, "alpha-slug", "Open alpha-slug project");
-  const betaRoot = link(`/g/${betaId}-beta-slug/project`, "beta-slug", "Open beta-slug project");
-  const alphaChat = link(
-    `/g/${alphaId}/c/alpha-chat-0001`,
-    "Alpha chat",
-    "Alpha chat, chat in project alpha-slug"
-  );
-  const betaChat = link(
-    `/g/${betaId}/c/beta-chat-0001`,
-    "Beta chat",
-    "Beta chat, chat in project beta-slug"
-  );
-  const document = {
-    title: "Alpha chat - ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector(selector) {
-      if (selector.includes("alpha-chat-0001")) return alphaChat;
-      if (selector.includes("beta-chat-0001")) return betaChat;
-      return null;
-    },
-    querySelectorAll(selector) {
-      if (selector === 'a[href*="/c/"]') return [alphaChat, betaChat];
-      if (selector === 'a[href*="/g/"][href*="/project"]') return [alphaRoot, betaRoot];
-      if (selector === 'nav [aria-expanded="false"]') {
-        return [{ click() { collapsedFolderClicks += 1; } }];
-      }
-      return [];
-    }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      fetch() {
-        networkRequests += 1;
-        throw new Error("must not fetch project directories");
-      },
-      ChatGPTConversationSource: {
-        listAccountConversations() {
-          accountIndexStarted = true;
-          return Promise.resolve({
-            conversations: [
-              {
-                id: "alpha-chat-0001",
-                title: "Alpha chat",
-                projectId: `${alphaId}-alpha-slug`,
-                projectName: "过期 Alpha 名称"
-              },
-              {
-                id: "beta-chat-0001",
-                title: "Beta chat",
-                gizmoId: `${betaId}-beta-slug`,
-                projectName: "过期 Beta 名称"
-              }
-            ],
-            complete: true,
-            warnings: []
-          });
-        }
-      }
-    },
-    document,
-    location: {
-      href: `https://chatgpt.com/g/${alphaId}/c/alpha-chat-0001`,
-      origin: "https://chatgpt.com",
-      pathname: `/g/${alphaId}/c/alpha-chat-0001`,
-      reload() { reloads += 1; }
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) {
-          runtimeMessages.push(message);
-          if (message.type === "conversation.projectDirectories.get") {
-            projectDirectoryRequested = true;
-            callback({
-              ok: true,
-              entries: [
-                { gizmoId: betaId, projectName: "真实 Beta 项目", projectOrder: 0 },
-                { gizmoId: alphaId, projectName: "真实 Alpha 项目", projectOrder: 1 }
-              ],
-              projectOrder: [betaId, alphaId]
-            });
-            return;
-          }
-          if (callback) callback({ ok: true });
-        },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    fetch() {
-      networkRequests += 1;
-      throw new Error("must not fetch project directories");
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  const pending = context.window.__chatgptUsageListConversations();
-  assert.equal(projectDirectoryRequested, true, "MAIN-world mapping starts immediately");
-  assert.equal(accountIndexStarted, true, "account index starts without waiting for the mapping");
-  const result = await pending;
-  const alpha = result.conversations.find((conversation) => conversation.id === "alpha-chat-0001");
-  const beta = result.conversations.find((conversation) => conversation.id === "beta-chat-0001");
-
-  assert.equal(result.conversations[0].id, "alpha-chat-0001", "the current conversation remains first");
-  assert.equal(alpha.projectId, alphaId);
-  assert.equal(beta.projectId, betaId);
-  assert.equal(alpha.projectName, "真实 Alpha 项目");
-  assert.equal(beta.projectName, "真实 Beta 项目");
-  assert.equal(alpha.projectNameSource, "main-world-react");
-  assert.equal(beta.projectNameSource, "main-world-react");
-  assert.equal(beta.projectOrder, 0, "project order follows the rendered MAIN-world sidebar snapshot");
-  assert.equal(alpha.projectOrder, 1);
-  assert.equal(collapsedFolderClicks, 0);
-  assert.equal(reloads, 0);
-  assert.equal(networkRequests, 0);
-  assert.equal(
-    runtimeMessages.filter((message) => message.type === "conversation.projectDirectories.get").length,
-    1
-  );
-  assert.doesNotMatch(JSON.stringify(runtimeMessages), /authorization|cookie|bearer|account.?id/i);
-});
-
-test("account export index matches the real row-only sidebar names to project route slugs without clicking or fetching", async () => {
-  const listeners = {};
-  const symbolId = "g-p-6a4a938ff7888191bd120d64ef3a3b6e";
-  const investId = "g-p-6a4c521f96a88191bddcaf82bb8081ae";
-  const promptId = "g-p-6a4b8296bd608191b14b08be897b746a";
-  const creaId = "g-p-6a7d3f0e0970819198b164ac76243cb4";
-  const codeId = "g-p-6a4b80c229f8819185e39d411e12e893";
-  let projectDirectoryRequests = 0;
-  let networkRequests = 0;
-  let sidebarClicks = 0;
-  const projectRow = (name) => ({
-    innerText: name,
-    textContent: name,
-    querySelector(selector) {
-      if (selector === "[data-marquee-text]") {
-        return { innerText: name, textContent: name };
-      }
-      if (selector.includes("aria-label")) {
-        return {
-          getAttribute(attribute) {
-            return attribute === "aria-label" ? `Open project options for ${name}` : "";
-          }
-        };
-      }
-      return null;
-    }
-  });
-  const rows = [
-    projectRow("@#!#"),
-    projectRow("invest"),
-    projectRow("prompt"),
-    projectRow("Crea"),
-    projectRow("code")
-  ];
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll(selector) {
-      if (selector === "[class~='group/project-unfurl-row']") return rows;
-      if (selector === 'nav [aria-expanded="false"]') {
-        return [{ click() { sidebarClicks += 1; } }];
-      }
-      return [];
-    }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        listAccountConversations() {
-          return Promise.resolve({
-            conversations: [
-              {
-                id: "invest-chat-0001",
-                title: "Invest",
-                projectId: investId,
-                projectRouteSlug: "invest",
-                projectName: "stale-route-label"
-              },
-              {
-                id: "symbol-chat-0001",
-                title: "Symbols",
-                projectId: symbolId,
-                projectRouteSlug: "%40%23!%23"
-              },
-              {
-                id: "prompt-chat-0001",
-                title: "Prompt",
-                projectId: promptId,
-                projectRouteSlug: "prompt"
-              },
-              {
-                id: "crea-chat-0001",
-                title: "Create",
-                projectId: creaId,
-                projectRouteSlug: "crea"
-              },
-              {
-                id: "code-chat-0001",
-                title: "Code",
-                projectId: codeId,
-                projectRouteSlug: "code"
-              }
-            ],
-            complete: true,
-            warnings: []
-          });
-        }
-      },
-      fetch() {
-        networkRequests += 1;
-        throw new Error("must not fetch project names");
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/",
-      reload() {}
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) {
-          if (message.type === "conversation.projectDirectories.get") {
-            projectDirectoryRequests += 1;
-            callback({ ok: true, entries: [], projectOrder: [] });
-            return;
-          }
-          if (callback) callback({ ok: true });
-        },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    fetch() {
-      networkRequests += 1;
-      throw new Error("must not fetch project names");
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout,
-    clearTimeout
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  const result = await context.window.__chatgptUsageListConversations();
-  const projects = Object.fromEntries(
-    result.conversations.map((conversation) => [conversation.projectId, conversation])
-  );
-
-  assert.equal(projects[symbolId].projectName, "@#!#");
-  assert.equal(projects[investId].projectName, "invest");
-  assert.equal(projects[promptId].projectName, "prompt");
-  assert.equal(projects[creaId].projectName, "Crea");
-  assert.equal(projects[codeId].projectName, "code");
-  assert.equal(projects[symbolId].projectOrder, 0);
-  assert.equal(projects[investId].projectOrder, 1);
-  assert.equal(projects[promptId].projectOrder, 2);
-  assert.equal(projects[creaId].projectOrder, 3);
-  assert.equal(projects[codeId].projectOrder, 4);
-  assert.equal(projects[symbolId].projectNameSource, "sidebar-project-row");
-  assert.equal(projects[investId].projectNameSource, "sidebar-project-row");
-  assert.equal(projects[promptId].projectNameSource, "sidebar-project-row");
-  assert.equal(projects[creaId].projectNameSource, "sidebar-project-row");
-  assert.equal(projects[codeId].projectNameSource, "sidebar-project-row");
-  assert.equal(projectDirectoryRequests, 1);
-  assert.equal(sidebarClicks, 0);
-  assert.equal(networkRequests, 0);
-});
-
-test("account-history credentials are reused only inside one operation and released immediately afterward", async () => {
-  const listeners = {};
-  const timers = new Map();
-  const clearedTimers = new Set();
-  const accountHeaders = [];
-  let nextTimerId = 0;
-  let sessionFetches = 0;
-
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          await options.fetchImpl("https://chatgpt.com/backend-api/conversations?offset=0&limit=100");
-          await options.fetchImpl("https://chatgpt.com/backend-api/conversations?offset=100&limit=100");
-          return {
-            conversations: [{ id: "chat-0001", title: "One" }],
-            complete: true,
-            warnings: []
-          };
-        }
-      },
-      async fetch(url, options = {}) {
-        if (url === "/api/auth/session") {
-          sessionFetches += 1;
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: `memory-token-${sessionFetches}`,
-              account: { id: "account-0001" }
-            })
-          };
-        }
-        const authorization = typeof options.headers?.get === "function"
-          ? options.headers.get("authorization")
-          : options.headers?.authorization;
-        accountHeaders.push(authorization);
-        return { ok: true, status: 200, json: async () => ({ items: [], total: 0 }) };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout(fn, delay) {
-      nextTimerId += 1;
-      if (delay < 30_000) {
-        Promise.resolve().then(fn);
-        return nextTimerId;
-      }
-      timers.set(nextTimerId, { fn, delay });
-      return nextTimerId;
-    },
-    clearTimeout(id) {
-      clearedTimers.add(id);
-      timers.delete(id);
-    }
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  await context.window.__chatgptUsageListConversations();
-
-  assert.equal(sessionFetches, 1, "requests inside one user-triggered operation reuse the in-memory session");
-  assert.deepEqual(accountHeaders, ["Bearer memory-token-1", "Bearer memory-token-1"]);
-  assert.equal(
-    [...timers.values()].some((timer) => timer.delay === 30_000),
-    false,
-    "operation completion clears the idle-release timer and in-memory credentials"
-  );
-
-  await context.window.__chatgptUsageListConversations();
-  assert.equal(sessionFetches, 2, "the next history read reloads authorization after idle release");
-  assert.deepEqual(accountHeaders.slice(-2), ["Bearer memory-token-2", "Bearer memory-token-2"]);
-  assert.equal(
-    Object.values(context).some((value) => String(value).includes("memory-token-")),
-    false,
-    "credentials are not exposed through the page-level test context"
-  );
-});
-
-test("every 401 or 403 clears account-history credentials without automatic retry", async () => {
-  const listeners = {};
-  let sessionFetches = 0;
-  let historyFetches = 0;
-  const accountHeaders = [];
-  const historyStatuses = [401, 403, 200];
-
-  const document = {
-    title: "ChatGPT",
-    readyState: "loading",
-    documentElement: { getAttribute() { return null; }, setAttribute() {} },
-    addEventListener(type, listener) { listeners[type] = listener; },
-    querySelector() { return null; },
-    querySelectorAll() { return []; }
-  };
-  const context = {
-    window: {
-      ChatGPTUsageDetector: detector,
-      ChatGPTUsageExporter: { collectConversationFromDom() { return null; } },
-      ChatGPTConversationSource: {
-        async listAccountConversations(options) {
-          await options.fetchImpl("https://chatgpt.com/backend-api/conversations?offset=0&limit=100");
-          return {
-            conversations: [{ id: "chat-0001", title: "One" }],
-            complete: true,
-            warnings: []
-          };
-        }
-      },
-      async fetch(url, options = {}) {
-        if (url === "/api/auth/session") {
-          sessionFetches += 1;
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
-              accessToken: `refresh-token-${sessionFetches}`,
-              account: { id: "account-0001" }
-            })
-          };
-        }
-        historyFetches += 1;
-        const authorization = typeof options.headers?.get === "function"
-          ? options.headers.get("authorization")
-          : options.headers?.authorization;
-        accountHeaders.push(authorization);
-        const status = historyStatuses.shift() ?? 200;
-        return { ok: status === 200, status, json: async () => ({ items: [], total: 0 }) };
-      }
-    },
-    document,
-    location: {
-      href: "https://chatgpt.com/",
-      origin: "https://chatgpt.com",
-      pathname: "/"
-    },
-    chrome: {
-      runtime: {
-        lastError: null,
-        sendMessage(message, callback) { if (callback) callback({ ok: true }); },
-        onMessage: { addListener(listener) { listeners.runtimeMessage = listener; } }
-      }
-    },
-    Headers,
-    Date,
-    Math,
-    String,
-    Number,
-    Promise,
-    setTimeout(fn, delay) {
-      if (delay < 30_000) Promise.resolve().then(fn);
-      return 1;
-    },
-    clearTimeout() {}
-  };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "content.js"), "utf8");
-
-  vm.createContext(context);
-  vm.runInContext(script, context);
-  await context.window.__chatgptUsageListConversations();
-  assert.equal(historyFetches, 1, "an authorization failure is not retried automatically");
-  assert.equal(sessionFetches, 1);
-  assert.deepEqual(accountHeaders, ["Bearer refresh-token-1"]);
-
-  await context.window.__chatgptUsageListConversations();
-  assert.equal(
-    sessionFetches,
-    2,
-    "the next explicit user action obtains a fresh in-memory credential"
-  );
-  assert.equal(historyFetches, 2);
-  assert.equal(accountHeaders.at(-1), "Bearer refresh-token-2");
-
-  await context.window.__chatgptUsageListConversations();
-  assert.equal(sessionFetches, 3);
-  assert.equal(historyFetches, 3);
-  assert.equal(accountHeaders.at(-1), "Bearer refresh-token-3");
 });

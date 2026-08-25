@@ -9,22 +9,22 @@
   "use strict";
 
   var COLORS = [
-    "var(--usage-chart-series-1,#2563eb)",
-    "var(--usage-chart-series-2,#dc2626)",
-    "var(--usage-chart-series-3,#16a34a)",
-    "var(--usage-chart-series-4,#9333ea)",
-    "var(--usage-chart-series-5,#ea580c)",
-    "var(--usage-chart-series-6,#0891b2)",
-    "var(--usage-chart-series-7,#be123c)",
-    "var(--usage-chart-series-8,#4f46e5)",
-    "var(--usage-chart-series-9,#0f766e)",
-    "var(--usage-chart-series-10,#a21caf)",
-    "var(--usage-chart-series-11,#ca8a04)",
-    "var(--usage-chart-series-12,#0369a1)",
-    "var(--usage-chart-series-13,#7c2d12)",
-    "var(--usage-chart-series-14,#4d7c0f)",
-    "var(--usage-chart-series-15,#6d28d9)",
-    "var(--usage-chart-series-16,#c026d3)"
+    "var(--usage-chart-series-1,#047857)",
+    "var(--usage-chart-series-2,#b45309)",
+    "var(--usage-chart-series-3,#0f766e)",
+    "var(--usage-chart-series-4,#c2410c)",
+    "var(--usage-chart-series-5,#15803d)",
+    "var(--usage-chart-series-6,#a16207)",
+    "var(--usage-chart-series-7,#0e7490)",
+    "var(--usage-chart-series-8,#4d7c0f)",
+    "var(--usage-chart-series-9,#115e59)",
+    "var(--usage-chart-series-10,#d97706)",
+    "var(--usage-chart-series-11,#166534)",
+    "var(--usage-chart-series-12,#9a3412)",
+    "var(--usage-chart-series-13,#0891b2)",
+    "var(--usage-chart-series-14,#65a30d)",
+    "var(--usage-chart-series-15,#475569)",
+    "var(--usage-chart-series-16,#a0522d)"
   ];
   var LINE_STYLES = [
     "none",
@@ -36,13 +36,14 @@
     "1 4",
     "7 2 1 2"
   ];
-  var CHART_SIZE = { width: 360, height: 192 };
+  var CHART_SIZE = { width: 360, height: 174 };
   var STORAGE_KEY = "chatgptModelUsageStats.v1";
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var DEFAULT_LANGUAGE = "en";
   var DEFAULT_STATISTICS_MODE = "mapped";
   var DEFAULT_CHART_TYPE = "line";
   var DEFAULT_THEME_MODE = "system";
+  var DEFAULT_STATISTICS_SECTION_ORDER = ["line", "donut", "text"];
   var MAX_STATISTICS_IMPORT_BYTES = 10 * 1024 * 1024;
   var INTERNAL_UNKNOWN_REQUEST = "__unknown_request_model__";
   var INTERNAL_UNKNOWN_RESPONSE = "__unknown_response_model__";
@@ -75,35 +76,35 @@
       "--usage-border-chart-grid": "#d9e1d7",
       "--usage-border-section": "#eef2f7",
       "--usage-border-error": "#fecaca",
-      "--usage-chart-series-1": "#2563eb",
-      "--usage-chart-series-2": "#dc2626",
-      "--usage-chart-series-3": "#16a34a",
-      "--usage-chart-series-4": "#9333ea",
-      "--usage-chart-series-5": "#ea580c",
-      "--usage-chart-series-6": "#0891b2",
-      "--usage-chart-series-7": "#be123c",
-      "--usage-chart-series-8": "#4f46e5",
-      "--usage-chart-series-9": "#0f766e",
-      "--usage-chart-series-10": "#a21caf",
-      "--usage-chart-series-11": "#ca8a04",
-      "--usage-chart-series-12": "#0369a1",
-      "--usage-chart-series-13": "#7c2d12",
-      "--usage-chart-series-14": "#4d7c0f",
-      "--usage-chart-series-15": "#6d28d9",
-      "--usage-chart-series-16": "#c026d3",
+      "--usage-chart-series-1": "#047857",
+      "--usage-chart-series-2": "#b45309",
+      "--usage-chart-series-3": "#0f766e",
+      "--usage-chart-series-4": "#c2410c",
+      "--usage-chart-series-5": "#15803d",
+      "--usage-chart-series-6": "#a16207",
+      "--usage-chart-series-7": "#0e7490",
+      "--usage-chart-series-8": "#4d7c0f",
+      "--usage-chart-series-9": "#115e59",
+      "--usage-chart-series-10": "#d97706",
+      "--usage-chart-series-11": "#166534",
+      "--usage-chart-series-12": "#9a3412",
+      "--usage-chart-series-13": "#0891b2",
+      "--usage-chart-series-14": "#65a30d",
+      "--usage-chart-series-15": "#475569",
+      "--usage-chart-series-16": "#a0522d",
       "--usage-accent-primary": "#245f49",
       "--usage-accent-primary-hover": "#1f513f",
       "--usage-accent-link": "#2563eb",
       "--usage-accent-link-hover": "#1d4ed8",
-      "--usage-effort-max": "#991b1b",
-      "--usage-effort-extended": "#c2410c",
-      "--usage-effort-high": "#b45309",
+      "--usage-effort-max": "#dc2626",
+      "--usage-effort-extended": "#db2777",
+      "--usage-effort-high": "#9333ea",
       "--usage-effort-standard": "#6d28d9",
-      "--usage-effort-medium": "#1d4ed8",
-      "--usage-effort-low": "#047857",
-      "--usage-effort-min": "#0e7490",
-      "--usage-effort-none": "#475569",
-      "--usage-effort-unknown": "#64748b",
+      "--usage-effort-medium": "#4f46e5",
+      "--usage-effort-low": "#2563eb",
+      "--usage-effort-min": "#0284c7",
+      "--usage-effort-none": "#64748b",
+      "--usage-effort-unknown": "#94a3b8",
       "--usage-shadow-accent": "rgba(36,95,73,.2)",
       "--usage-shadow-active-tab": "rgba(24,32,28,.08)",
       "--usage-shadow-tooltip": "rgba(15,23,42,.2)",
@@ -159,34 +160,34 @@
       "--usage-border-chart-grid": "#3e3f4b",
       "--usage-border-section": "#3e3f4b",
       "--usage-border-error": "#7f1d1d",
-      "--usage-chart-series-1": "#60a5fa",
-      "--usage-chart-series-2": "#f87171",
-      "--usage-chart-series-3": "#4ade80",
-      "--usage-chart-series-4": "#c084fc",
-      "--usage-chart-series-5": "#fb923c",
-      "--usage-chart-series-6": "#22d3ee",
-      "--usage-chart-series-7": "#fb7185",
-      "--usage-chart-series-8": "#818cf8",
-      "--usage-chart-series-9": "#2dd4bf",
-      "--usage-chart-series-10": "#e879f9",
-      "--usage-chart-series-11": "#facc15",
-      "--usage-chart-series-12": "#38bdf8",
-      "--usage-chart-series-13": "#fdba74",
-      "--usage-chart-series-14": "#a3e635",
-      "--usage-chart-series-15": "#a78bfa",
-      "--usage-chart-series-16": "#f472b6",
+      "--usage-chart-series-1": "#34d399",
+      "--usage-chart-series-2": "#fbbf24",
+      "--usage-chart-series-3": "#2dd4bf",
+      "--usage-chart-series-4": "#fb923c",
+      "--usage-chart-series-5": "#4ade80",
+      "--usage-chart-series-6": "#facc15",
+      "--usage-chart-series-7": "#22d3ee",
+      "--usage-chart-series-8": "#a3e635",
+      "--usage-chart-series-9": "#5eead4",
+      "--usage-chart-series-10": "#f59e0b",
+      "--usage-chart-series-11": "#86efac",
+      "--usage-chart-series-12": "#fdba74",
+      "--usage-chart-series-13": "#67e8f9",
+      "--usage-chart-series-14": "#bef264",
+      "--usage-chart-series-15": "#cbd5e1",
+      "--usage-chart-series-16": "#f4a261",
       "--usage-accent-primary": "#10a37f",
       "--usage-accent-primary-hover": "#19c37d",
       "--usage-accent-link": "#10a37f",
       "--usage-accent-link-hover": "#19c37d",
-      "--usage-effort-max": "#fca5a5",
-      "--usage-effort-extended": "#fdba74",
-      "--usage-effort-high": "#fde047",
-      "--usage-effort-standard": "#c4b5fd",
-      "--usage-effort-medium": "#93c5fd",
-      "--usage-effort-low": "#86efac",
-      "--usage-effort-min": "#67e8f9",
-      "--usage-effort-none": "#e5e7eb",
+      "--usage-effort-max": "#f87171",
+      "--usage-effort-extended": "#f472b6",
+      "--usage-effort-high": "#c084fc",
+      "--usage-effort-standard": "#a78bfa",
+      "--usage-effort-medium": "#818cf8",
+      "--usage-effort-low": "#60a5fa",
+      "--usage-effort-min": "#38bdf8",
+      "--usage-effort-none": "#cbd5e1",
       "--usage-effort-unknown": "#9ca3af",
       "--usage-shadow-accent": "rgba(16,163,127,.3)",
       "--usage-shadow-active-tab": "rgba(0,0,0,.3)",
@@ -224,9 +225,7 @@
       chartTitle: "模型使用趋势",
       chartXAxis: "日期",
       chartYAxis: "次数",
-      chartLegend: "图例",
       chars: "字符",
-      close: "关闭",
       conversations: "对话",
       conversationIndex: "对话",
       countTimes: "{count} 次",
@@ -242,6 +241,7 @@
       settingsOpen: "打开设置",
       latest10: "最近 10 条",
       loadFailed: "加载失败。",
+      requestTimedOut: "插件响应超时。请刷新后重试。",
       loading: "加载中...",
       modelList: "模型列表",
       modelUsage: "模型使用",
@@ -284,6 +284,7 @@
       chartTypeDonut: "构成（环形）",
       chartCompositionTitle: "模型使用构成",
       chartCompositionBack: "返回模型占比",
+      statisticsFocusBack: "返回",
       chartCompositionEmpty: "当前范围没有可显示的数据。",
       chartCompositionIncomplete: "思考强度占比仅覆盖已保留的最近记录。",
       chartCompositionTotalLabel: "总计",
@@ -319,9 +320,7 @@
       chartTitle: "Model usage trend",
       chartXAxis: "Date",
       chartYAxis: "Count",
-      chartLegend: "Legend",
       chars: "chars",
-      close: "Close",
       conversations: "Conversations",
       conversationIndex: "Conversations",
       countTimes: "{count} times",
@@ -337,6 +336,7 @@
       settingsOpen: "Open settings",
       latest10: "Latest 10",
       loadFailed: "Load failed.",
+      requestTimedOut: "The extension did not respond in time. Refresh and try again.",
       loading: "Loading...",
       modelList: "Model list",
       modelUsage: "Model usage",
@@ -379,6 +379,7 @@
       chartTypeDonut: "Composition (donut)",
       chartCompositionTitle: "Model usage composition",
       chartCompositionBack: "Back to model share",
+      statisticsFocusBack: "Back",
       chartCompositionEmpty: "No data is available in the selected range.",
       chartCompositionIncomplete: "Reasoning-effort share covers retained recent records only.",
       chartCompositionTotalLabel: "Total",
@@ -419,16 +420,16 @@
     exportFormatPdf: "PDF",
     exportFormatPng: "PNG",
     exportFormatDocx: "DOCX",
-    exportAllLoading: "正在读取账号对话索引…",
-    exportListIncomplete: "账号历史读取不完整；只能导出当前列表中已读取到的对话。",
-    exportListUnavailable: "无法读取账号对话索引；请确认当前标签页已登录 ChatGPT，然后重试。",
+    exportAllLoading: "正在读取本地导出缓存…",
+    exportListIncomplete: "当前仅有网页中已打开的对话；导入 ChatGPT 官方数据导出包可选择完整历史。",
+    exportListUnavailable: "本地导出缓存不可用；请重新导入 ChatGPT 官方数据导出包。",
     exportEmpty: "未检测到对话。请在 ChatGPT 对话页打开一段对话后再试。",
     exportRunning: "正在导出…",
     exportDone: "已导出 {name}",
     exportDoneFiles: "{count} 个文件",
     exportArchiveDone: "已将 {count} 个对话打包为 {name}",
     exportPartial: "已导出 {success} 个对话，{failed} 个失败；详情见 ZIP 内报告。",
-    exportIncomplete: "已导出 {success} 个对话，但账号历史不完整；详情见 ZIP 内报告。",
+    exportIncomplete: "已导出 {success} 个对话，但本地导入数据不完整；详情见 ZIP 内报告。",
     exportSingleIncomplete: "已导出 {name}，但使用了页面回退，无法确认对话是否完整。",
     exportFailed: "导出失败:{error}",
     exportOpenPage: "请在 ChatGPT 对话页使用导出。",
@@ -442,14 +443,25 @@
     exportUngrouped: "未归入项目 / 普通对话",
     exportUnknownProject: "未知项目",
     exportUpdated: "更新于 {time}",
-    exportListEmpty: "未找到可导出的账号对话。",
+    exportListEmpty: "当前没有可导出的对话。",
     exportNoSelection: "请先勾选要导出的对话。",
-    exportProgressSelected: "正在读取所选对话…",
+    exportProgressSelected: "正在准备所选对话…",
+    exportImportOfficial: "导入官方数据导出",
+    exportImportHint: "当前对话可直接导出；完整历史、多选和项目选择使用 ChatGPT 官方数据导出 ZIP 或 conversations.json。",
+    exportImporting: "正在本地导入对话…",
+    exportImported: "已在本地导入 {count} 个对话",
+    exportImportFailed: "导入失败：{error}",
+    exportImportTooLarge: "所选文件超过 512 MB。",
+    exportImportInvalid: "所选文件不是有效的 ChatGPT 数据导出。",
     exportSearchPlaceholder: "搜索标题或对话 ID",
     exportSearchEmpty: "没有匹配的对话。",
     exportCancel: "取消",
     exportCancelling: "正在停止；不会再启动新的对话读取…",
     exportCancelled: "导出已取消。",
+    downloadInterrupted: "下载被中断：{error}",
+    downloadMissing: "Chrome 无法确认下载文件。",
+    downloadTimedOut: "等待下载完成超时。",
+    downloadUnavailable: "Chrome 下载状态服务不可用。",
     statisticsData: "统计数据",
     statisticsDataCurrent: "备份 / 恢复",
     statisticsDataExportJson: "备份 JSON",
@@ -458,6 +470,7 @@
     statisticsDataExporting: "正在导出统计数据…",
     statisticsDataExported: "已导出 {name}",
     statisticsDataImportConfirm: "导入会替换当前全部统计记录。确定继续？",
+    statisticsDataImportCancelled: "已取消导入统计数据。",
     statisticsDataImporting: "正在导入统计数据…",
     statisticsDataImported: "已恢复 {count} 次统计记录",
     statisticsDataImportInvalid: "这不是有效的统计备份文件。",
@@ -540,16 +553,16 @@
     exportFormatPdf: "PDF",
     exportFormatPng: "PNG",
     exportFormatDocx: "DOCX",
-    exportAllLoading: "Reading the account conversation index…",
-    exportListIncomplete: "Account history was incomplete; only conversations already present in this list can be exported.",
-    exportListUnavailable: "The account conversation index could not be read. Confirm that the active tab is signed in to ChatGPT, then retry.",
+    exportAllLoading: "Reading the local export cache…",
+    exportListIncomplete: "Only the chat already open on the page is available. Import ChatGPT's official data export to select full history.",
+    exportListUnavailable: "The local export cache is unavailable. Import the official ChatGPT data export again.",
     exportEmpty: "No conversation found. Open a ChatGPT conversation, then try again.",
     exportRunning: "Exporting…",
     exportDone: "Exported {name}",
     exportDoneFiles: "{count} files",
     exportArchiveDone: "Packed {count} conversations into {name}",
     exportPartial: "Exported {success} conversations; {failed} failed. See the report in the ZIP.",
-    exportIncomplete: "Exported {success} conversations, but account history was incomplete. See the report in the ZIP.",
+    exportIncomplete: "Exported {success} conversations, but the local imported data was incomplete. See the report in the ZIP.",
     exportSingleIncomplete: "Exported {name}, but rendered-page fallback was used, so completeness could not be verified.",
     exportFailed: "Export failed: {error}",
     exportOpenPage: "Open a ChatGPT conversation page to export.",
@@ -563,14 +576,25 @@
     exportUngrouped: "Not in a project / regular chats",
     exportUnknownProject: "Unknown project",
     exportUpdated: "Updated {time}",
-    exportListEmpty: "No account conversations are available to export.",
+    exportListEmpty: "No conversation is currently available to export.",
     exportNoSelection: "Select at least one conversation to export.",
-    exportProgressSelected: "Reading selected conversations…",
+    exportProgressSelected: "Preparing selected conversations…",
+    exportImportOfficial: "Import official data export",
+    exportImportHint: "Export the current chat immediately, or import ChatGPT's official data export ZIP / conversations.json for full history, multi-select, and projects.",
+    exportImporting: "Importing conversations locally…",
+    exportImported: "Imported {count} conversations locally",
+    exportImportFailed: "Import failed: {error}",
+    exportImportTooLarge: "The selected file is larger than 512 MB.",
+    exportImportInvalid: "The selected file is not a valid ChatGPT data export.",
     exportSearchPlaceholder: "Search titles or conversation IDs",
     exportSearchEmpty: "No conversations match this search.",
     exportCancel: "Cancel",
     exportCancelling: "Stopping; no new conversation reads will start…",
     exportCancelled: "Export cancelled.",
+    downloadInterrupted: "Download interrupted: {error}",
+    downloadMissing: "Chrome could not confirm the downloaded file.",
+    downloadTimedOut: "Timed out while waiting for the download to finish.",
+    downloadUnavailable: "Chrome download status is unavailable.",
     statisticsData: "Statistics data",
     statisticsDataCurrent: "Backup / restore",
     statisticsDataExportJson: "Backup JSON",
@@ -579,6 +603,7 @@
     statisticsDataExporting: "Exporting statistics data…",
     statisticsDataExported: "Exported {name}",
     statisticsDataImportConfirm: "Importing replaces all current statistics. Continue?",
+    statisticsDataImportCancelled: "Statistics import cancelled.",
     statisticsDataImporting: "Importing statistics data…",
     statisticsDataImported: "Restored {count} usage records",
     statisticsDataImportInvalid: "This is not a valid statistics backup file.",
@@ -1252,6 +1277,27 @@
       : DEFAULT_CHART_TYPE;
   }
 
+  function normalizeStatisticsSectionOrder(value) {
+    var seen = {};
+    var ordered = [];
+    (Array.isArray(value) ? value : []).forEach(function keepSection(rawSection) {
+      var section = String(rawSection || "").trim().toLowerCase();
+      if (
+        DEFAULT_STATISTICS_SECTION_ORDER.indexOf(section) !== -1 &&
+        !seen[section]
+      ) {
+        seen[section] = true;
+        ordered.push(section);
+      }
+    });
+    DEFAULT_STATISTICS_SECTION_ORDER.forEach(function appendMissing(section) {
+      if (!seen[section]) {
+        ordered.push(section);
+      }
+    });
+    return ordered;
+  }
+
   function normalizeThemeMode(value) {
     var clean = String(value || "").trim().toLowerCase();
     return clean === "light" || clean === "dark" ? clean : DEFAULT_THEME_MODE;
@@ -1602,12 +1648,44 @@
     }).slice(0, limit || Object.keys(rowsById).length);
   }
 
-  function sendMessage(message, state) {
+  function withMessageTimeout(promise, timeoutMs, state) {
+    timeoutMs = Number(timeoutMs);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.resolve(promise);
+    }
+    return new Promise(function boundedMessage(resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function timedOut() {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(new Error(text(state, "requestTimedOut")));
+      }, timeoutMs);
+      Promise.resolve(promise).then(function completed(value) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      }, function failed(error) {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+  }
+
+  function sendMessage(message, state, timeoutMs) {
     if (root && typeof root.ChatGPTUsageDashboardMessageHandler === "function") {
       try {
         var localResponse = root.ChatGPTUsageDashboardMessageHandler(message);
         if (localResponse !== undefined) {
-          return Promise.resolve(localResponse);
+          return withMessageTimeout(localResponse, timeoutMs, state);
         }
       } catch (error) {
         return Promise.reject(error);
@@ -1619,7 +1697,7 @@
       return Promise.reject(new Error(text(state, "errorChromeMessaging")));
     }
 
-    return new Promise(function executor(resolve, reject) {
+    return withMessageTimeout(new Promise(function executor(resolve, reject) {
       runtime.sendMessage(message, function handleResponse(response) {
         if (runtime.lastError) {
           reject(new Error(runtime.lastError.message));
@@ -1627,17 +1705,17 @@
         }
         resolve(response);
       });
-    });
+    }), timeoutMs, state);
   }
 
-  function loadStats() {
-    return sendMessage({ type: "usage.get" }).then(function normalize(response) {
+  function loadStats(state, timeoutMs) {
+    return sendMessage({ type: "usage.get" }, state, timeoutMs).then(function normalize(response) {
       return sanitizeDashboardStats(response && response.stats ? response.stats : emptyStats());
     });
   }
 
-  function loadSettings() {
-    return sendMessage({ type: "settings.get" }).then(function normalize(response) {
+  function loadSettings(state, timeoutMs) {
+    return sendMessage({ type: "settings.get" }, state, timeoutMs).then(function normalize(response) {
       return response && response.settings
         ? response.settings
         : {
@@ -1651,6 +1729,7 @@
             showDonutChart: false,
             showTrendChart: true,
             showTextStatistics: true,
+            statisticsSectionOrder: DEFAULT_STATISTICS_SECTION_ORDER.slice(),
             startDate: "",
             endDate: ""
           };
@@ -1666,6 +1745,7 @@
         showDonutChart: false,
         showTrendChart: true,
         showTextStatistics: true,
+        statisticsSectionOrder: DEFAULT_STATISTICS_SECTION_ORDER.slice(),
         startDate: "",
         endDate: ""
       };
@@ -1736,6 +1816,7 @@
       showDonutChart: state.showDonutChart === true,
       showTrendChart: state.showLineChart !== false || state.showDonutChart === true,
       showTextStatistics: state.showTextStatistics !== false,
+      statisticsSectionOrder: normalizeStatisticsSectionOrder(state.statisticsSectionOrder),
       startDate: dateNoLaterThanToday(state.startDate),
       endDate: dateNoLaterThanToday(state.endDate) || defaultEndDate(),
       mappedVisibleModels: Object.keys(mappedSelection).filter(function visible(model) {
@@ -2276,6 +2357,103 @@
     };
   }
 
+  function effortChartSeriesForState(stats, model, state) {
+    stats = sanitizeDashboardStats(stats || {});
+    var dates = dateRange(stats, state && state.startDate, state && state.endDate);
+    var dateLookup = {};
+    dates.forEach(function rememberDate(date) {
+      dateLookup[date] = true;
+    });
+    var statisticsMode = normalizeStatisticsMode(state && state.statisticsMode);
+    var sourceModeFilter = normalizeSourceModeFilter(state && state.sourceModeFilter);
+    var valuesByEffort = {};
+    var observedFromByEffort = {};
+    Object.keys(stats.analyticsByDate || {}).forEach(function collectDate(date) {
+      if (!dateLookup[date]) {
+        return;
+      }
+      var day = stats.analyticsByDate[date] || {};
+      var sourceModes = sourceModeFilter === "all"
+        ? ["chat", "work", "unknown"]
+        : [sourceModeFilter];
+      sourceModes.forEach(function collectSource(sourceMode) {
+        var mappedModels = day[sourceMode] || {};
+        Object.keys(mappedModels).forEach(function collectMappedModel(mappedModel) {
+          Object.keys(mappedModels[mappedModel] || {}).forEach(function collectRelation(key) {
+            var relation = mappedModels[mappedModel][key] || {};
+            var primaryModel = statisticsMode === "internal"
+              ? (String(relation.requestModel || "") || INTERNAL_UNKNOWN_REQUEST)
+              : mappedModel;
+            if (primaryModel !== model) {
+              return;
+            }
+            Object.keys(relation.efforts || {}).forEach(function collectEffort(rawEffort) {
+              var effort = reasoningEffortClass(rawEffort);
+              var count = Math.max(0, Number(relation.efforts[rawEffort]) || 0);
+              if (!count) {
+                return;
+              }
+              valuesByEffort[effort] = valuesByEffort[effort] || {};
+              valuesByEffort[effort][date] =
+                (Number(valuesByEffort[effort][date]) || 0) + count;
+              if (!observedFromByEffort[effort] || date < observedFromByEffort[effort]) {
+                observedFromByEffort[effort] = date;
+              }
+            });
+          });
+        });
+      });
+    });
+    if (!Object.keys(valuesByEffort).length) {
+      rangeEvents(stats, state).forEach(function collectRetainedEvent(event) {
+        if (statisticsEventKey(event, statisticsMode) !== model) {
+          return;
+        }
+        var date = eventDateKey(event);
+        if (!dateLookup[date]) {
+          return;
+        }
+        var effort = reasoningEffortClass(eventReasoningEffort(event));
+        valuesByEffort[effort] = valuesByEffort[effort] || {};
+        valuesByEffort[effort][date] =
+          (Number(valuesByEffort[effort][date]) || 0) + 1;
+        if (!observedFromByEffort[effort] || date < observedFromByEffort[effort]) {
+          observedFromByEffort[effort] = date;
+        }
+      });
+    }
+    var efforts = Object.keys(valuesByEffort).sort(function effortOrder(left, right) {
+      return REASONING_EFFORT_ORDER[left] - REASONING_EFFORT_ORDER[right];
+    });
+    return {
+      dates: dates,
+      interactionType: "effort",
+      series: efforts.map(function toSeries(effort) {
+        return {
+          model: effort,
+          label: effort === "unknown" ? text(state, "reasoningUnspecified") : effort,
+          color: REASONING_EFFORT_COLORS[effort] || REASONING_EFFORT_COLORS.unknown,
+          values: dates.map(function valueForDate(date) {
+            if (observedFromByEffort[effort] && date < observedFromByEffort[effort]) {
+              return null;
+            }
+            return Number(valuesByEffort[effort] && valuesByEffort[effort][date]) || 0;
+          })
+        };
+      })
+    };
+  }
+
+  function statisticsChartData(stats, models, state) {
+    var focusedModel = String(state && (state.focusedModel || state.donutModel) || "");
+    if (focusedModel) {
+      return effortChartSeriesForState(stats, focusedModel, state);
+    }
+    var data = chartSeriesForState(stats, models, state);
+    data.interactionType = "model";
+    return data;
+  }
+
   function svgPath(points) {
     if (!points.length) {
       return "";
@@ -2298,20 +2476,46 @@
 
   function renderChart(stats, models, state) {
     var width = CHART_SIZE.width;
-    var height = CHART_SIZE.height;
+    var twoChartOnly =
+      state &&
+      state.showLineChart !== false &&
+      state.showDonutChart === true &&
+      state.showTextStatistics === false;
+    var height = twoChartOnly ? 150 : CHART_SIZE.height;
     var left = 34;
     var right = 12;
-    var top = 14;
-    var bottom = 44;
-    var data = chartSeriesForState(stats, models, state);
+    var top = 18;
+    var bottom = 38;
+    var data = statisticsChartData(stats, models, state);
+    var interactionType = data.interactionType || "model";
     var colorByModel = statisticsColorMap(state);
     var lineStyleByModel = {};
-    eligibleModelsInRange(state).forEach(function assignStableLineStyle(model) {
-      lineStyleByModel[model] = LINE_STYLES[stableVisualIndex("line:" + model, LINE_STYLES.length)];
+    data.series.forEach(function assignStableLineStyle(series) {
+      lineStyleByModel[series.model] = LINE_STYLES[
+        stableVisualIndex(interactionType + ":" + series.model, LINE_STYLES.length)
+      ];
     });
     data.series.forEach(function keepToggleAndChartColorAligned(series) {
-      series.color = colorByModel[series.model] || series.color;
-      series.lineStyle = lineStyleByModel[series.model] || "none";
+      if (interactionType === "model") {
+        series.color = colorByModel[series.model] || series.color;
+      }
+      series.lineStyle = interactionType === "effort" && series.model === "unknown"
+        ? "3 3"
+        : (lineStyleByModel[series.model] || "none");
+    });
+    var identicalSeries = {};
+    data.series.forEach(function groupIdenticalSeries(series) {
+      var signature = JSON.stringify(series.values || []);
+      identicalSeries[signature] = identicalSeries[signature] || [];
+      identicalSeries[signature].push(series);
+    });
+    Object.keys(identicalSeries).forEach(function offsetIdenticalLines(signature) {
+      var group = identicalSeries[signature];
+      group.forEach(function assignOffset(series, index) {
+        series.visualOffset = group.length > 1
+          ? (index - (group.length - 1) / 2) * 2.4
+          : 0;
+      });
     });
     var max = Math.max(
       1,
@@ -2325,22 +2529,51 @@
     var plotWidth = width - left - right;
     var plotHeight = height - top - bottom;
     var denom = Math.max(1, data.dates.length - 1);
-    var grid = [0, max * 0.25, max * 0.5, max * 0.75, max].map(function gridLine(value) {
+    var labelIndexes = [];
+    if (data.dates.length <= 5) {
+      data.dates.forEach(function addDateLabel(date, index) {
+        labelIndexes.push(index);
+      });
+    } else {
+      for (var labelIndex = 0; labelIndex < 5; labelIndex += 1) {
+        var dateIndex = Math.round(labelIndex * (data.dates.length - 1) / 4);
+        if (labelIndexes[labelIndexes.length - 1] !== dateIndex) {
+          labelIndexes.push(dateIndex);
+        }
+      }
+    }
+    var horizontalGrid = [0, max * 0.25, max * 0.5, max * 0.75, max].map(function gridLine(value) {
       var y = top + plotHeight - (value / max) * plotHeight;
-      return '<line x1="' + left + '" x2="' + (width - right) + '" y1="' + y + '" y2="' + y + '" class="usage-grid"/><text x="' + (left - 6) + '" y="' + (y + 4) + '" class="usage-axis usage-axis-y" text-anchor="end">' + Math.round(value) + "</text>";
+      return '<line x1="' + left + '" x2="' + (width - right) + '" y1="' + y + '" y2="' + y +
+        '" class="usage-grid usage-grid-horizontal"/><text x="' + (left - 6) + '" y="' +
+        (y + 4) + '" class="usage-axis usage-axis-y" text-anchor="end">' +
+        Math.round(value) + "</text>";
+    }).join("");
+    var verticalGrid = labelIndexes.map(function verticalGridLine(index) {
+      var x = left + (index / denom) * plotWidth;
+      return '<line x1="' + x + '" x2="' + x + '" y1="' + top +
+        '" y2="' + (top + plotHeight) + '" class="usage-grid usage-grid-vertical"/>';
     }).join("");
     var focusPaths = [];
     var revealMasks = [];
     var overlapPoints = {};
+    var lineLabelCandidates = [];
     var seriesSvg = data.series.map(function renderSeries(series, seriesIndex) {
       var seriesLabel = series.label || statisticsKeyLabel(state, series.model);
       var points = series.values.map(function point(value, index) {
         if (value === null) {
           return null;
         }
+        var baseY = top + plotHeight - (value / max) * plotHeight;
         return {
           x: left + (index / denom) * plotWidth,
-          y: top + plotHeight - (value / max) * plotHeight,
+          y: Math.max(
+            top + 1,
+            Math.min(
+              top + plotHeight - 1,
+              baseY + (Number(series.visualOffset) || 0)
+            )
+          ),
           value: value,
           date: data.dates[index]
         };
@@ -2366,6 +2599,8 @@
           '" data-model="' + escapeHtml(series.model) + '" data-model-label="' + escapeHtml(seriesLabel) +
           '" data-date="' + point.date + '" data-value="' + point.value +
           '" data-point-index="' + pointIndex + '" data-chart-series="' +
+          escapeHtml(series.model) + '" data-stat-focus-type="' +
+          escapeHtml(interactionType) + '" data-stat-focus-key="' +
           escapeHtml(series.model) + '"/>';
       }).join("");
       var maskId = "usage-line-reveal-" + seriesIndex;
@@ -2376,17 +2611,43 @@
       );
       focusPaths.push(
         '<path class="usage-line-focus usage-line-focus-halo" d="' + pathData +
-          '" fill="none" data-chart-focus="' + escapeHtml(series.model) + '"/>',
+          '" fill="none" data-chart-focus="' + escapeHtml(series.model) +
+          '" data-stat-focus-type="' + escapeHtml(interactionType) +
+          '" data-stat-focus-key="' + escapeHtml(series.model) + '"/>',
         '<path class="usage-line-focus usage-line-focus-color" d="' + pathData +
           '" fill="none" stroke="' + series.color + '" stroke-dasharray="' +
           series.lineStyle + '" data-chart-focus="' +
+          escapeHtml(series.model) + '" data-stat-focus-type="' +
+          escapeHtml(interactionType) + '" data-stat-focus-key="' +
           escapeHtml(series.model) + '"/>'
       );
+      if (points.length) {
+        var lastPoint = points[points.length - 1];
+        lineLabelCandidates.push({
+          key: series.model,
+          label: seriesLabel,
+          color: series.color,
+          total: series.values.reduce(function add(total, value) {
+            return total + (value == null ? 0 : Number(value) || 0);
+          }, 0),
+          pointX: lastPoint.x,
+          pointY: lastPoint.y,
+          y: lastPoint.y
+        });
+      }
       return '<g class="usage-series" data-chart-series-group="' + escapeHtml(series.model) +
         '" style="--usage-line-dash:' + series.lineStyle + '"><path class="usage-line" d="' + pathData +
         '" fill="none" stroke="' + series.color + '" mask="url(#' + maskId +
         ')" data-chart-series="' +
-        escapeHtml(series.model) + '"/>' + circles + "</g>";
+        escapeHtml(series.model) + '" data-stat-focus-type="' +
+        escapeHtml(interactionType) + '" data-stat-focus-key="' +
+        escapeHtml(series.model) + '"/><path class="usage-line-hit" d="' +
+        pathData + '" fill="none" data-stat-focus-type="' +
+        escapeHtml(interactionType) + '" data-stat-focus-key="' +
+        escapeHtml(series.model) + '" data-stat-drill-type="' +
+        escapeHtml(interactionType) + '" data-stat-drill-key="' +
+        escapeHtml(series.model) + '" tabindex="0" role="button"/>' +
+        circles + "</g>";
     }).join("");
     var overlapSvg = Object.keys(overlapPoints).map(function renderOverlapRing(key) {
       var overlap = overlapPoints[key];
@@ -2395,19 +2656,6 @@
           overlap.y + '" r="6.25" data-overlap-count="' + overlap.count + '"/>'
         : "";
     }).join("");
-    var labelIndexes = [];
-    if (data.dates.length <= 5) {
-      data.dates.forEach(function addDateLabel(date, index) {
-        labelIndexes.push(index);
-      });
-    } else {
-      for (var labelIndex = 0; labelIndex < 5; labelIndex += 1) {
-        var dateIndex = Math.round(labelIndex * (data.dates.length - 1) / 4);
-        if (labelIndexes[labelIndexes.length - 1] !== dateIndex) {
-          labelIndexes.push(dateIndex);
-        }
-      }
-    }
     var labels = labelIndexes.map(function renderDateLabel(index) {
       var anchor = index === 0 ? "start" : (index === data.dates.length - 1 ? "end" : "middle");
       var x = left + (index / denom) * plotWidth;
@@ -2416,17 +2664,77 @@
     var axisLabels = [
       '<text x="' + (width - right) + '" y="' + (height - 9) + '" class="usage-axis usage-axis-label" text-anchor="end">' + escapeHtml(text(state, "chartXAxis")) + "</text>"
     ].join("");
+    lineLabelCandidates.sort(function byVerticalPosition(leftLabel, rightLabel) {
+      return leftLabel.y - rightLabel.y;
+    });
+    var minimumLabelGap = lineLabelCandidates.length > 1
+      ? Math.max(6, Math.min(13, (plotHeight - 10) / (lineLabelCandidates.length - 1)))
+      : 13;
+    lineLabelCandidates.forEach(function avoidLabelCollision(candidate, index) {
+      var minimumY = index === 0
+        ? top + 7
+        : lineLabelCandidates[index - 1].y + minimumLabelGap;
+      candidate.y = Math.max(candidate.y, minimumY);
+    });
+    for (var reverseIndex = lineLabelCandidates.length - 1; reverseIndex >= 0; reverseIndex -= 1) {
+      var maximumY = reverseIndex === lineLabelCandidates.length - 1
+        ? top + plotHeight - 3
+        : lineLabelCandidates[reverseIndex + 1].y - minimumLabelGap;
+      lineLabelCandidates[reverseIndex].y = Math.min(
+        lineLabelCandidates[reverseIndex].y,
+        maximumY
+      );
+    }
+    var directLabels = lineLabelCandidates.map(function renderDirectLabel(candidate) {
+      var labelX = width - right - 4;
+      var labelFontSize = lineLabelCandidates.length > 12
+        ? 7
+        : lineLabelCandidates.length > 8 ? 8 : 9;
+      var fullLabel = candidate.label + " · " + candidate.total;
+      var compactLabel = fullLabel.length > 30
+        ? fullLabel.slice(0, 27) + "…"
+        : fullLabel;
+      var hitWidth = Math.max(
+        28,
+        Math.min(156, compactLabel.length * (labelFontSize * 0.62) + 10)
+      );
+      var hitHeight = Math.max(
+        7,
+        Math.min(15, minimumLabelGap - 1)
+      );
+      return '<g class="usage-line-direct-label" data-stat-focus-type="' +
+        escapeHtml(interactionType) + '" data-stat-focus-key="' +
+        escapeHtml(candidate.key) + '" data-stat-drill-type="' +
+        escapeHtml(interactionType) + '" data-stat-drill-key="' +
+        escapeHtml(candidate.key) + '" tabindex="0" role="button">' +
+        '<rect class="usage-line-direct-label-hit" x="' +
+        Math.max(left, labelX - hitWidth) + '" y="' +
+        (candidate.y - hitHeight + 2) + '" width="' + hitWidth +
+        '" height="' + hitHeight + '" rx="3"/>' +
+        '<line x1="' + candidate.pointX + '" y1="' + candidate.pointY +
+        '" x2="' + (labelX - 2) + '" y2="' + candidate.y +
+        '" stroke="' + candidate.color + '"/><text x="' + labelX + '" y="' +
+        (candidate.y - 2) + '" text-anchor="end" fill="' + candidate.color +
+        '" style="font-size:' + labelFontSize + 'px">' +
+        escapeHtml(compactLabel) + "</text><title>" +
+        escapeHtml(fullLabel) + "</title></g>";
+    }).join("");
 
     var chartTitle = text(state, "chartTitle");
+    var plotFrame = '<rect class="usage-plot-background" x="' + left + '" y="' + top +
+      '" width="' + plotWidth + '" height="' + plotHeight + '" rx="2"/>' +
+      '<line class="usage-axis-line" x1="' + left + '" x2="' + left + '" y1="' + top +
+      '" y2="' + (top + plotHeight) + '"/>' +
+      '<line class="usage-axis-line" x1="' + left + '" x2="' + (left + plotWidth) +
+      '" y1="' + (top + plotHeight) + '" y2="' + (top + plotHeight) + '"/>';
     return [
       '<div class="usage-chart-wrap usage-line-chart-wrap">',
       '<div class="usage-chart-head"><strong>' + escapeHtml(chartTitle) +
         '</strong><small>' + escapeHtml(text(state, "chartYAxis")) + "</small></div>",
-      renderChartLegend(state, { showPercentage: true }),
       '<svg viewBox="0 0 ' + width + " " + height + '" class="usage-chart" role="img" aria-label="' +
         escapeHtml(chartTitle) + '"><defs>' + revealMasks.join("") + "</defs>" +
-        axisLabels + grid + labels + seriesSvg + overlapSvg +
-        focusPaths.join("") + "</svg>",
+        plotFrame + horizontalGrid + verticalGrid + axisLabels + labels + seriesSvg + overlapSvg +
+        focusPaths.join("") + directLabels + "</svg>",
       '<div class="usage-tooltip" hidden></div>',
       "</div>"
     ].join("");
@@ -2444,7 +2752,7 @@
     unknown: "var(--usage-effort-unknown)"
   };
 
-  function donutSlices(items, total, attribute) {
+  function donutSlices(items, total, interactionType) {
     var offset = 0;
     return items.map(function renderSlice(item, index) {
       var percentage = total > 0 ? (Number(item.count) || 0) / total * 100 : 0;
@@ -2458,22 +2766,29 @@
         (index * 0.055).toFixed(3) + 's" stroke-dasharray="' +
         percentage.toFixed(4) + " " + Math.max(0, 100 - percentage).toFixed(4) +
         '" stroke-dashoffset="' + (-start).toFixed(4) + '" transform="rotate(-90 100 100)" ' +
-        attribute + '="' + escapeHtml(item.key) + '" tabindex="0" role="button" aria-label="' +
-        escapeHtml(label) + '"><title>' + escapeHtml(label) + "</title></circle>";
+        (interactionType === "effort" ? "data-donut-effort" : "data-donut-model") +
+        '="' + escapeHtml(item.key) + '" data-stat-focus-type="' +
+        escapeHtml(interactionType) + '" data-stat-focus-key="' +
+        escapeHtml(item.key) + '" data-stat-drill-type="' +
+        escapeHtml(interactionType) + '" data-stat-drill-key="' +
+        escapeHtml(item.key) + '" tabindex="0" role="button" aria-label="' +
+        escapeHtml(label) + '"></circle>';
     }).join("");
   }
 
-  function renderDonutLegend(items, total, interactiveAttribute) {
-    return '<div class="usage-donut-legend">' + items.map(function renderLegend(item) {
+  function renderDonutLabels(items, total, interactionType) {
+    return '<div class="usage-donut-labels">' + items.map(function renderLabel(item) {
       var percentage = total > 0 ? (Number(item.count) || 0) / total * 100 : 0;
-      var interactive = interactiveAttribute
-        ? ' tabindex="0" role="button" ' + interactiveAttribute + '="' + escapeHtml(item.key) + '"'
-        : ' tabindex="0" role="button" data-effort-filter="' + escapeHtml(reasoningEffortClass(item.key)) + '"';
-      return '<div class="usage-donut-legend-row"' + interactive + '><i style="--slice:' +
-        item.color + '"></i><span style="color:' + item.color + '">' + escapeHtml(item.label) + '</span><b style="--slice:' +
+      return '<button type="button" class="usage-donut-label" data-stat-focus-type="' +
+        escapeHtml(interactionType) + '" data-stat-focus-key="' +
+        escapeHtml(item.key) + '" data-stat-drill-type="' +
+        escapeHtml(interactionType) + '" data-stat-drill-key="' +
+        escapeHtml(item.key) + '"><i style="--slice:' +
+        item.color + '"></i><span style="color:' + item.color + '">' +
+        escapeHtml(item.label) + '</span><b style="--slice:' +
         item.color + '">' +
         escapeHtml(String(Number(item.count) || 0)) + '</b><small>' +
-        percentage.toFixed(1) + "%</small></div>";
+        percentage.toFixed(1) + "%</small></button>";
     }).join("") + "</div>";
   }
 
@@ -2531,10 +2846,12 @@
 
   function renderDonutChart(stats, models, state) {
     state.stats = sanitizeDashboardStats(stats || {});
-    if (state.donutModel && models.indexOf(state.donutModel) === -1) {
+    if (state.focusedModel && eligibleModelsInRange(state).indexOf(state.focusedModel) === -1) {
+      state.focusedModel = "";
+      state.focusedEffort = "";
       state.donutModel = "";
     }
-    var drilledModel = String(state.donutModel || "");
+    var drilledModel = String(state.focusedModel || state.donutModel || "");
     var items = drilledModel
       ? effortDonutItems(state, drilledModel)
       : modelDonutItems(state, models);
@@ -2544,10 +2861,7 @@
     var title = drilledModel
       ? statisticsKeyLabel(state, drilledModel)
       : text(state, "chartCompositionTitle");
-    var action = drilledModel
-      ? '<button type="button" class="usage-donut-back" data-donut-back>' +
-        escapeHtml(text(state, "chartCompositionBack")) + "</button>"
-      : '<small>' + escapeHtml(text(state, "chartYAxis")) + "</small>";
+    var action = '<small>' + escapeHtml(text(state, "chartYAxis")) + "</small>";
     var warning = drilledModel && state.stats.analyticsHistoryComplete === false
       ? '<div class="usage-donut-warning">' +
         escapeHtml(text(state, "chartCompositionIncomplete")) + "</div>"
@@ -2556,13 +2870,12 @@
       return [
         '<div class="usage-chart-wrap usage-donut-wrap">',
         '<div class="usage-chart-head"><strong>' + escapeHtml(title) + "</strong>" + action + "</div>",
-        drilledModel ? "" : renderChartLegend(state, { showPercentage: true }),
         warning,
         '<div class="usage-empty">' + escapeHtml(text(state, "chartCompositionEmpty")) + "</div>",
         "</div>"
       ].join("");
     }
-    var sliceAttribute = drilledModel ? "data-donut-effort" : "data-donut-model";
+    var interactionType = drilledModel ? "effort" : "model";
     var centerLabel = text(state, "chartCompositionTotalLabel");
     return [
       '<div class="usage-chart-wrap usage-donut-wrap">',
@@ -2571,14 +2884,12 @@
       '<div class="usage-donut-layout' +
         '"><svg class="usage-donut" viewBox="0 0 200 200" role="img" aria-label="' +
         escapeHtml(title) + '"><circle class="usage-donut-track" cx="100" cy="100" r="66" fill="none" stroke-width="28"/>' +
-        donutSlices(items, total, sliceAttribute) +
+        donutSlices(items, total, interactionType) +
         '<text class="usage-donut-total" x="100" y="96" text-anchor="middle" style="font-size:' +
         donutTotalFontSize(total) + 'px">' +
         escapeHtml(String(total)) + '</text><text class="usage-donut-center-label" x="100" y="116" text-anchor="middle">' +
         escapeHtml(centerLabel) + "</text></svg>" +
-        (drilledModel
-          ? renderDonutLegend(items, total, "")
-          : renderChartLegend(state, { showPercentage: true })) +
+        renderDonutLabels(items, total, interactionType) +
         "</div></div>"
     ].join("");
   }
@@ -2678,40 +2989,6 @@
     return statisticsColorMap(state)[String(key || "")] || COLORS[0];
   }
 
-  function renderChartLegend(state, options) {
-    options = options || {};
-    state.stats = sanitizeDashboardStats(state.stats || {});
-    var totals = statisticsTotalsInRange(state.stats, state);
-    var models = eligibleModelsInRange(state);
-    var overallTotal = models.reduce(function add(total, model) {
-      return total + (Number(totals[model]) || 0);
-    }, 0);
-    var colorByModel = statisticsColorMap(state);
-    if (models.length === 0) {
-      if (state.loading) {
-        return renderLoadingSkeleton(2);
-      }
-      return '<div class="usage-empty">' + escapeHtml(text(state, "noModelRecords")) + "</div>";
-    }
-    return '<div class="usage-chart-legend" role="group" aria-label="' +
-      escapeHtml(text(state, "chartLegend")) + '">' + models.map(function modelLegend(model) {
-      var active = Boolean(state.selectedModels[model]);
-      var count = Number(totals[model]) || 0;
-      var percentage = overallTotal > 0 ? count / overallTotal * 100 : 0;
-      return '<label class="usage-chart-legend-row' + (active ? " active" : "") +
-        '" data-chart-model="' + escapeHtml(model) + '" style="--series:' +
-        colorByModel[model] + '"><input class="usage-chart-legend-toggle" type="checkbox" data-model-toggle="' +
-        escapeHtml(model) + '"' + (active ? " checked" : "") + ' aria-label="' +
-        escapeHtml(statisticsKeyLabel(state, model)) + '"><i aria-hidden="true"></i><span style="color:' +
-        colorByModel[model] + '">' + escapeHtml(statisticsKeyLabel(state, model)) +
-        '</span><b>' + escapeHtml(String(count)) + '</b>' +
-        (options.showPercentage
-          ? '<small>' + percentage.toFixed(1) + "%</small>"
-          : '<small aria-hidden="true"></small>') +
-        "</label>";
-    }).join("") + "</div>";
-  }
-
   function renderFeaturePills(features, state) {
     return features && features.length
       ? '<div class="usage-count-features">' + features.map(function featureHtml(feature) {
@@ -2744,16 +3021,22 @@
 
     return rows.map(function rowHtml(row) {
       var features = renderFeaturePills(row.features, state);
+      var focused = String(state.focusedModel || state.donutModel || "") === row.model;
       return [
-        '<details class="usage-count-record usage-mapped-record" data-mapped-model="' + escapeHtml(row.model) + '">',
+        '<details class="usage-count-record usage-mapped-record" data-mapped-model="' +
+          escapeHtml(row.model) + '" data-primary-model="' + escapeHtml(row.model) + '"' +
+          (focused ? " open" : "") + ">",
         '<summary class="usage-count-row">',
-        '<span><strong style="color:' + statisticsColorForKey(state, row.model) + '">' +
+        '<span><strong class="usage-stat-model-name" data-stat-focus-type="model" data-stat-focus-key="' +
+          escapeHtml(row.model) + '" data-stat-drill-type="model" data-stat-drill-key="' +
+          escapeHtml(row.model) + '" tabindex="0" role="button" style="color:' +
+          statisticsColorForKey(state, row.model) + '">' +
           escapeHtml(row.model) + '</strong>' + features + "</span>",
         '<span class="usage-count-numbers"><b>' +
           escapeHtml(text(state, "countTimes", { count: row.total })) + "</b></span>",
         "</summary>",
         '<div class="usage-count-details" data-model-record-details="' + escapeHtml(row.model) + '">' +
-          renderModelSessions(stats, row.model, state) + "</div>",
+          renderMappedModelDetails(stats, row.model, state) + "</div>",
         "</details>"
       ].join("");
     }).join("");
@@ -2824,13 +3107,13 @@
     });
   }
 
-  function renderInternalResponseRow(state, relation) {
+  function renderInternalResponseRow(state, relation, showEffortHeading) {
     var responseModel = relation.responseModel || INTERNAL_UNKNOWN_RESPONSE;
     var responseLabel = statisticsKeyLabel(state, responseModel);
     var effortHtml = countMapSummary(state, relation.efforts, function effortLabel(effort) {
       return effort === "unspecified" ? text(state, "reasoningUnspecified") : effort;
     }, reasoningEffortClass);
-    var featureRows = Object.keys(relation.features || {}).filter(function positive(feature) {
+    var featureRows = Object.keys(relation._effortFiltered ? {} : (relation.features || {})).filter(function positive(feature) {
       return Number(relation.features[feature]) > 0;
     }).map(function toFeature(feature) {
       return {
@@ -2845,13 +3128,21 @@
     return [
       '<details class="usage-internal-response" data-response-model-child="' + escapeHtml(responseModel) + '">',
       '<summary class="usage-internal-response-summary">',
-      '<span class="usage-internal-response-model-row"><span class="usage-relation-values usage-internal-response-value"><span class="usage-internal-response-copy"><code style="color:' +
-        statisticsColorForKey(state, responseModel) + '">' + escapeHtml(responseLabel) + "</code>" +
-        '<span class="usage-internal-efforts-inline" aria-label="' +
+      '<span class="usage-internal-response-model-row"><span class="usage-relation-values usage-internal-response-value"><span class="usage-internal-response-copy">' +
+        (showEffortHeading
+          ? '<span class="usage-internal-response-headings">' +
+            '<small class="usage-internal-response-heading">' +
+            escapeHtml(text(state, "responseModelChild")) + "</small>" +
+            '<small class="usage-internal-effort-heading">' +
+            escapeHtml(text(state, "reasoningEffort")) + "</small></span>"
+          : "") +
+        '<span class="usage-internal-response-data"><code style="color:' +
+        statisticsColorForKey(state, responseModel) + '">' +
+        escapeHtml(responseLabel) + '</code><span class="usage-internal-effort-values" aria-label="' +
         escapeHtml(text(state, "reasoningEffort")) + '">' +
-        (effortHtml || '<span class="usage-effort-token" data-effort-filter="unknown" role="button" tabindex="0"><b class="usage-effort-unknown">' +
+        (effortHtml || '<span class="usage-effort-token" data-effort-filter="unknown" data-stat-focus-type="effort" data-stat-focus-key="unknown" role="button" tabindex="0"><b class="usage-effort-unknown">' +
           escapeHtml(text(state, "reasoningUnspecified")) + "</b></span>") +
-        "</span></span>" +
+        "</span></span></span>" +
         '<b class="usage-internal-subcount">' +
         escapeHtml(String(Number(relation.count) || 0)) + "</b></span></span>",
       featureHtml,
@@ -2871,21 +3162,26 @@
       return '<div class="usage-empty">' + escapeHtml(text(state, "noModelRecords")) + "</div>";
     }
     return groups.map(function renderGroup(group) {
+      var responses = group.responses.filter(function keepPositiveRelation(relation) {
+        return Number(relation && relation.count) > 0;
+      });
       return [
         '<section class="usage-internal-request" data-request-model-group="' +
+          escapeHtml(group.requestModel) + '" data-primary-model="' +
           escapeHtml(group.requestModel) + '">',
         '<div class="usage-internal-request-head">',
         '<span class="usage-internal-model-copy"><small>' + escapeHtml(text(state, "requestModelGroup")) +
-          '</small><code style="color:' + statisticsColorForKey(state, group.requestModel) + '">' +
+          '</small><code class="usage-stat-model-name" data-stat-focus-type="model" data-stat-focus-key="' +
+          escapeHtml(group.requestModel) + '" data-stat-drill-type="model" data-stat-drill-key="' +
+          escapeHtml(group.requestModel) + '" tabindex="0" role="button" style="color:' +
+          statisticsColorForKey(state, group.requestModel) + '">' +
           escapeHtml(statisticsKeyLabel(state, group.requestModel)) + "</code></span>",
         '<b class="usage-internal-count">' +
           escapeHtml(text(state, "countTimes", { count: Number(group.count) || 0 })) + "</b>",
         "</div>",
         '<div class="usage-internal-response-section">',
-        '<small class="usage-internal-response-heading">' +
-          escapeHtml(text(state, "responseModelChild")) + "</small>",
-        '<div class="usage-internal-responses">' + group.responses.map(function renderResponse(relation) {
-          return renderInternalResponseRow(state, relation);
+        '<div class="usage-internal-responses">' + responses.map(function renderResponse(relation, responseIndex) {
+          return renderInternalResponseRow(state, relation, responseIndex === 0);
         }).join("") + "</div>",
         "</div>",
         "</section>"
@@ -3050,6 +3346,32 @@
     }).join("");
   }
 
+  function mappedModelEffortCounts(stats, model, state) {
+    var counts = {};
+    aggregateRelationsInRange(stats || {}, state || {}, model).forEach(function addRelationEfforts(entry) {
+      if (!entry || entry.model !== model || !entry.relation) {
+        return;
+      }
+      Object.keys(entry.relation.efforts || {}).forEach(function addEffort(rawEffort) {
+        var effort = reasoningEffortClass(rawEffort);
+        counts[effort] = (Number(counts[effort]) || 0) +
+          Math.max(0, Number(entry.relation.efforts[rawEffort]) || 0);
+      });
+    });
+    return counts;
+  }
+
+  function renderMappedModelDetails(stats, model, state) {
+    var effortCounts = mappedModelEffortCounts(stats, model, state);
+    var effortHtml = countMapSummary(state, effortCounts, function effortLabel(effort) {
+      return effort === "unknown" ? text(state, "reasoningUnspecified") : effort;
+    }, reasoningEffortClass);
+    return (effortHtml
+      ? '<div class="usage-mapped-effort-summary" aria-label="' +
+        escapeHtml(text(state, "reasoningEffort")) + '">' + effortHtml + "</div>"
+      : "") + renderModelSessions(stats, model, state);
+  }
+
   function sourceModeLabel(state, mode) {
     var normalized = normalizeDashboardSourceMode(mode);
     if (normalized === "chat") return text(state, "sourceModeChat");
@@ -3068,6 +3390,53 @@
     if (/^(?:min|minimal)$/.test(clean)) return "min";
     if (clean === "none") return "none";
     return "unknown";
+  }
+
+  function countForReasoningEffort(counts, effort) {
+    var normalized = reasoningEffortClass(effort);
+    return Object.keys(counts || {}).reduce(function addMatching(total, rawEffort) {
+      return reasoningEffortClass(rawEffort) === normalized
+        ? total + Math.max(0, Number(counts[rawEffort]) || 0)
+        : total;
+    }, 0);
+  }
+
+  function filterRelationByEffort(relation, effort) {
+    var source = relation && typeof relation === "object" ? relation : {};
+    var normalized = reasoningEffortClass(effort);
+    var count = countForReasoningEffort(source.efforts, normalized);
+    var filteredEfforts = {};
+    if (count > 0) {
+      filteredEfforts[normalized] = count;
+    }
+    var conversations = {};
+    Object.keys(source.conversations || {}).forEach(function filterConversation(id) {
+      var conversation = source.conversations[id] || {};
+      var conversationCount = countForReasoningEffort(conversation.efforts, normalized);
+      if (
+        !conversationCount &&
+        !Object.keys(conversation.efforts || {}).length &&
+        count === Number(source.count)
+      ) {
+        conversationCount = Math.max(0, Number(conversation.count) || 0);
+      }
+      if (!conversationCount) {
+        return;
+      }
+      var conversationEfforts = {};
+      conversationEfforts[normalized] = conversationCount;
+      conversations[id] = Object.assign({}, conversation, {
+        count: conversationCount,
+        efforts: conversationEfforts
+      });
+    });
+    return Object.assign({}, source, {
+      count: count,
+      efforts: filteredEfforts,
+      conversations: conversations,
+      features: {},
+      _effortFiltered: true
+    });
   }
 
   var REASONING_EFFORT_ORDER = {
@@ -3104,6 +3473,8 @@
       var className = typeof valueClass === "function" ? String(valueClass(key) || "") : "";
       return '<span' + (className
         ? ' class="usage-effort-token" data-effort-filter="' + escapeHtml(className) +
+          '" data-stat-focus-type="effort" data-stat-focus-key="' +
+          escapeHtml(className) +
           '" role="button" tabindex="0" aria-label="' + escapeHtml(valueLabel(key)) + '"'
         : "") + '><b' + (className ? ' class="usage-effort-' + escapeHtml(className) + '"' : "") + ">" +
         escapeHtml(valueLabel(key)) + '</b><span class="usage-subcount">' +
@@ -3207,7 +3578,8 @@
       });
       if (relation.legacyUnlinked) {
         return [
-          '<details class="usage-model-relation legacy-unlinked">',
+          '<details class="usage-model-relation legacy-unlinked" data-primary-model="' +
+            escapeHtml(model) + '">',
           '<summary class="usage-relation-summary" data-relation-toggle aria-label="' +
             escapeHtml(text(state, "relationConversations") + " · " + conversations.length) + '">',
           '<span class="usage-relation-head"><strong>' + escapeHtml(text(state, "legacyUnlinked")) +
@@ -3240,13 +3612,14 @@
           statisticsColorForKey(state, responseModel || INTERNAL_UNKNOWN_RESPONSE) + '">' +
           escapeHtml(responseModel || text(state, "responsePending")) + "</code></span></strong>";
       return [
-        '<details class="usage-model-relation">',
+        '<details class="usage-model-relation" data-primary-model="' +
+          escapeHtml(model) + '">',
         '<summary class="usage-relation-summary" data-relation-toggle aria-label="' +
           escapeHtml(text(state, "relationConversations") + " · " + conversations.length) + '">',
         '<span class="usage-relation-head">' + modelHead + "<span>" +
           escapeHtml(String(Number(relation.count) || 0)) + "</span></span>",
         '<span class="usage-relation-dimension usage-relation-efforts-only"><span class="usage-relation-values">' +
-          (effortHtml || '<span class="usage-effort-token" data-effort-filter="unknown" role="button" tabindex="0"><b class="usage-effort-unknown">' + escapeHtml(text(state, "reasoningUnspecified")) +
+          (effortHtml || '<span class="usage-effort-token" data-effort-filter="unknown" data-stat-focus-type="effort" data-stat-focus-key="unknown" role="button" tabindex="0"><b class="usage-effort-unknown">' + escapeHtml(text(state, "reasoningUnspecified")) +
             '</b><span class="usage-subcount">' + escapeHtml(String(Number(relation.count) || 0)) +
             "</span></span>") + "</span></span>",
         "</summary>",
@@ -3523,7 +3896,29 @@
     ];
     return '<div class="usage-view-tabs" role="tablist">' + views.map(function viewButton(view) {
       var active = normalizeView(state.activeView) === view.id;
-      return '<button class="usage-view-tab' + (active ? " active" : "") + '" type="button" role="tab" aria-selected="' + (active ? "true" : "false") + '" data-view-tab="' + view.id + '">' + escapeHtml(view.label) + "</button>";
+      var modelMenu = "";
+      if (view.id === "chart") {
+        var models = eligibleModelsInRange(state);
+        modelMenu = '<div class="usage-view-model-menu" role="group" aria-label="' +
+          escapeHtml(text(state, "modelUsage")) + '">' +
+          (models.length
+            ? models.map(function renderModelToggle(model) {
+              var selected = Boolean(state.selectedModels && state.selectedModels[model]);
+              return '<button type="button" class="usage-view-model-option' +
+                (selected ? " active" : "") + '" data-model-toggle="' +
+                escapeHtml(model) + '" aria-pressed="' + (selected ? "true" : "false") +
+                '" style="--series:' + statisticsColorForKey(state, model) +
+                '">' + escapeHtml(statisticsKeyLabel(state, model)) + "</button>";
+            }).join("")
+            : '<div class="usage-empty">' + escapeHtml(text(state, "noModelRecords")) + "</div>") +
+          "</div>";
+      }
+      return '<div class="usage-view-tab-item usage-view-tab-item-' + view.id + '"' +
+        (view.id === "chart" && state.modelMenuOpen ? ' data-model-menu-open="true"' : "") + ">" +
+        '<button class="usage-view-tab' + (active ? " active" : "") +
+        '" type="button" role="tab" aria-selected="' + (active ? "true" : "false") +
+        '" data-view-tab="' + view.id + '">' + escapeHtml(view.label) + "</button>" +
+        modelMenu + "</div>";
     }).join("") + "</div>";
   }
 
@@ -3561,9 +3956,6 @@
     if (name === "settings") {
       return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.6-1H3v-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06L7.06 4.2l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6V3h4v.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.6 1h.1v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>';
     }
-    if (name === "close") {
-      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.75 6.75 10.5 10.5M17.25 6.75l-10.5 10.5"/></svg>';
-    }
     return "";
   }
 
@@ -3572,7 +3964,6 @@
     var statisticsMode = normalizeStatisticsMode(state.statisticsMode);
     var themeMode = normalizeThemeMode(state.themeMode);
     var language = currentLanguage(state);
-    var activeView = normalizeView(state.activeView);
     var languageOptions = [
       { id: "zh", label: text(state, "languageToggleZh") },
       { id: "en", label: "English" }
@@ -3632,8 +4023,7 @@
       '<input class="usage-statistics-data-file" data-statistics-data-file type="file" accept=".json,application/json" hidden>'
     ].join("");
     var categories = basicCategories.slice();
-    if (activeView === "chart") {
-      var sourceOptions = [
+    var sourceOptions = [
       { id: "all", key: "sourceFilterAll" },
       { id: "chat", key: "sourceFilterChat" },
       { id: "work", key: "sourceFilterWork" }
@@ -3646,7 +4036,7 @@
         mode === item.id
       );
     }).join("");
-      var statisticsModeOptions = [
+    var statisticsModeOptions = [
       { id: "mapped", key: "statisticsModeMapped" },
       { id: "internal", key: "statisticsModeInternal" }
     ].map(function statisticsModeOption(item) {
@@ -3658,7 +4048,7 @@
         statisticsMode === item.id
       );
     }).join("");
-      var sectionVisibilityItems = [
+    var sectionVisibilityItems = [
       {
         id: "line",
         key: "statisticsSectionTrend",
@@ -3674,51 +4064,53 @@
         key: "statisticsSectionText",
         active: state.showTextStatistics !== false
       }
-      ];
-      var sectionVisibilityOptions = sectionVisibilityItems.map(function sectionVisibilityOption(item) {
-        return '<label class="usage-statistics-visibility-option"><input type="checkbox" data-statistics-section="' +
-          item.id + '"' + (item.active ? " checked" : "") + "><span>" +
-          escapeHtml(text(state, item.key)) +
-          '</span><i class="usage-statistics-visibility-indicator" aria-hidden="true"></i></label>';
-      }).join("");
-      var enabledSectionCount = sectionVisibilityItems.filter(function enabled(item) {
-        return item.active;
-      }).length;
-      var enabledSectionSummary = enabledSectionCount === sectionVisibilityItems.length
-        ? text(state, "statisticsSectionAll")
-        : sectionVisibilityItems.filter(function enabled(item) {
-            return item.active;
-          }).map(function shortSectionLabel(item) {
-            return text(state, item.id === "line"
-              ? "statisticsSectionTrendShort"
-              : item.id === "donut"
-                ? "statisticsSectionDonutShort"
-                : "statisticsSectionTextShort");
-          }).join(" + ") || text(state, "statisticsSectionNone");
-      categories.push(
-        renderSettingsCategory(
-          state,
-          "source",
-          text(state, "source"),
-          text(state, mode === "chat" ? "sourceFilterChat" : mode === "work" ? "sourceFilterWork" : "sourceFilterAll"),
-          sourceOptions
-        ),
-        renderSettingsCategory(
-          state,
-          "statistics",
-          text(state, "statisticsMode"),
-          text(state, statisticsMode === "internal" ? "statisticsModeInternal" : "statisticsModeMapped"),
-          statisticsModeOptions
-        ),
-        renderSettingsCategory(
-          state,
-          "sections",
-          text(state, "statisticsSections"),
-          enabledSectionSummary,
-          sectionVisibilityOptions
-        )
+    ];
+    var sectionVisibilityOptions = sectionVisibilityItems.map(function sectionVisibilityOption(item) {
+      return renderSettingsOption(
+        state,
+        "data-statistics-section",
+        item.id,
+        text(state, item.key),
+        item.active
+      );
+    }).join("");
+    var enabledSectionCount = sectionVisibilityItems.filter(function enabled(item) {
+      return item.active;
+    }).length;
+    var enabledSectionSummary = enabledSectionCount === sectionVisibilityItems.length
+      ? text(state, "statisticsSectionAll")
+      : sectionVisibilityItems.filter(function enabled(item) {
+          return item.active;
+        }).map(function shortSectionLabel(item) {
+          return text(state, item.id === "line"
+            ? "statisticsSectionTrendShort"
+            : item.id === "donut"
+              ? "statisticsSectionDonutShort"
+              : "statisticsSectionTextShort");
+        }).join(" + ") || text(state, "statisticsSectionNone");
+    categories.push(
+      renderSettingsCategory(
+        state,
+        "source",
+        text(state, "source"),
+        text(state, mode === "chat" ? "sourceFilterChat" : mode === "work" ? "sourceFilterWork" : "sourceFilterAll"),
+        sourceOptions
+      ),
+      renderSettingsCategory(
+        state,
+        "statistics",
+        text(state, "statisticsMode"),
+        text(state, statisticsMode === "internal" ? "statisticsModeInternal" : "statisticsModeMapped"),
+        statisticsModeOptions
+      ),
+      renderSettingsCategory(
+        state,
+        "sections",
+        text(state, "statisticsSections"),
+        enabledSectionSummary,
+        sectionVisibilityOptions
       )
-    }
+    );
     categories.push(
       renderSettingsCategory(
         state,
@@ -3730,7 +4122,9 @@
       )
     );
     return [
-      '<details class="usage-settings-menu"' + (state.settingsMenuOpen ? " open" : "") + ">",
+      '<details class="usage-settings-menu" data-interaction-mode="' +
+        (state.settingsInteractionMode === "click" ? "click" : "hover") + '"' +
+        (state.settingsMenuOpen ? " open" : "") + ">",
       '<summary class="usage-header-action usage-settings-trigger" aria-label="' +
         escapeHtml(text(state, "settingsOpen")) + '" title="' + escapeHtml(text(state, "settingsOpen")) + '">' +
         renderHeaderIcon("settings") + '<span class="usage-visually-hidden">' +
@@ -3841,11 +4235,14 @@
       }
     });
     (Array.isArray(list) ? list : []).forEach(function addConversation(conversation, listIndex) {
-      if (!conversation || !conversation.id || conversation.current) {
+      if (!conversation || !conversation.id) {
         return;
       }
       var projectId = String(conversation.projectId || "").trim();
       var isProject = Boolean(conversation.groupType === "project" && projectId);
+      if (conversation.current) {
+        return;
+      }
       var key = isProject ? "project:" + projectId : "ungrouped";
       if (!byKey[key]) {
         byKey[key] = {
@@ -4014,6 +4411,17 @@
         (formatsDisabled ? " disabled" : "") + ">" +
         escapeHtml(text(state, fmt.labelKey)) + "</button>";
     }).join("");
+    var importControls =
+      '<div class="usage-export-import-row">' +
+        '<button type="button" class="usage-export-import" data-export-import' +
+          (state.conversationImportBusy || state.exportBusy ? " disabled" : "") + ">" +
+          escapeHtml(text(state, "exportImportOfficial")) +
+        "</button>" +
+        '<input class="usage-visually-hidden" type="file" data-export-file accept=".zip,.json,application/zip,application/json">' +
+        '<span class="usage-export-import-copy">' +
+          escapeHtml(text(state, "exportImportHint")) +
+        "</span>" +
+      "</div>";
 
     var listHtml = "";
     var selectbar = "";
@@ -4023,8 +4431,8 @@
       var emptyMeta = state.exportConversationMeta || {};
       var emptyWarnings = Array.isArray(emptyMeta.warnings) ? emptyMeta.warnings : [];
       var emptyWarningText = "";
-      if (emptyMeta.source === "unavailable" || emptyWarnings.some(function accountWarning(warning) {
-        return warning && warning.scope === "account";
+      if (emptyMeta.source === "unavailable" || emptyWarnings.some(function localWarning(warning) {
+        return warning && warning.scope === "local-import";
       })) {
         emptyWarningText = text(state, "exportListUnavailable");
       } else if (emptyMeta.complete === false || emptyWarnings.length) {
@@ -4046,8 +4454,10 @@
           '<button type="button" class="usage-export-mini" data-export-selectnone>' + escapeHtml(text(state, "exportSelectNone")) + "</button>" +
           '<span class="usage-export-selcount">' + escapeHtml(text(state, "exportSelectedCount", { count: selectedCount })) + "</span>" +
         "</div>";
-      var listWarning = state.exportConversationMeta && state.exportConversationMeta.complete === false
-        ? '<p class="usage-export-hint usage-export-warning">' + escapeHtml(text(state, "exportListIncomplete")) + "</p>"
+      var listWarning = state.exportConversationMeta &&
+          state.exportConversationMeta.source === "unavailable"
+        ? '<p class="usage-export-hint usage-export-warning">' +
+          escapeHtml(text(state, "exportListUnavailable")) + "</p>"
         : "";
       var currentRows = list.filter(function currentConversation(conversation) {
         return conversation && conversation.current;
@@ -4055,7 +4465,9 @@
         return renderExportConversationRow(state, conversation, selected);
       }).join("");
       var groupRows = exportConversationGroups(state, list).map(function renderGroup(group) {
-        var rows = group.conversations.map(function renderConversation(conversation) {
+        var rows = group.conversations.filter(function omitDuplicatedCurrent(conversation) {
+          return !conversation.current;
+        }).map(function renderConversation(conversation) {
           return renderExportConversationRow(state, conversation, selected);
         }).join("");
         var visible = group.conversations.some(function visibleConversation(conversation) {
@@ -4080,12 +4492,14 @@
 
     return [
       '<section class="usage-export-panel">',
+      importControls,
       selectbar,
       listHtml,
       '<p class="usage-export-hint">' + escapeHtml(text(state, "exportSelectionHint")) + "</p>",
       '<div class="usage-export-actions" role="group" aria-label="' +
         escapeHtml(text(state, "exportFormatGroup")) + '">' + buttons + "</div>",
-      '<button type="button" class="usage-export-cancel" data-export-cancel hidden>' +
+      '<button type="button" class="usage-export-cancel" data-export-cancel' +
+        (state.exportBusy ? "" : " hidden") + ">" +
         escapeHtml(text(state, "exportCancel")) + "</button>",
       '<p class="usage-export-status' + (state.exportStatusError ? " error" : "") +
         '" data-export-status aria-live="polite">' +
@@ -4099,7 +4513,7 @@
       normalizeSourceModeFilter(state && state.sourceModeFilter) !== "all" ||
       (
         state && state.showDonutChart === true &&
-        Boolean(state && state.donutModel)
+        Boolean(state && (state.focusedModel || state.donutModel))
       );
   }
 
@@ -4133,19 +4547,41 @@
       return '<div class="usage-view-panel">' + renderExportPanel(state) + "</div>";
     }
 
-    var showLineChart = state.showLineChart !== false;
-    var showDonutChart = state.showDonutChart === true;
-    var showTextStatistics = state.showTextStatistics !== false;
+    var sectionOrder = normalizeStatisticsSectionOrder(state.statisticsSectionOrder);
+    var focusedModel = String(state.focusedModel || state.donutModel || "");
+    if (focusedModel) {
+      models = [focusedModel];
+    }
+    var focusBar = focusedModel
+      ? '<div class="usage-statistics-focusbar"><button type="button" data-stat-focus-back>' +
+        escapeHtml(text(state, "statisticsFocusBack")) +
+        "</button></div>"
+      : "";
+    var renderedSections = sectionOrder.map(function renderConfiguredSection(section) {
+      if (section === "line" && state.showLineChart !== false) {
+        return renderChart(state.stats, models, state);
+      }
+      if (section === "donut" && state.showDonutChart === true) {
+        return renderDonutChart(state.stats, models, state);
+      }
+      if (section === "text" && state.showTextStatistics !== false) {
+        return '<div class="usage-count-list">' +
+          renderModelCountRows(state, models) + "</div>";
+      }
+      return "";
+    }).join("");
+    var twoChartOnly =
+      state.showLineChart !== false &&
+      state.showDonutChart === true &&
+      state.showTextStatistics === false;
     return [
-      '<div class="usage-view-panel usage-count-panel">',
+      '<div class="usage-view-panel usage-count-panel' +
+        (twoChartOnly ? " usage-two-chart-only" : "") + '">',
       '<section class="usage-text-panel usage-chart-panel">',
       renderDateControls(state),
       renderStatisticsCompletenessWarning(state),
-      showLineChart ? renderChart(state.stats, models, state) : "",
-      showDonutChart ? renderDonutChart(state.stats, models, state) : "",
-      showTextStatistics
-        ? '<div class="usage-count-list">' + renderModelCountRows(state, models) + "</div>"
-        : "",
+      focusBar,
+      renderedSections,
       "</section>",
       "</div>"
     ].join("");
@@ -4563,15 +4999,10 @@
         : text(state, "modelUsage");
     var subtitle = "";
     var surface = state.options && state.options.surface === "page" ? "page" : "popup";
-    var closeAction = surface === "page" && state.options && typeof state.options.onClose === "function"
-      ? '<button class="usage-header-action usage-panel-close" type="button" data-panel-close aria-label="' +
-        escapeHtml(text(state, "close")) + '" title="' + escapeHtml(text(state, "close")) + '">' +
-        renderHeaderIcon("close") + '<span class="usage-visually-hidden">' +
-        escapeHtml(text(state, "close")) + "</span></button>"
-      : "";
     var visibleStatusText = state.statusText || "";
     state.container.innerHTML = [
-      '<div class="usage-dashboard usage-dashboard-' + surface + " usage-active-" + activeView + '">',
+      '<div class="usage-dashboard usage-dashboard-' + surface + " usage-active-" + activeView +
+        '" data-view-preview="' + (state.viewPreviewActive ? "true" : "false") + '">',
       '<div class="usage-sticky-header"><div class="usage-topline"><div class="usage-top-copy"><div class="usage-title-row"><h2>' + escapeHtml(heading) + "</h2></div>" +
         (subtitle ? "<p>" + escapeHtml(subtitle) + "</p>" : "") +
         '</div><div class="usage-top-actions"><button class="usage-header-action usage-refresh' +
@@ -4579,7 +5010,7 @@
         (state.refreshing ? ' disabled aria-busy="true"' : "") + ' aria-label="' +
         escapeHtml(text(state, "refresh")) + '" title="' + escapeHtml(text(state, "refresh")) + '">' +
         renderHeaderIcon("refresh") + '<span class="usage-visually-hidden">' +
-        escapeHtml(text(state, "refresh")) + "</span></button>" + renderSettingsMenu(state) + closeAction + "</div></div>",
+        escapeHtml(text(state, "refresh")) + "</span></button>" + renderSettingsMenu(state) + "</div></div>",
       renderViewTabs(state),
       "</div>",
       renderActiveView(state, models),
@@ -4764,13 +5195,13 @@
     }
     var exporter = exporterModule();
     if (!exporter || typeof exporter.downloadBlob !== "function") {
-      setStatus(state, statisticsDataErrorText(state, "exporter"), true);
+      setStatus(state, statisticsDataErrorText(state, "exporter"), true, "statistics-data");
       return Promise.resolve(null);
     }
 
     state.statisticsDataBusy = true;
     setStatisticsDataControlsDisabled(state, true);
-    setStatus(state, text(state, "statisticsDataExporting"));
+    setStatus(state, text(state, "statisticsDataExporting"), false, "statistics-data");
     return sendMessage({ type: "usage.data.export" }, state).then(function createFile(response) {
       if (!response || !response.ok || !response.backup) {
         throw new Error((response && response.error) || "statistics-backup-failed");
@@ -4790,11 +5221,11 @@
         });
       }
       return downloadOneFile(state, exporter, blob, filename).then(function downloaded() {
-        setStatus(state, text(state, "statisticsDataExported", { name: filename }));
+        setStatus(state, text(state, "statisticsDataExported", { name: filename }), false, "statistics-data");
         return { filename: filename, backup: response.backup };
       });
     }).catch(function failed(error) {
-      setStatus(state, statisticsDataErrorText(state, error), true);
+      setStatus(state, statisticsDataErrorText(state, error), true, "statistics-data");
       return null;
     }).then(function finish(result) {
       state.statisticsDataBusy = false;
@@ -4806,7 +5237,7 @@
   function importStatisticsBackup(state, backup) {
     state.statisticsDataBusy = true;
     setStatisticsDataControlsDisabled(state, true);
-    setStatus(state, text(state, "statisticsDataImporting"));
+    setStatus(state, text(state, "statisticsDataImporting"), false, "statistics-data");
     return sendMessage({
       type: "usage.data.import",
       mode: "replace",
@@ -4817,14 +5248,13 @@
       }
       state.stats = sanitizeDashboardStats(response.stats);
       ensureSelection(state);
-      state.statusText = text(state, "statisticsDataImported", {
+      setStatus(state, text(state, "statisticsDataImported", {
         count: response.summary && Number(response.summary.totalCount) || 0
-      });
-      state.statusError = false;
+      }), false, "statistics-data");
       render(state);
       return response;
     }).catch(function failed(error) {
-      setStatus(state, statisticsDataErrorText(state, error), true);
+      setStatus(state, statisticsDataErrorText(state, error), true, "statistics-data");
       return null;
     }).then(function finish(result) {
       state.statisticsDataBusy = false;
@@ -4838,7 +5268,7 @@
       return Promise.resolve(null);
     }
     if (Number(file.size) > MAX_STATISTICS_IMPORT_BYTES) {
-      setStatus(state, text(state, "statisticsDataImportTooLarge"), true);
+      setStatus(state, text(state, "statisticsDataImportTooLarge"), true, "statistics-data");
       return Promise.resolve(null);
     }
     var read;
@@ -4868,11 +5298,12 @@
         ? root.confirm.bind(root)
         : typeof confirm === "function" ? confirm : null;
       if (confirmFn && !confirmFn(text(state, "statisticsDataImportConfirm"))) {
+        setStatus(state, text(state, "statisticsDataImportCancelled"), false, "statistics-data");
         return null;
       }
       return importStatisticsBackup(state, backup);
     }).catch(function failed(error) {
-      setStatus(state, statisticsDataErrorText(state, error), true);
+      setStatus(state, statisticsDataErrorText(state, error), true, "statistics-data");
       return null;
     });
   }
@@ -4928,19 +5359,25 @@
   }
 
   function focusDonutEffortConversations(state, effort) {
-    if (!state.donutModel) {
+    var focusedModel = String(state.focusedModel || state.donutModel || "");
+    if (!focusedModel) {
       return;
     }
     if (state.showTextStatistics === false) {
       state.showTextStatistics = true;
+      state.statisticsSectionOrder = normalizeStatisticsSectionOrder(
+        state.statisticsSectionOrder
+      ).filter(function withoutText(section) {
+        return section !== "text";
+      }).concat(["text"]);
       render(state);
-      saveSettings(state, ["showTextStatistics"]).catch(function failed(error) {
+      saveSettings(state, ["showTextStatistics", "statisticsSectionOrder"]).catch(function failed(error) {
         setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
       });
     }
     var selector = normalizeStatisticsMode(state.statisticsMode) === "internal"
-      ? '[data-request-model-group="' + cssAttributeValue(state.donutModel) + '"]'
-      : '[data-mapped-model="' + cssAttributeValue(state.donutModel) + '"]';
+      ? '[data-request-model-group="' + cssAttributeValue(focusedModel) + '"]'
+      : '[data-mapped-model="' + cssAttributeValue(focusedModel) + '"]';
     var group = state.container.querySelector(selector);
     if (!group) {
       return;
@@ -4968,11 +5405,9 @@
       }
     });
     Array.prototype.forEach.call(
-      state.container.querySelectorAll("[data-donut-effort],.usage-donut-legend-row[data-effort-filter]"),
+      state.container.querySelectorAll('[data-stat-focus-type="effort"]'),
       function markDonutEffort(target) {
-      var targetEffort = target.hasAttribute("data-donut-effort")
-        ? target.getAttribute("data-donut-effort")
-        : target.getAttribute("data-effort-filter");
+      var targetEffort = target.getAttribute("data-stat-focus-key");
       if (reasoningEffortClass(targetEffort) === effort) {
         target.setAttribute("data-effort-active", "true");
       } else {
@@ -5061,10 +5496,35 @@
   }
 
   function bindEvents(state) {
+    var forceCloseSettingsMenu = function noSettingsMenu() {};
+    if (
+      state.viewPointerMonitor &&
+      state.viewPointerMonitor.document &&
+      typeof state.viewPointerMonitor.document.removeEventListener === "function"
+    ) {
+      state.viewPointerMonitor.document.removeEventListener(
+        "mousemove",
+        state.viewPointerMonitor.listener,
+        true
+      );
+    }
+    state.viewPointerMonitor = null;
+    if (
+      state.settingsPointerMonitor &&
+      state.settingsPointerMonitor.document &&
+      typeof state.settingsPointerMonitor.document.removeEventListener === "function"
+    ) {
+      state.settingsPointerMonitor.document.removeEventListener(
+        "mousemove",
+        state.settingsPointerMonitor.listener,
+        true
+      );
+    }
+    state.settingsPointerMonitor = null;
     var refreshButton = state.container.querySelector(".usage-refresh");
     if (refreshButton) {
       refreshButton.addEventListener("click", function refresh() {
-        if (state.refreshing) {
+        if (state.refreshing || state.exportBusy || state.statisticsDataBusy || state.conversationImportBusy) {
           return;
         }
         state.refreshing = true;
@@ -5081,17 +5541,17 @@
         });
       });
     }
-    var panelClose = state.container.querySelector("[data-panel-close]");
-    if (panelClose && state.options && typeof state.options.onClose === "function") {
-      panelClose.addEventListener("click", function closePanel() {
-        state.options.onClose();
-      });
-    }
     var settingsMenu = state.container.querySelector(".usage-settings-menu");
     if (settingsMenu) {
+      state.settingsMenuBindingRevision =
+        (Number(state.settingsMenuBindingRevision) || 0) + 1;
+      var settingsMenuBindingRevision = state.settingsMenuBindingRevision;
       var closeSettingsTimer = null;
       var submenuCloseTimers = {};
       var settingsTransitionMs = 160;
+      var isCurrentSettingsBinding = function isCurrentSettingsBinding() {
+        return state.settingsMenuBindingRevision === settingsMenuBindingRevision;
+      };
       var setClosing = function setClosing(element, closing) {
         if (!element || !element.classList) {
           return;
@@ -5102,46 +5562,151 @@
           element.classList.remove("is-closing");
         }
       };
-      var openSettingsMenu = function openSettingsMenu() {
+      var openSettingsMenu = function openSettingsMenu(interactionMode) {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
         if (closeSettingsTimer) {
           clearTimeout(closeSettingsTimer);
           closeSettingsTimer = null;
         }
+        if (interactionMode) {
+          state.settingsInteractionMode = interactionMode;
+        }
+        state.modelMenuOpen = false;
+        var chartTabItem = state.container.querySelector(".usage-view-tab-item-chart");
+        if (chartTabItem) {
+          chartTabItem.removeAttribute("data-model-menu-open");
+        }
+        settingsMenu.setAttribute(
+          "data-interaction-mode",
+          state.settingsInteractionMode === "click" ? "click" : "hover"
+        );
         setClosing(settingsMenu, false);
         settingsMenu.open = true;
         state.settingsMenuOpen = true;
       };
-      var closeSettingsMenu = function closeSettingsMenu() {
+      var closeSettingsMenu = function closeSettingsMenu(force) {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (!force && state.settingsInteractionMode === "click") {
+          return;
+        }
         if (closeSettingsTimer) {
           clearTimeout(closeSettingsTimer);
         }
         setClosing(settingsMenu, true);
         closeSettingsTimer = setTimeout(function closeAfterPointerLeavesTree() {
+          if (!isCurrentSettingsBinding()) {
+            return;
+          }
           settingsMenu.open = false;
           setClosing(settingsMenu, false);
           state.settingsMenuOpen = false;
           state.settingsSubmenu = "";
+          // Closing finishes the current interaction session. The next
+          // pointer hover or click can therefore become the active mode
+          // instead of leaving the menu permanently locked to click mode.
+          state.settingsInteractionMode = "";
+          settingsMenu.setAttribute("data-interaction-mode", "hover");
           closeSettingsTimer = null;
         }, settingsTransitionMs);
       };
-      settingsMenu.addEventListener("mouseenter", openSettingsMenu);
-      settingsMenu.addEventListener("mouseleave", closeSettingsMenu);
-      settingsMenu.addEventListener("focusin", openSettingsMenu);
-      settingsMenu.addEventListener("focusout", function closeAfterFocusLeaves(event) {
-        if (!settingsMenu.contains(event.relatedTarget)) {
-          closeSettingsMenu();
+      forceCloseSettingsMenu = function forceCloseSettingsMenuNow() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (closeSettingsTimer) {
+          clearTimeout(closeSettingsTimer);
+          closeSettingsTimer = null;
+        }
+        Array.prototype.forEach.call(
+          settingsMenu.querySelectorAll("[data-settings-category]"),
+          function closeCategory(category) {
+            category.open = false;
+            setClosing(category, false);
+          }
+        );
+        settingsMenu.open = false;
+        setClosing(settingsMenu, false);
+        state.settingsMenuOpen = false;
+        state.settingsSubmenu = "";
+        state.settingsInteractionMode = "";
+        settingsMenu.setAttribute("data-interaction-mode", "hover");
+      };
+      settingsMenu.addEventListener("mouseenter", function openSettingsOnHover() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (state.settingsInteractionMode !== "click") {
+          openSettingsMenu("hover");
         }
       });
+      settingsMenu.addEventListener("mouseleave", function closeSettingsAfterHover() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        closeSettingsMenu(false);
+      });
+      settingsMenu.addEventListener("focusin", function openSettingsOnFocus() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (state.settingsInteractionMode !== "click") {
+          openSettingsMenu("hover");
+        }
+      });
+      settingsMenu.addEventListener("focusout", function closeAfterFocusLeaves(event) {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (!settingsMenu.contains(event.relatedTarget)) {
+          closeSettingsMenu(false);
+        }
+      });
+      var settingsDocument = settingsMenu.ownerDocument ||
+        (state.container && state.container.ownerDocument) ||
+        (root && root.document);
+      if (settingsDocument && typeof settingsDocument.addEventListener === "function") {
+        var monitorSettingsPointer = function monitorSettingsPointer(event) {
+          if (
+            !isCurrentSettingsBinding() ||
+            !settingsMenu.open ||
+            state.settingsInteractionMode === "click" ||
+            settingsMenu.contains(event.target)
+          ) {
+            return;
+          }
+          closeSettingsMenu(false);
+        };
+        settingsDocument.addEventListener("mousemove", monitorSettingsPointer, true);
+        state.settingsPointerMonitor = {
+          document: settingsDocument,
+          listener: monitorSettingsPointer
+        };
+      }
       var settingsTrigger = settingsMenu.querySelector(".usage-settings-trigger");
       if (settingsTrigger) {
-        settingsTrigger.addEventListener("click", function keepHoverMenuOpen(event) {
+        settingsTrigger.addEventListener("click", function toggleClickMenu(event) {
+          if (!isCurrentSettingsBinding()) {
+            return;
+          }
           if (typeof event.preventDefault === "function") {
             event.preventDefault();
           }
-          openSettingsMenu();
+          if (state.settingsInteractionMode === "click" && settingsMenu.open) {
+            state.settingsInteractionMode = "";
+            closeSettingsMenu(true);
+            return;
+          }
+          openSettingsMenu("click");
         });
       }
       settingsMenu.addEventListener("toggle", function rememberSettingsMenu() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
         state.settingsMenuOpen = Boolean(settingsMenu.open);
         if (!state.settingsMenuOpen) {
           state.settingsSubmenu = "";
@@ -5151,6 +5716,9 @@
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-settings-category]"), function bindSettingsCategory(category) {
       var categoryId = category.getAttribute("data-settings-category") || "";
       var openSettingsCategory = function openSettingsCategory() {
+        if (!settingsMenu || !isCurrentSettingsBinding()) {
+          return;
+        }
         if (!settingsMenu || !settingsMenu.open) {
           return;
         }
@@ -5172,6 +5740,9 @@
           }
           setClosing(sibling, true);
           submenuCloseTimers[siblingId] = setTimeout(function finishSubmenuClose() {
+            if (!isCurrentSettingsBinding()) {
+              return;
+            }
             if (state.settingsSubmenu !== siblingId) {
               sibling.open = false;
             }
@@ -5181,14 +5752,49 @@
         });
       };
       category.addEventListener("toggle", function rememberSettingsCategory() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
         if (category.open) {
           state.settingsSubmenu = categoryId;
         } else if (state.settingsSubmenu === categoryId) {
           state.settingsSubmenu = "";
         }
       });
-      category.addEventListener("mouseenter", openSettingsCategory);
-      category.addEventListener("focusin", openSettingsCategory);
+      category.addEventListener("mouseenter", function openCategoryOnHover() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (state.settingsInteractionMode !== "click") {
+          openSettingsCategory();
+        }
+      });
+      category.addEventListener("focusin", function openCategoryOnFocus() {
+        if (!isCurrentSettingsBinding()) {
+          return;
+        }
+        if (state.settingsInteractionMode !== "click") {
+          openSettingsCategory();
+        }
+      });
+      var categorySummary = category.querySelector("summary");
+      if (categorySummary) {
+        categorySummary.addEventListener("click", function openCategoryOnClick(event) {
+          if (!isCurrentSettingsBinding()) {
+            return;
+          }
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          if (state.settingsInteractionMode === "click") {
+            settingsMenu.setAttribute("data-interaction-mode", "click");
+          }
+          openSettingsCategory();
+        });
+      }
     });
     var startDate = state.container.querySelector(".usage-start-date");
     var endDate = state.container.querySelector(".usage-end-date");
@@ -5223,6 +5829,9 @@
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-source-filter]"), function bindSourceFilter(button) {
       button.addEventListener("click", function changeSourceFilter() {
         state.sourceModeFilter = normalizeSourceModeFilter(button.getAttribute("data-source-filter"));
+        state.focusedModel = "";
+        state.focusedEffort = "";
+        state.donutModel = "";
         render(state);
         saveSettings(state, ["sourceModeFilter"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
@@ -5233,6 +5842,8 @@
       button.addEventListener("click", function changeStatisticsMode() {
         state.statisticsMode = normalizeStatisticsMode(button.getAttribute("data-statistics-mode"));
         state.donutModel = "";
+        state.focusedModel = "";
+        state.focusedEffort = "";
         ensureSelection(state);
         render(state);
         saveSettings(state, ["statisticsMode"]).catch(function failed(error) {
@@ -5250,28 +5861,42 @@
       });
     });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-statistics-section]"), function bindStatisticsSection(button) {
-      button.addEventListener("change", function changeStatisticsSection() {
+      button.addEventListener("click", function changeStatisticsSection() {
         var section = button.getAttribute("data-statistics-section");
         var settingField;
+        var active = button.getAttribute("aria-pressed") === "true";
+        var nextActive = !active;
         if (section === "line" || section === "trend") {
-          state.showLineChart = Boolean(button.checked);
+          state.showLineChart = nextActive;
           state.showTrendChart = state.showLineChart || state.showDonutChart;
           settingField = "showLineChart";
         } else if (section === "donut") {
-          state.showDonutChart = Boolean(button.checked);
+          state.showDonutChart = nextActive;
           state.showTrendChart = state.showLineChart || state.showDonutChart;
           if (!state.showDonutChart) {
             state.donutModel = "";
           }
           settingField = "showDonutChart";
         } else if (section === "text") {
-          state.showTextStatistics = Boolean(button.checked);
+          state.showTextStatistics = nextActive;
           settingField = "showTextStatistics";
         } else {
           return;
         }
+        var sectionOrder = normalizeStatisticsSectionOrder(state.statisticsSectionOrder);
+        if (nextActive) {
+          sectionOrder = sectionOrder.filter(function withoutEnabled(item) {
+            return item !== section;
+          });
+          sectionOrder.push(section);
+        }
+        state.statisticsSectionOrder = sectionOrder;
         render(state);
-        saveSettings(state, [settingField, "showTrendChart"]).catch(function failed(error) {
+        saveSettings(state, [
+          settingField,
+          "showTrendChart",
+          "statisticsSectionOrder"
+        ]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
@@ -5308,22 +5933,162 @@
         readStatisticsBackupFile(state, file);
       });
     }
+    var showView = function showView(nextView, renderSameView, notifyUsageActivation) {
+      nextView = normalizeView(nextView);
+      var previousView = normalizeView(state.activeView);
+      if (nextView === previousView) {
+        if (renderSameView) {
+          render(state);
+        }
+        if (
+          notifyUsageActivation &&
+          nextView === "chart" &&
+          state.options &&
+          typeof state.options.onUsageViewActivate === "function"
+        ) {
+          state.options.onUsageViewActivate();
+        }
+        return false;
+      }
+      if (previousView === "export" && nextView !== "export") {
+        cancelPendingExportConversationList(state);
+      }
+      state.activeView = nextView;
+      if (isActiveStatusView(state)) {
+        ensureOpenAIStatus(state, false);
+      }
+      if (
+        state.activeView === "export" &&
+        !(state.viewPreviewActive && state.viewInteractionMode === "hover")
+      ) {
+        loadExportConversationList(state, Array.isArray(state.exportConversationList)
+          ? { currentOnly: true }
+          : {});
+      }
+      render(state);
+      if (
+        notifyUsageActivation &&
+        state.activeView === "chart" &&
+        state.options &&
+        typeof state.options.onUsageViewActivate === "function"
+      ) {
+        state.options.onUsageViewActivate();
+      }
+      return true;
+    };
+    var restoreCommittedView = function restoreCommittedView() {
+      if (!state.viewPreviewActive) {
+        return;
+      }
+      var committedView = normalizeView(
+        state.committedView || state.viewPreviewOrigin || state.activeView
+      );
+      state.viewPreviewActive = false;
+      state.viewPreviewOrigin = "";
+      state.viewInteractionMode = "";
+      state.modelMenuOpen = false;
+      if (state.viewPointerMonitor) {
+        state.viewPointerMonitor.document.removeEventListener(
+          "mousemove",
+          state.viewPointerMonitor.listener,
+          true
+        );
+        state.viewPointerMonitor = null;
+      }
+      showView(committedView, true, false);
+    };
+    var viewTabs = state.container.querySelector(".usage-view-tabs");
+    if (viewTabs) {
+      viewTabs.addEventListener("mouseleave", restoreCommittedView);
+      viewTabs.addEventListener("focusout", function restoreAfterFocusLeavesTabs(event) {
+        if (!viewTabs.contains(event.relatedTarget)) {
+          restoreCommittedView();
+        }
+      });
+    }
+    var chartTabItem = state.container.querySelector(".usage-view-tab-item-chart");
+    if (chartTabItem) {
+      var openModelHoverMenu = function openModelHoverMenu() {
+        state.modelMenuOpen = true;
+        chartTabItem.setAttribute("data-model-menu-open", "true");
+      };
+      var closeModelHoverMenu = function closeModelHoverMenu() {
+        state.modelMenuOpen = false;
+        chartTabItem.removeAttribute("data-model-menu-open");
+      };
+      chartTabItem.addEventListener("mouseenter", openModelHoverMenu);
+      chartTabItem.addEventListener("focusin", openModelHoverMenu);
+      chartTabItem.addEventListener("mouseleave", closeModelHoverMenu);
+      chartTabItem.addEventListener("focusout", function closeModelMenuAfterFocus(event) {
+        if (!chartTabItem.contains(event.relatedTarget)) {
+          closeModelHoverMenu();
+        }
+      });
+    }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-view-tab]"), function bindViewTab(button) {
-      button.addEventListener("click", function changeView() {
+      var nextView = function nextView() {
+        return normalizeView(button.getAttribute("data-view-tab"));
+      };
+      var previewView = function previewView() {
+        if (state.viewInteractionMode === "click") {
+          return;
+        }
+        forceCloseSettingsMenu();
+        if (!state.viewPreviewActive) {
+          state.committedView = normalizeView(state.committedView || state.activeView);
+          state.viewPreviewOrigin = state.committedView;
+        }
+        state.viewPreviewActive = true;
+        state.viewInteractionMode = "hover";
+        showView(nextView(), false, false);
+        var currentTabs = state.container.querySelector(".usage-view-tabs");
+        var doc = currentTabs && currentTabs.ownerDocument;
+        if (doc && typeof doc.addEventListener === "function") {
+          var listener = function restoreWhenPointerLeavesTabs(event) {
+            var liveTabs = state.container.querySelector(".usage-view-tabs");
+            if (!liveTabs || !liveTabs.contains(event.target)) {
+              restoreCommittedView();
+            }
+          };
+          state.viewPointerMonitor = { document: doc, listener: listener };
+          doc.addEventListener("mousemove", listener, true);
+        }
+      };
+      var commitView = function commitView() {
+        var selectedView = nextView();
+        forceCloseSettingsMenu();
+        state.viewPreviewActive = false;
+        state.viewPreviewOrigin = "";
+        state.viewInteractionMode = "click";
+        if (state.viewPointerMonitor) {
+          state.viewPointerMonitor.document.removeEventListener(
+            "mousemove",
+            state.viewPointerMonitor.listener,
+            true
+          );
+          state.viewPointerMonitor = null;
+        }
+        state.modelMenuOpen = false;
+        state.committedView = selectedView;
         state.activeViewInteractionRevision =
           (Number(state.activeViewInteractionRevision) || 0) + 1;
         state.activeViewSettingsLoaded = true;
-        state.activeView = normalizeView(button.getAttribute("data-view-tab"));
-        if (isActiveStatusView(state)) {
-          ensureOpenAIStatus(state, false);
-        }
-        if (state.activeView === "export" && !Array.isArray(state.exportConversationList)) {
-          loadExportConversationList(state);
-        }
-        render(state);
+        showView(selectedView, true, true);
         saveSettings(state, ["activeView"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
+      };
+      button.addEventListener("mouseenter", function hoverView() {
+        previewView();
+      });
+      button.addEventListener("focusin", function focusView() {
+        previewView();
+      });
+      button.addEventListener("click", function clickView(event) {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
+        commitView();
       });
     });
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-model-toggle]"), function bindToggle(control) {
@@ -5334,8 +6099,13 @@
           ? Boolean(control.checked)
           : control.getAttribute("aria-pressed") !== "true";
         state.selectedModels[model] = nextSelected;
-        if (!nextSelected && state.donutModel === model) {
+        if (
+          !nextSelected &&
+          (state.donutModel === model || state.focusedModel === model)
+        ) {
           state.donutModel = "";
+          state.focusedModel = "";
+          state.focusedEffort = "";
         }
         render(state);
         saveSettings(state, modelSelectionSettingFields(state.statisticsMode)).catch(function failed(error) {
@@ -5358,28 +6128,6 @@
         updateModel();
       });
     });
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-donut-model]"), function bindDonutModel(target) {
-      var openModel = function openModel() {
-        state.donutModel = target.getAttribute("data-donut-model") || "";
-        render(state);
-      };
-      target.addEventListener("click", openModel);
-      target.addEventListener("keydown", function openModelByKeyboard(event) {
-        if (event.key === "Enter" || event.key === " ") {
-          if (typeof event.preventDefault === "function") {
-            event.preventDefault();
-          }
-          openModel();
-        }
-      });
-    });
-    var donutBack = state.container.querySelector("[data-donut-back]");
-    if (donutBack) {
-      donutBack.addEventListener("click", function closeDonutModel() {
-        state.donutModel = "";
-        render(state);
-      });
-    }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-effort-filter]"), function bindEffortFilter(target) {
       var applyFilter = function applyFilter(event) {
         if (event && typeof event.preventDefault === "function") {
@@ -5390,10 +6138,22 @@
         }
         var effort = reasoningEffortClass(target.getAttribute("data-effort-filter"));
         var details = typeof target.closest === "function"
-          ? target.closest(".usage-internal-response,.usage-model-relation")
+          ? target.closest(".usage-internal-response,.usage-model-relation,.usage-mapped-record")
           : null;
         if (details) {
           filterConversationDetailsByEffort(state, details, effort, target);
+          return;
+        }
+        var primary = typeof target.closest === "function"
+          ? target.closest("[data-primary-model]")
+          : null;
+        var primaryModel = primary && typeof primary.getAttribute === "function"
+          ? primary.getAttribute("data-primary-model")
+          : "";
+        if (primaryModel) {
+          state.focusedModel = primaryModel;
+          state.donutModel = primaryModel;
+          focusDonutEffortConversations(state, effort);
           return;
         }
         focusDonutEffortConversations(state, effort);
@@ -5402,23 +6162,6 @@
       target.addEventListener("keydown", function filterByKeyboard(event) {
         if (event.key === "Enter" || event.key === " ") {
           applyFilter(event);
-        }
-      });
-    });
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-donut-effort]"), function bindDonutEffort(target) {
-      var focusEffort = function focusEffort(event) {
-        if (event && typeof event.preventDefault === "function") {
-          event.preventDefault();
-        }
-        focusDonutEffortConversations(
-          state,
-          reasoningEffortClass(target.getAttribute("data-donut-effort"))
-        );
-      };
-      target.addEventListener("click", focusEffort);
-      target.addEventListener("keydown", function focusEffortByKeyboard(event) {
-        if (event.key === "Enter" || event.key === " ") {
-          focusEffort(event);
         }
       });
     });
@@ -5455,9 +6198,27 @@
         exportConversations(state, button.getAttribute("data-export-format"));
       });
     });
+    var conversationExportFile = state.container.querySelector("[data-export-file]");
+    var conversationExportImport = state.container.querySelector("[data-export-import]");
+    if (conversationExportImport && conversationExportFile) {
+      conversationExportImport.addEventListener("click", function chooseOfficialExport() {
+        if (state.conversationImportBusy || state.exportBusy) {
+          return;
+        }
+        conversationExportFile.value = "";
+        if (typeof conversationExportFile.click === "function") {
+          conversationExportFile.click();
+        }
+      });
+      conversationExportFile.addEventListener("change", function importOfficialExport() {
+        var file = conversationExportFile.files && conversationExportFile.files[0];
+        importOfficialConversationFile(state, file);
+      });
+    }
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-conv]"), function bindConv(input) {
       input.addEventListener("change", function toggleConv() {
         if (!state.exportSelected) { state.exportSelected = {}; }
+        state.exportSelectionTouched = true;
         state.exportSelectAllMode = false;
         var id = input.getAttribute("data-export-conv");
         if (input.checked) {
@@ -5471,6 +6232,7 @@
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-export-project-toggle]"), function bindProject(input) {
       input.addEventListener("change", function toggleProject() {
         if (!state.exportSelected) { state.exportSelected = {}; }
+        state.exportSelectionTouched = true;
         state.exportSelectAllMode = false;
         exportProjectConversationIds(state, input.getAttribute("data-export-project-toggle")).forEach(function update(id) {
           if (input.checked) {
@@ -5493,6 +6255,7 @@
     if (selectAllBtn) {
       selectAllBtn.addEventListener("click", function selectAll() {
         state.exportSelected = state.exportSelected || {};
+        state.exportSelectionTouched = true;
         var allIds = (Array.isArray(state.exportConversationList) ? state.exportConversationList : [])
           .filter(function valid(conversation) {
             return conversation && conversation.id;
@@ -5511,6 +6274,7 @@
     if (selectNoneBtn) {
       selectNoneBtn.addEventListener("click", function selectNone() {
         state.exportSelected = {};
+        state.exportSelectionTouched = true;
         state.exportSelectAllMode = false;
         syncExportSelectionUi(state);
       });
@@ -5530,12 +6294,18 @@
       syncExportSelectionUi(state);
     }
     syncChartTrajectoryAnimation(state);
+    bindStatisticsVisualInteractions(state);
     bindTooltip(state);
   }
 
   function exporterModule() {
     return (root && root.ChatGPTUsageExporter) ||
       (typeof window !== "undefined" && window.ChatGPTUsageExporter) || null;
+  }
+
+  function conversationImporterModule() {
+    return (root && root.ChatGPTConversationImporter) ||
+      (typeof window !== "undefined" && window.ChatGPTConversationImporter) || null;
   }
 
   function setExportStatus(state, message, isError) {
@@ -5552,7 +6322,7 @@
     return Boolean(state.options && state.options.surface === "page");
   }
 
-  // 弹窗面板没有页面 DOM，向当前 ChatGPT 标签页的内容脚本请求同源账号历史或 DOM 回退结果。
+  // 弹窗面板没有页面 DOM，只向当前 ChatGPT 标签页请求已渲染的当前对话。
   function tabsSendMessage(message) {
     return new Promise(function (resolve, reject) {
       if (typeof chrome === "undefined" || !chrome.tabs || typeof chrome.tabs.query !== "function") {
@@ -5570,56 +6340,70 @@
     });
   }
 
-  function conversationOperationMessage(state, helperName, messageType) {
-    if (isPageSurface(state) && typeof root[helperName] === "function") {
-      try {
-        return Promise.resolve(root[helperName]());
-      } catch (error) {
-        return Promise.reject(error);
-      }
-    }
-    return tabsSendMessage({ type: messageType }).then(function normalize(resp) {
-      return resp && resp.ok !== false ? resp : null;
-    });
-  }
-
-  function accountResponseError(response, fallbackMessage) {
+  function conversationResponseError(response, fallbackMessage) {
     var error = new Error(String(
       response && response.error ||
       fallbackMessage ||
-      "ChatGPT account request failed."
+      "Conversation data is unavailable."
     ));
-    error.status = Number(response && response.status) || 0;
-    error.stopOperation = Boolean(response && response.stopOperation);
-    error.incomplete = Boolean(response && (response.incomplete || response.stopOperation));
-    error.retryAfterMs = Math.max(0, Number(response && response.retryAfterMs) || 0);
     error.code = String(response && response.code || "");
     return error;
   }
 
-  function beginConversationOperation(state) {
-    return conversationOperationMessage(state, "__chatgptUsageBeginAccountOperation", "conversation.operation.begin");
-  }
-
   function cancelConversationOperation(state) {
-    return conversationOperationMessage(state, "__chatgptUsageCancelAccountOperation", "conversation.operation.cancel")
-      .catch(function ignoreCancellationSignalFailure() { return null; });
-  }
-
-  function releaseConversationCredentials(state) {
-    return conversationOperationMessage(state, "__chatgptUsageReleaseAccountAuth", "conversation.operation.release")
-      .catch(function ignoreReleaseFailure() { return null; });
-  }
-
-  function requestExportConversationList(state) {
-    if (isPageSurface(state) && root.__chatgptUsageListConversations) {
-      return Promise.resolve(root.__chatgptUsageListConversations()).then(function normalizeDirect(result) {
-        return Array.isArray(result) ? { conversations: result, complete: false, source: "sidebar" } : (result || {});
+    if (state && state.exportOperationId) {
+      return sendMessage({
+        type: "usage.download.cancel",
+        operationId: state.exportOperationId
+      }, state).catch(function ignoreDownloadCancellationFailure() {
+        return null;
       });
     }
-    return tabsSendMessage({ type: "conversation.list" }).then(function normalizeMessage(resp) {
+    return Promise.resolve(null);
+  }
+
+  function requestCurrentExportConversation(state) {
+    if (isPageSurface(state) && root.__chatgptUsageCurrentConversation) {
+      return Promise.resolve(root.__chatgptUsageCurrentConversation()).then(function normalizeCurrent(result) {
+        return result || null;
+      });
+    }
+    return tabsSendMessage({ type: "conversation.current" }).then(function normalizeCurrentMessage(resp) {
+      return resp && resp.ok !== false ? resp : null;
+    });
+  }
+
+  function requestCurrentExportContent(state) {
+    if (isPageSurface(state) && typeof root.__chatgptUsageCollectCurrentConversation === "function") {
+      try {
+        return Promise.resolve(root.__chatgptUsageCollectCurrentConversation());
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    return tabsSendMessage({ type: "conversation.current.content" }).then(function normalizeCurrentContent(resp) {
       if (!resp || !resp.ok) {
-        throw accountResponseError(resp, text(state, "exportOpenPage"));
+        throw conversationResponseError(resp, text(state, "exportOpenPage"));
+      }
+      return normalizeConversationCollection(resp);
+    });
+  }
+
+  function requestImportedConversationList(state) {
+    if (isPageSurface(state) && typeof root.__chatgptUsageListConversations === "function") {
+      try {
+        return Promise.resolve(root.__chatgptUsageListConversations()).then(function normalizeLocalList(result) {
+          return Array.isArray(result)
+            ? { ok: true, conversations: result, complete: true, source: "local-import" }
+            : Object.assign({ ok: true }, result || {});
+        });
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    }
+    return sendMessage({ type: "conversation.import.list" }, state).then(function normalizeMessage(resp) {
+      if (!resp || !resp.ok) {
+        throw conversationResponseError(resp, text(state, "exportListUnavailable"));
       }
       return resp;
     });
@@ -5628,14 +6412,33 @@
   function applyExportConversationList(state, result) {
     var list = Array.isArray(result) ? result : result && result.conversations;
     var currentConversationId = String(result && result.currentConversationId || "");
-    state.exportConversationList = (Array.isArray(list) ? list : []).map(function markCurrent(conversation) {
-      return Object.assign({}, conversation || {}, {
-        current: Boolean(
-          conversation && (
-            conversation.current ||
-            currentConversationId && conversation.id === currentConversationId
-          )
-        )
+    var byId = {};
+    var orderedIds = [];
+    (Array.isArray(list) ? list : []).forEach(function dedupeConversation(conversation) {
+      var id = String(conversation && conversation.id || "").trim();
+      if (!id) {
+        return;
+      }
+      if (!byId[id]) {
+        orderedIds.push(id);
+      }
+      var current = byId[id] || {};
+      var incoming = conversation || {};
+      byId[id] = Object.assign({}, current, incoming, {
+        id: id,
+        title: String(incoming.title || current.title || id),
+        projectName: String(incoming.projectName || current.projectName || ""),
+        folderName: String(incoming.folderName || current.folderName || "")
+      });
+    });
+    if (!currentConversationId) {
+      currentConversationId = orderedIds.filter(function firstMarkedCurrent(id) {
+        return Boolean(byId[id] && byId[id].current);
+      })[0] || "";
+    }
+    state.exportConversationList = orderedIds.map(function markOnlyAuthoritativeCurrent(id) {
+      return Object.assign({}, byId[id], {
+        current: Boolean(currentConversationId && id === currentConversationId)
       });
     }).sort(function currentFirst(left, right) {
       if (Boolean(left.current) !== Boolean(right.current)) {
@@ -5655,36 +6458,131 @@
         nextSelection[conversation.id] = true;
       }
     });
-    if (!state.exportSelectionInitialized) {
-      var current = state.exportConversationList.filter(function findCurrent(conversation) {
-        return conversation && conversation.current && conversation.id;
-      })[0];
-      if (current) {
-        nextSelection[current.id] = true;
-        // An empty, unavailable, or still-incomplete first response must not
-        // consume the one-time default. Select the current conversation when
-        // it first becomes available, then preserve every later user choice.
-        state.exportSelectionInitialized = true;
-      }
+    var current = state.exportConversationList.filter(function findCurrent(conversation) {
+      return conversation && conversation.current && conversation.id;
+    })[0];
+    if (current && !state.exportSelectionTouched) {
+      // Until the user changes the list, every partial/full-index transition
+      // has one authoritative default: the current conversation and no other
+      // row. This prevents the fast current-chat result and the later account
+      // index from briefly producing two defaults.
+      nextSelection = {};
+      nextSelection[current.id] = true;
+      state.exportSelectionInitialized = true;
     }
     state.exportSelected = nextSelection;
     render(state);
     return state.exportConversationMeta;
   }
 
-  function loadExportConversationList(state) {
+  function refreshCurrentExportConversation(state) {
+    return requestCurrentExportConversation(state).then(function applyCurrent(result) {
+      if (!result || !result.conversation || !result.conversation.id) {
+        if (!Array.isArray(state.exportConversationList)) {
+          return state.exportConversationMeta;
+        }
+        return applyExportConversationList(state, Object.assign(
+          {},
+          state.exportConversationMeta || {},
+          {
+            conversations: state.exportConversationList.map(function clearOldCurrent(conversation) {
+              return Object.assign({}, conversation || {}, { current: false });
+            }),
+            currentConversationId: ""
+          }
+        ));
+      }
+      var currentId = String(result.currentConversationId || result.conversation.id);
+      var existing = Array.isArray(state.exportConversationList)
+        ? state.exportConversationList.filter(function notCurrent(conversation) {
+            return String(conversation && conversation.id || "") !== currentId;
+          })
+        : [];
+      return applyExportConversationList(state, Object.assign(
+        {},
+        state.exportConversationMeta || {},
+        {
+          conversations: [result.conversation].concat(existing),
+          currentConversationId: currentId
+        }
+      ));
+    }).catch(function ignoreCurrentConversationFailure() {
+      return state.exportConversationMeta;
+    });
+  }
+
+  function loadExportConversationList(state, options) {
+    options = options || {};
+    if (options.currentOnly) {
+      return refreshCurrentExportConversation(state);
+    }
     if (state.exportConversationListRequest) {
+      if (options.force) {
+        return state.exportConversationListRequest.catch(function ignorePriorFailure() {
+          return null;
+        }).then(function forceAfterPriorListSettles() {
+          return loadExportConversationList(state, { force: true });
+        });
+      }
       return state.exportConversationListRequest;
     }
     state.exportConversationListGeneration =
       (Number(state.exportConversationListGeneration) || 0) + 1;
     var generation = state.exportConversationListGeneration;
-    var request = requestExportConversationList(state)
-      .then(function apply(result) {
+    var quickCurrent = !options.force && !Array.isArray(state.exportConversationList)
+      ? requestCurrentExportConversation(state).then(function showCurrentImmediately(result) {
+        if (
+          generation !== state.exportConversationListGeneration ||
+          !result ||
+          !result.conversation ||
+          !result.conversation.id
+        ) {
+          return null;
+        }
+        return applyExportConversationList(state, {
+          conversations: [result.conversation],
+          currentConversationId: result.currentConversationId || result.conversation.id,
+          complete: false,
+          source: "current"
+        });
+      }).catch(function ignoreQuickCurrentFailure() {
+        return null;
+      })
+      : Promise.resolve(null);
+    var request = quickCurrent.then(function loadLocalConversationIndex() {
+      if (generation !== state.exportConversationListGeneration) {
+        var cancelled = new Error("conversation-index-cancelled");
+        cancelled.cancelled = true;
+        throw cancelled;
+      }
+      return Promise.all([
+        requestImportedConversationList(state),
+        requestCurrentExportConversation(state).catch(function noCurrentConversation() {
+          return null;
+        })
+      ]);
+    }).then(function apply(results) {
         if (generation !== state.exportConversationListGeneration) {
           return state.exportConversationMeta;
         }
-        return applyExportConversationList(state, result);
+        var imported = results[0] || {};
+        var current = results[1] || {};
+        var conversations = (Array.isArray(imported.conversations) ? imported.conversations : []).slice();
+        if (current.conversation && current.conversation.id) {
+          conversations.push(current.conversation);
+        }
+        return applyExportConversationList(state, {
+          conversations: conversations,
+          currentConversationId: current.currentConversationId ||
+            current.conversation && current.conversation.id || "",
+          complete: Boolean(imported.complete),
+          source: imported.conversations && imported.conversations.length
+            ? "official-data-export"
+            : "current",
+          importedAt: imported.importedAt || "",
+          sourceName: imported.sourceName || "",
+          warnings: []
+        });
       })
       .catch(function failed(error) {
         if (
@@ -5694,11 +6592,16 @@
           return state.exportConversationMeta;
         }
         return applyExportConversationList(state, {
-          conversations: [],
+          conversations: Array.isArray(state.exportConversationList)
+            ? state.exportConversationList
+            : [],
+          currentConversationId: (state.exportConversationList || []).filter(function current(item) {
+            return item && item.current;
+          }).map(function id(item) { return item.id; })[0] || "",
           complete: false,
-          source: error && error.stopOperation ? "stopped" : "unavailable",
+          source: "unavailable",
           warnings: [{
-            scope: error && error.stopOperation ? "account-stopped" : "account",
+            scope: "local-import",
             error: String((error && error.message) || error || "conversation-index-unavailable")
           }]
         });
@@ -5715,6 +6618,170 @@
       });
     state.exportConversationListRequest = request;
     return request;
+  }
+
+  function cancelPendingExportConversationList(state) {
+    if (
+      !state ||
+      state.exportBusy ||
+      !state.exportConversationListRequest
+    ) {
+      return Promise.resolve(false);
+    }
+    state.exportConversationListGeneration =
+      (Number(state.exportConversationListGeneration) || 0) + 1;
+    state.exportConversationListRequest = null;
+    return Promise.resolve(true);
+  }
+
+  function conversationImportErrorText(state, error) {
+    var code = String(error && (error.code || error.message) || error || "");
+    if (/too-large|more than 250,000/i.test(code)) {
+      return text(state, "exportImportTooLarge");
+    }
+    if (
+      /invalid|unsupported|missing|checksum|decompress|encrypted|conversations-json/i.test(code)
+    ) {
+      return text(state, "exportImportInvalid");
+    }
+    return text(state, "exportImportFailed", {
+      error: code || text(state, "loadFailed")
+    });
+  }
+
+  function setConversationImportControlsDisabled(state, disabled) {
+    if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
+      return;
+    }
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-export-import],[data-export-file]"),
+      function update(control) {
+        control.disabled = Boolean(disabled);
+      }
+    );
+  }
+
+  function conversationImportBatches(conversations) {
+    var batches = [];
+    var current = [];
+    var currentBytes = 0;
+    var maxBytes = 1500000;
+    (Array.isArray(conversations) ? conversations : []).forEach(function add(conversation) {
+      var size = 2 * JSON.stringify(conversation || {}).length;
+      if (current.length && currentBytes + size > maxBytes) {
+        batches.push(current);
+        current = [];
+        currentBytes = 0;
+      }
+      current.push(conversation);
+      currentBytes += size;
+      if (currentBytes >= maxBytes) {
+        batches.push(current);
+        current = [];
+        currentBytes = 0;
+      }
+    });
+    if (current.length) {
+      batches.push(current);
+    }
+    return batches;
+  }
+
+  function importOfficialConversationFile(state, file) {
+    if (!file || state.conversationImportBusy || state.exportBusy) {
+      return Promise.resolve(null);
+    }
+    var importer = conversationImporterModule();
+    var exporter = exporterModule();
+    if (!importer || typeof importer.parseOfficialExportFile !== "function" || !exporter) {
+      setExportStatus(state, conversationImportErrorText(state, "conversation-importer-unavailable"), true);
+      return Promise.resolve(null);
+    }
+    state.conversationImportBusy = true;
+    setConversationImportControlsDisabled(state, true);
+    setExportStatus(state, text(state, "exportImporting"));
+    var importId = "";
+    return importer.parseOfficialExportFile(file, { exporter: exporter })
+      .then(function begin(result) {
+        return sendMessage({
+          type: "conversation.import.start",
+          sourceName: result.sourceName,
+          expectedCount: result.conversations.length
+        }, state).then(function started(response) {
+          if (!response || !response.ok || !response.importId) {
+            throw conversationResponseError(response, "conversation-import-start-failed");
+          }
+          importId = response.importId;
+          return {
+            parsed: result,
+            batches: conversationImportBatches(result.conversations)
+          };
+        });
+      }).then(function writeAll(context) {
+        var index = 0;
+        function next() {
+          if (index >= context.batches.length) {
+            return context;
+          }
+          var batch = context.batches[index];
+          index += 1;
+          setExportStatus(
+            state,
+            text(state, "exportImporting") + " " + index + "/" + context.batches.length
+          );
+          return sendMessage({
+            type: "conversation.import.chunk",
+            importId: importId,
+            conversations: batch
+          }, state).then(function appended(response) {
+            if (!response || !response.ok) {
+              throw conversationResponseError(response, "conversation-import-chunk-failed");
+            }
+            return next();
+          });
+        }
+        return next();
+      }).then(function finish(context) {
+        return sendMessage({
+          type: "conversation.import.finish",
+          importId: importId
+        }, state).then(function finished(response) {
+          if (!response || !response.ok) {
+            throw conversationResponseError(response, "conversation-import-finish-failed");
+          }
+          return {
+            response: response,
+            parsed: context.parsed
+          };
+        });
+      }).then(function refreshList(result) {
+        state.exportSelectionTouched = false;
+        state.exportSelectionInitialized = false;
+        state.exportSelectAllMode = false;
+        state.exportSelected = {};
+        return loadExportConversationList(state, { force: true }).then(function imported() {
+          setExportStatus(state, text(state, "exportImported", {
+            count: result.response.count
+          }));
+          return result;
+        });
+      }).catch(function failed(error) {
+        var abort = importId
+          ? sendMessage({
+              type: "conversation.import.abort",
+              importId: importId
+            }, state).catch(function ignoreAbortFailure() { return null; })
+          : Promise.resolve(null);
+        return abort.then(function reportFailure() {
+          setExportStatus(state, conversationImportErrorText(state, error), true);
+          return null;
+        });
+      }).then(function finishBusy(result) {
+        state.conversationImportBusy = false;
+        setConversationImportControlsDisabled(state, false);
+        syncExportSelectionUi(state);
+        return result;
+      });
   }
 
   function normalizeConversationCollection(result) {
@@ -6026,15 +7093,63 @@
   }
 
   function collectConversationChunk(state, ids) {
-    var direct = directPageCollection(state, "__chatgptUsageCollectMany", [ids]);
+    if (state && state.exportCancelRequested) {
+      return Promise.reject(new Error("export-cancelled"));
+    }
+    var requestedIds = Array.isArray(ids) ? ids.slice() : [];
+    var direct = directPageCollection(state, "__chatgptUsageCollectMany", [requestedIds]);
     if (direct) {
       return direct;
     }
-    return tabsSendMessage({ type: "conversation.collectMany", ids: ids }).then(function (resp) {
+    var currentId = (state.exportConversationList || []).filter(function current(item) {
+      return item && item.current && requestedIds.indexOf(item.id) !== -1;
+    }).map(function id(item) { return item.id; })[0] || "";
+    var importedRequest = sendMessage({
+      type: "conversation.import.collect",
+      ids: requestedIds
+    }, state).then(function imported(resp) {
       if (!resp || !resp.ok) {
-        throw accountResponseError(resp, text(state, "exportOpenPage"));
+        throw conversationResponseError(resp, text(state, "exportListUnavailable"));
       }
       return normalizeConversationCollection(resp);
+    });
+    var currentRequest = currentId
+      ? requestCurrentExportContent(state).catch(function preserveImportedFallback() {
+          return null;
+        })
+      : Promise.resolve(null);
+    return Promise.all([importedRequest, currentRequest]).then(function merge(results) {
+      var imported = results[0] || normalizeConversationCollection(null);
+      var current = results[1];
+      if (!current || !current.conversations || !current.conversations.length) {
+        return imported;
+      }
+      var currentConversation = current.conversations.filter(function exact(item) {
+        return item && item.id === currentId;
+      })[0];
+      if (!currentConversation) {
+        return imported;
+      }
+      var byId = {};
+      (imported.conversations || []).forEach(function remember(item) {
+        if (item && item.id) {
+          byId[item.id] = item;
+        }
+      });
+      byId[currentId] = currentConversation;
+      return {
+        conversations: requestedIds.map(function ordered(id) {
+          return byId[id];
+        }).filter(Boolean),
+        failures: (imported.failures || []).filter(function removeCurrentFailure(failure) {
+          return !failure || failure.id !== currentId;
+        }),
+        warnings: (imported.warnings || []).concat(current.warnings || []),
+        requestedCount: requestedIds.length,
+        complete: (imported.failures || []).filter(function nonCurrentFailure(failure) {
+          return failure && failure.id !== currentId;
+        }).length === 0
+      };
     });
   }
 
@@ -6052,35 +7167,41 @@
   // PNG 走 Canvas，以保留 Markdown 的视觉层次和品牌水印。
   // PDF 必须走独立的文本 PDF 生成器，确保分页按内容块完成，且文字可搜索、选择和复制。
   // Markdown / DOCX / JSON 继续使用各自的结构化导出器。
-  function buildExportArtifacts(exporter, valid, format, base) {
+  function buildExportArtifacts(exporter, valid, format, base, options) {
+    var exportOptions = Object.assign({}, options || {}, { filenameBase: base });
     var hasCanvas = root && root.document && typeof root.document.createElement === "function" &&
       typeof exporter.renderConversationsCanvas === "function";
     if (format === "pdf") {
       if (typeof exporter.buildPdf === "function") {
         return Promise.resolve([{
-          blob: exporter.buildPdf(valid, { filenameBase: base }),
+          blob: exporter.buildPdf(valid, exportOptions),
           filename: base + ".pdf"
         }]);
       }
-      var pdfArtifact = exporter.exportArtifact(valid, "pdf", { filenameBase: base });
+      var pdfArtifact = exporter.exportArtifact(valid, "pdf", exportOptions);
       return Promise.resolve([{ blob: pdfArtifact.blob, filename: pdfArtifact.filename }]);
     }
     if (hasCanvas && (format === "png" || format === "image")) {
       if ((format === "png" || format === "image") && typeof exporter.buildPngBlobFromConversations === "function") {
-        return exporter.buildPngBlobFromConversations(valid, { filenameBase: base, pageHeight: 14000 }).then(function (blob) {
+        return exporter.buildPngBlobFromConversations(valid, Object.assign({}, exportOptions, {
+          pageHeight: 14000,
+          includeBrandIcon: true
+        })).then(function (blob) {
           return [{ blob: blob, filename: base + ".png" }];
         });
       }
-      var pages = [exporter.renderConversationsCanvas(valid, { filenameBase: base })];
+      var pages = [exporter.renderConversationsCanvas(valid, Object.assign({}, exportOptions, {
+        includeBrandIcon: true
+      }))];
       return exporter.canvasToPngBlob(pages[0]).then(function pngFile(blob) {
         return [{ blob: blob, filename: base + ".png" }];
       });
     }
     // Word 走渲染版(Markdown→Word 结构),其余(Markdown/JSON)走原始同步导出。
     if (format === "docx" && typeof exporter.buildDocxRenderedBlob === "function") {
-      return Promise.resolve([{ blob: exporter.buildDocxRenderedBlob(valid, {}), filename: base + ".docx" }]);
+      return Promise.resolve([{ blob: exporter.buildDocxRenderedBlob(valid, exportOptions), filename: base + ".docx" }]);
     }
-    var artifact = exporter.exportArtifact(valid, format, { filenameBase: base });
+    var artifact = exporter.exportArtifact(valid, format, exportOptions);
     return Promise.resolve([{ blob: artifact.blob, filename: artifact.filename }]);
   }
 
@@ -6090,13 +7211,19 @@
     }
     if (disabled) {
       Array.prototype.forEach.call(
-        state.container.querySelectorAll("[data-export-format],[data-export-selectall],[data-export-selectnone],[data-export-project-toggle],[data-export-conv]"),
+        state.container.querySelectorAll("[data-export-format],[data-export-selectall],[data-export-selectnone],[data-export-project-toggle],[data-export-conv],[data-export-import],[data-export-file],.usage-refresh"),
         function toggle(control) {
           control.disabled = true;
         }
       );
     } else {
       syncExportSelectionUi(state);
+      Array.prototype.forEach.call(
+        state.container.querySelectorAll("[data-export-import],[data-export-file],.usage-refresh"),
+        function enable(control) {
+          control.disabled = Boolean(state.conversationImportBusy || state.statisticsDataBusy);
+        }
+      );
     }
     var cancel = typeof state.container.querySelector === "function"
       ? state.container.querySelector("[data-export-cancel]")
@@ -6118,11 +7245,15 @@
     }
     state.exportBusy = true;
     state.exportCancelRequested = false;
+    state.exportOperationId = "export-" + Date.now().toString(36) + "-" +
+      Math.random().toString(36).slice(2, 10);
+    state.activeDownloadId = null;
     setExportControlsDisabled(state, true);
     setExportStatus(state, text(state, "exportRunning"));
-    return beginConversationOperation(state).catch(function ignoreBeginFailure() {
-      return null;
-    }).then(function createPlan() {
+    return Promise.resolve().then(function createPlan() {
+      if (state.exportCancelRequested) {
+        throw new Error("export-cancelled");
+      }
       return exportTargetPlan(state);
     }).then(function executePlan(plan) {
       if (!plan.ids.length) {
@@ -6153,11 +7284,11 @@
         return;
       }
       setExportStatus(state, text(state, "exportFailed", { error: String((error && error.message) || error) }), true);
-    }).then(function releaseAfterExport() {
-      return releaseConversationCredentials(state);
     }).then(function finishExportAttempt() {
       state.exportBusy = false;
       state.exportCancelRequested = false;
+      state.exportOperationId = "";
+      state.activeDownloadId = null;
       setExportControlsDisabled(state, false);
     });
   }
@@ -6175,71 +7306,97 @@
     });
   }
 
-  function downloadThroughExtensionApi(blob, filename) {
-    var api = root && root.chrome && root.chrome.downloads;
+  function confirmedDownloadError(state, response) {
+    var result = response && typeof response === "object" ? response : {};
+    var status = String(result.state || "");
+    var detail = String(result.error || "download-failed");
+    if (status === "interrupted") {
+      return new Error(text(state, "downloadInterrupted", { error: detail }));
+    }
+    if (status === "timeout") {
+      return new Error(text(state, "downloadTimedOut"));
+    }
+    if (status === "missing") {
+      return new Error(text(state, "downloadMissing"));
+    }
+    return new Error(text(state, "downloadUnavailable"));
+  }
+
+  function downloadThroughBackground(state, blob, filename) {
+    var runtime = (root && root.chrome && root.chrome.runtime) ||
+      (typeof chrome !== "undefined" && chrome ? chrome.runtime : null);
     var urlApi = (root && root.URL) || (typeof URL !== "undefined" ? URL : null);
-    if (!api || typeof api.download !== "function" || !urlApi || typeof urlApi.createObjectURL !== "function") {
+    if (!runtime || typeof runtime.sendMessage !== "function") {
       return null;
     }
-    return new Promise(function (resolve) {
-      var url = urlApi.createObjectURL(blob);
-      var finish = function (ok) {
-        setTimeout(function revoke() {
-          try { urlApi.revokeObjectURL(url); } catch (_) {}
-        }, 60000);
-        resolve(Boolean(ok));
-      };
-      try {
-        api.download({ url: url, filename: filename, saveAs: false }, function (downloadId) {
-          if (root.chrome.runtime && root.chrome.runtime.lastError) {
-            finish(false);
+
+    function sendDownloadUrl(url, revoke) {
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+        function finish(callback, value) {
+          if (settled) {
             return;
           }
-          finish(typeof downloadId === "number");
-        });
-      } catch (_) {
-        finish(false);
-      }
+          settled = true;
+          if (typeof revoke === "function") {
+            try { revoke(); } catch (_) {}
+          }
+          callback(value);
+        }
+        try {
+          runtime.sendMessage({
+            type: "usage.download",
+            url: url,
+            filename: filename,
+            operationId: String(state && state.exportOperationId || "")
+          }, function downloadFinished(response) {
+            if (runtime.lastError) {
+              finish(reject, new Error(String(runtime.lastError.message || runtime.lastError)));
+              return;
+            }
+            if (!response || response.ok !== true || response.state !== "complete") {
+              finish(reject, confirmedDownloadError(state, response));
+              return;
+            }
+            if (state) {
+              state.activeDownloadId = Number(response.downloadId);
+            }
+            finish(resolve, response);
+          });
+        } catch (error) {
+          finish(reject, error);
+        }
+      });
+    }
+
+    if (urlApi && typeof urlApi.createObjectURL === "function") {
+      var objectUrl = urlApi.createObjectURL(blob);
+      return sendDownloadUrl(objectUrl, function revokeObjectUrl() {
+        if (typeof urlApi.revokeObjectURL === "function") {
+          urlApi.revokeObjectURL(objectUrl);
+        }
+      });
+    }
+
+    return blobToDataUrl(blob).then(function (dataUrl) {
+      return sendDownloadUrl(dataUrl);
     });
   }
 
-  // 页面内面板直接下载 Blob；扩展弹窗优先使用 chrome.downloads + Blob URL。
-  // 只有旧环境缺少这些能力时才把 data URL 发给后台，避免大文件跨扩展消息复制。
+  // In the real extension both page and popup surfaces route through the
+  // background downloads API and wait for Chrome's final complete state.
+  // The direct Blob fallback exists only for non-extension test/legacy hosts
+  // where no Chrome runtime object exists at all.
   function downloadOneFile(state, exporter, blob, filename) {
-    if (isPageSurface(state)) {
-      exporter.downloadBlob(blob, filename);
-      return Promise.resolve();
+    var confirmed = downloadThroughBackground(state, blob, filename);
+    if (confirmed) {
+      return confirmed;
     }
-    var directDownload = downloadThroughExtensionApi(blob, filename);
-    if (directDownload) {
-      return directDownload.then(function downloaded(ok) {
-        if (!ok) {
-          exporter.downloadBlob(blob, filename);
-        }
-      });
+    if (root && root.chrome) {
+      return Promise.reject(new Error(text(state, "downloadUnavailable")));
     }
-    var runtime = (root && root.chrome && root.chrome.runtime) || (typeof chrome !== "undefined" && chrome ? chrome.runtime : null);
-    if (!runtime || typeof runtime.sendMessage !== "function") {
-      exporter.downloadBlob(blob, filename);
-      return Promise.resolve();
-    }
-    return blobToDataUrl(blob).then(function (dataUrl) {
-      return new Promise(function (resolve) {
-        var settled = false;
-        var finish = function () { if (!settled) { settled = true; resolve(); } };
-        try {
-          runtime.sendMessage({ type: "usage.download", url: dataUrl, filename: filename }, function (resp) {
-            if (runtime.lastError || !resp || !resp.ok) { exporter.downloadBlob(blob, filename); }
-            finish();
-          });
-        } catch (_) {
-          exporter.downloadBlob(blob, filename);
-          finish();
-        }
-      });
-    }).catch(function () {
-      exporter.downloadBlob(blob, filename);
-    });
+    exporter.downloadBlob(blob, filename);
+    return Promise.resolve({ ok: true, state: "test-fallback" });
   }
 
   function nextUniqueConversationBase(exporter, conversation, index, seenBases) {
@@ -6285,7 +7442,9 @@
   function downloadSingleConversation(state, exporter, conversation, format, collection) {
     var enrichedConversation = enrichConversationWithUsageEvents(conversation, state.stats || {});
     var base = uniqueConversationBases(exporter, [enrichedConversation])[0];
-    return buildExportArtifacts(exporter, [enrichedConversation], format, base).then(function (artifacts) {
+    return buildExportArtifacts(exporter, [enrichedConversation], format, base, {
+      language: state.language
+    }).then(function (artifacts) {
       if (state.exportCancelRequested) {
         throw new Error("export-cancelled");
       }
@@ -6293,9 +7452,11 @@
         throw new Error("One selected conversation must produce exactly one file.");
       }
       return downloadOneFile(state, exporter, artifacts[0].blob, artifacts[0].filename).then(function () {
+        if (state.exportCancelRequested) {
+          throw new Error("export-cancelled");
+        }
         if (collection && (
           collection.complete === false ||
-          collection.indexComplete === false ||
           (collection.warnings || []).length
         )) {
           setExportStatus(state, text(state, "exportSingleIncomplete", { name: artifacts[0].filename }), true);
@@ -6345,7 +7506,9 @@
       }
       var enrichedConversation = enrichConversationWithUsageEvents(conversation, state.stats || {});
       var base = nextUniqueConversationBase(exporter, enrichedConversation, position, seenBases);
-      return buildExportArtifacts(exporter, [enrichedConversation], format, base).then(function (artifacts) {
+      return buildExportArtifacts(exporter, [enrichedConversation], format, base, {
+        language: state.language
+      }).then(function (artifacts) {
         if (artifacts.length !== 1) {
           throw new Error("Each selected conversation must produce exactly one file.");
         }
@@ -6398,7 +7561,12 @@
       }
       var chunkIds = ids.slice(offset, offset + chunkSize);
       setExportStatus(state, text(state, "exportRunning") + " " + Math.min(ids.length, offset + chunkIds.length) + "/" + ids.length);
-      return collectConversationChunk(state, chunkIds).then(function collected(result) {
+      return Promise.resolve().then(function collectInsideCurrentWindow() {
+        if (state.exportCancelRequested) {
+          throw new Error("export-cancelled");
+        }
+        return collectConversationChunk(state, chunkIds);
+      }).then(function collected(result) {
         if (state.exportCancelRequested) {
           throw new Error("export-cancelled");
         }
@@ -6494,6 +7662,9 @@
     // ZIP 本身只有一次下载。弹窗使用 chrome.downloads + Blob URL，页面内面板直接下载 Blob；
     // 两条路径都避免把大型归档转成 base64 后跨扩展消息传输。
     return downloadOneFile(state, exporter, zipBlob, archiveName).then(function downloadedArchive() {
+      if (state.exportCancelRequested) {
+        throw new Error("export-cancelled");
+      }
       if (failures.length) {
         setExportStatus(state, text(state, "exportPartial", { success: exportedConversationCount, failed: failures.length }), true);
       } else if (
@@ -6509,51 +7680,123 @@
     });
   }
 
-  function setChartModelFocus(state, model) {
+  function setStatisticsVisualFocus(state, type, key) {
     if (!state || !state.container || typeof state.container.querySelectorAll !== "function") {
       return;
     }
-    var selected = String(model || "");
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-series]"), function updateSeries(node) {
-      var same = selected && node.getAttribute("data-chart-series") === selected;
-      node.setAttribute("data-focus-dimmed", selected && !same ? "true" : "false");
-    });
+    var selectedType = String(type || "");
+    var selectedKey = String(key || "");
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-stat-focus-type][data-stat-focus-key]"),
+      function updateInteractiveStatistic(node) {
+        var sameType = selectedType &&
+          node.getAttribute("data-stat-focus-type") === selectedType;
+        var sameKey = sameType &&
+          node.getAttribute("data-stat-focus-key") === selectedKey;
+        node.setAttribute(
+          "data-stat-dimmed",
+          selectedType && sameType && !sameKey ? "true" : "false"
+        );
+        node.setAttribute(
+          "data-stat-highlighted",
+          selectedType && sameKey ? "true" : "false"
+        );
+      }
+    );
     Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-focus]"), function updateFocus(node) {
       node.setAttribute(
         "data-focus-active",
-        selected && node.getAttribute("data-chart-focus") === selected ? "true" : "false"
-      );
-    });
-    Array.prototype.forEach.call(state.container.querySelectorAll("[data-chart-model]"), function updateLegend(node) {
-      node.setAttribute(
-        "data-focus-active",
-        selected && node.getAttribute("data-chart-model") === selected ? "true" : "false"
+        selectedKey && node.getAttribute("data-chart-focus") === selectedKey
+          ? "true"
+          : "false"
       );
     });
   }
 
-  function bindTooltip(state) {
-    var wrap = state.container.querySelector(".usage-chart-wrap");
-    var tooltip = state.container.querySelector(".usage-tooltip");
-    if (!wrap || !tooltip) {
+  function applyStatisticsDrilldown(state, type, key) {
+    var interactionType = String(type || "");
+    var interactionKey = String(key || "");
+    if (!interactionKey) {
       return;
     }
-    Array.prototype.forEach.call(wrap.querySelectorAll("[data-chart-model]"), function bindLegend(modelChip) {
-      var model = modelChip.getAttribute("data-chart-model");
-      modelChip.addEventListener("mouseenter", function focusSeries() {
-        setChartModelFocus(state, model);
+    if (interactionType === "model") {
+      state.focusedModel = interactionKey;
+      state.donutModel = interactionKey;
+      state.focusedEffort = "";
+      render(state);
+      return;
+    }
+    if (interactionType === "effort" && (state.focusedModel || state.donutModel)) {
+      focusDonutEffortConversations(state, reasoningEffortClass(interactionKey));
+    }
+  }
+
+  function bindStatisticsVisualInteractions(state) {
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-stat-focus-type][data-stat-focus-key]"),
+      function bindStatisticHover(target) {
+        var type = target.getAttribute("data-stat-focus-type") || "";
+        var key = target.getAttribute("data-stat-focus-key") || "";
+        target.addEventListener("mouseenter", function focusStatistic() {
+          setStatisticsVisualFocus(state, type, key);
+        });
+        target.addEventListener("mouseleave", function clearStatistic() {
+          setStatisticsVisualFocus(state, "", "");
+        });
+        target.addEventListener("focusin", function focusStatisticByKeyboard() {
+          setStatisticsVisualFocus(state, type, key);
+        });
+        target.addEventListener("focusout", function clearStatisticByKeyboard() {
+          setStatisticsVisualFocus(state, "", "");
+        });
+      }
+    );
+    Array.prototype.forEach.call(
+      state.container.querySelectorAll("[data-stat-drill-type][data-stat-drill-key]"),
+      function bindStatisticDrilldown(target) {
+        var activate = function activate(event) {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          if (event && typeof event.stopPropagation === "function") {
+            event.stopPropagation();
+          }
+          applyStatisticsDrilldown(
+            state,
+            target.getAttribute("data-stat-drill-type"),
+            target.getAttribute("data-stat-drill-key")
+          );
+        };
+        target.addEventListener("click", activate);
+        target.addEventListener("keydown", function activateByKeyboard(event) {
+          if (event.key === "Enter" || event.key === " ") {
+            activate(event);
+          }
+        });
+      }
+    );
+    var focusBack = state.container.querySelector("[data-stat-focus-back]");
+    if (focusBack) {
+      focusBack.addEventListener("click", function leaveFocus() {
+        state.focusedModel = "";
+        state.donutModel = "";
+        state.focusedEffort = "";
+        render(state);
       });
-      modelChip.addEventListener("mouseleave", function clearSeries() {
-        setChartModelFocus(state, "");
-      });
-      modelChip.addEventListener("focusin", function focusSeriesByKeyboard() {
-        setChartModelFocus(state, model);
-      });
-      modelChip.addEventListener("focusout", function clearSeriesByKeyboard() {
-        setChartModelFocus(state, "");
-      });
-    });
-    Array.prototype.forEach.call(wrap.querySelectorAll(".usage-point"), function bindPoint(point) {
+    }
+  }
+
+  function bindTooltip(state) {
+    Array.prototype.forEach.call(state.container.querySelectorAll(".usage-point"), function bindPoint(point) {
+      var wrap = typeof point.closest === "function"
+        ? point.closest(".usage-chart-wrap")
+        : null;
+      var tooltip = wrap && wrap.querySelector
+        ? wrap.querySelector(".usage-tooltip")
+        : null;
+      if (!wrap || !tooltip) {
+        return;
+      }
       point.addEventListener("mouseenter", function show() {
         var svg = point.ownerSVGElement;
         var cx = Number(point.getAttribute("cx")) || 0;
@@ -6581,7 +7824,11 @@
           }
         });
 
-        setChartModelFocus(state, point.getAttribute("data-model"));
+        setStatisticsVisualFocus(
+          state,
+          point.getAttribute("data-stat-focus-type"),
+          point.getAttribute("data-stat-focus-key")
+        );
         tooltip.textContent = labels.length > 1
           ? date + text(state, "separator") +
             text(state, "overlappingModels", { count: labels.length }) + "\n" +
@@ -6597,13 +7844,19 @@
       });
       point.addEventListener("mouseleave", function hide() {
         tooltip.hidden = true;
-        setChartModelFocus(state, "");
+        setStatisticsVisualFocus(state, "", "");
       });
     });
   }
 
   function reload(state, options) {
     options = options || {};
+    var initialMessageTimeoutMs = Number(
+      state.options && state.options.initialMessageTimeoutMs
+    );
+    if (!Number.isFinite(initialMessageTimeoutMs) || initialMessageTimeoutMs <= 0) {
+      initialMessageTimeoutMs = 5000;
+    }
     var activeViewInteractionRevision =
       Number(state.activeViewInteractionRevision) || 0;
     state.loading = true;
@@ -6611,10 +7864,22 @@
       state.openaiStatusLoaded = false;
     }
     setStatus(state, text(state, "loading"));
-    render(state);
+    // On first mount the shared settings have not loaded yet. Rendering the
+    // hardcoded defaults here causes both entry points to flash the wrong
+    // view, language, theme and statistics mode before the persisted state
+    // arrives. Keep the new surface empty for this brief read; later reloads
+    // can safely retain and render the already committed state.
+    if (state.activeViewSettingsLoaded) {
+      render(state);
+    }
 
-    var core = Promise.all([loadStats(), loadSettings()]).then(function loaded(results) {
+    var coreLoaded = false;
+    var core = Promise.all([
+      loadStats(state, initialMessageTimeoutMs),
+      loadSettings(state, initialMessageTimeoutMs)
+    ]).then(function loaded(results) {
       var settings = results[1] || {};
+      coreLoaded = true;
       state.stats = results[0];
       state.language = normalizeLanguage(settings.language);
       if (
@@ -6623,6 +7888,9 @@
           activeViewInteractionRevision
       ) {
         state.activeView = normalizeView(settings.activeView);
+        state.committedView = state.activeView;
+        state.viewPreviewActive = false;
+        state.viewPreviewOrigin = "";
       }
       state.activeViewSettingsLoaded = true;
       state.statisticsMode = normalizeStatisticsMode(settings.statisticsMode);
@@ -6638,6 +7906,9 @@
         : settings.showTrendChart !== false && state.chartType === "donut";
       state.showTrendChart = state.showLineChart || state.showDonutChart;
       state.showTextStatistics = settings.showTextStatistics !== false;
+      state.statisticsSectionOrder = normalizeStatisticsSectionOrder(
+        settings.statisticsSectionOrder
+      );
       state.startDate = dateNoLaterThanToday(settings.startDate) || state.startDate || "";
       // A new install defaults to today. Once the user chooses another valid
       // end date, both entry points restore the same persisted range.
@@ -6662,25 +7933,44 @@
       // The stored active view is known only after core settings load. Start
       // its dependent data afterward so both entry points reopen Status or
       // Export as a complete view rather than displaying an empty shell.
-      var exportConversations = state.activeView === "export" &&
-        !options.skipExportList &&
-        (
-          options.forceExportList ||
-          !Array.isArray(state.exportConversationList)
-        )
-        ? loadExportConversationList(state)
+      var exportConversations = state.activeView === "export" && !options.skipExportList
+        ? loadExportConversationList(
+            state,
+            options.forceExportList
+              ? { force: true }
+              : Array.isArray(state.exportConversationList)
+                ? { currentOnly: true }
+                : {}
+          )
         : Promise.resolve(null);
       return Promise.all([openaiStatus, exportConversations]);
     }).then(function done() {
+      if (
+        coreLoaded &&
+        !state.viewPreviewActive &&
+        state.viewInteractionMode !== "hover" &&
+        normalizeView(state.committedView || state.activeView) === "chart" &&
+        state.options &&
+        typeof state.options.onUsageViewActivate === "function"
+      ) {
+        state.options.onUsageViewActivate();
+      }
       return state;
     });
   }
 
   function refreshStatsFromStorage(state) {
     var preserveOperationStatus = Boolean(
-      state && (state.statisticsDataBusy || state.exportBusy)
+      state && (
+        state.statisticsDataBusy ||
+        state.exportBusy ||
+        (
+          state.statusScope === "statistics-data" &&
+          state.statusText
+        )
+      )
     );
-    return loadStats().then(function loaded(stats) {
+    return loadStats(state).then(function loaded(stats) {
       state.stats = stats;
       state.loading = false;
       if (!preserveOperationStatus) {
@@ -6740,9 +8030,13 @@
         : settings.showTrendChart !== false && nextChartType === "donut";
       var nextShowTrendChart = nextShowLineChart || nextShowDonutChart;
       var nextShowTextStatistics = settings.showTextStatistics !== false;
+      var nextStatisticsSectionOrder = normalizeStatisticsSectionOrder(
+        settings.statisticsSectionOrder
+      );
       var modelSelectionSettingsChanged =
         persistedModelSelectionKey(settings) !== currentModelSelectionKey(state);
-      var viewChanged = nextView !== normalizeView(state.activeView);
+      var committedView = normalizeView(state.committedView || state.activeView);
+      var viewChanged = nextView !== committedView;
       var otherSettingsChanged =
         nextLanguage !== normalizeLanguage(state.language) ||
         nextStatisticsMode !== normalizeStatisticsMode(state.statisticsMode) ||
@@ -6755,11 +8049,23 @@
          nextShowDonutChart !== (state.showDonutChart === true) ||
          nextShowTrendChart !== (state.showTrendChart !== false) ||
          nextShowTextStatistics !== (state.showTextStatistics !== false) ||
+         JSON.stringify(nextStatisticsSectionOrder) !==
+           JSON.stringify(normalizeStatisticsSectionOrder(state.statisticsSectionOrder)) ||
          modelSelectionSettingsChanged;
       if (!viewChanged && !otherSettingsChanged) {
         return;
       }
-      state.activeView = nextView;
+      if (
+        viewChanged &&
+        committedView === "export" &&
+        nextView !== "export"
+      ) {
+        cancelPendingExportConversationList(state);
+      }
+      state.committedView = nextView;
+      if (!state.viewPreviewActive) {
+        state.activeView = nextView;
+      }
       state.activeViewSettingsLoaded = true;
       state.language = nextLanguage;
       state.statisticsMode = nextStatisticsMode;
@@ -6772,13 +8078,20 @@
       state.showDonutChart = nextShowDonutChart;
       state.showTrendChart = nextShowTrendChart;
       state.showTextStatistics = nextShowTextStatistics;
+      state.statisticsSectionOrder = nextStatisticsSectionOrder;
       applyPersistedModelSelections(state, settings);
       ensureSelection(state);
-      if (viewChanged && isActiveStatusView(state)) {
+      if (viewChanged && !state.viewPreviewActive && isActiveStatusView(state)) {
         ensureOpenAIStatus(state, false);
       }
-      if (viewChanged && state.activeView === "export" && !Array.isArray(state.exportConversationList)) {
-        loadExportConversationList(state);
+      if (
+        viewChanged &&
+        !state.viewPreviewActive &&
+        state.activeView === "export"
+      ) {
+        loadExportConversationList(state, Array.isArray(state.exportConversationList)
+          ? { currentOnly: true }
+          : {});
       }
       render(state);
     });
@@ -6812,7 +8125,6 @@
       ".usage-header-action svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}",
       ".usage-refresh.is-refreshing svg{animation:usage-refresh-spin .68s linear infinite}",
       ".usage-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}",
-      ".usage-panel-close{width:30px;min-width:30px;padding:0}",
       ".usage-controls{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0 4px}",
       ".usage-chart-controls{align-items:center}",
       ".usage-date-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;width:100%}",
@@ -6824,18 +8136,17 @@
       ".usage-settings-menu>summary,.usage-settings-item>summary{list-style:none}",
       ".usage-settings-menu>summary::-webkit-details-marker,.usage-settings-item>summary::-webkit-details-marker{display:none}",
       ".usage-settings-menu>summary::marker,.usage-settings-item>summary::marker{content:\"\"}",
-      ".usage-settings-popover{position:absolute;z-index:30;top:calc(100% + 4px);right:0;display:grid;gap:2px;width:236px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-5px) scale(.985);transform-origin:top right;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}",
-      ".usage-dashboard-page .usage-settings-popover{right:-36px}",
+      ".usage-settings-popover{position:absolute;z-index:30;top:100%;right:0;display:grid;gap:2px;width:210px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-5px) scale(.985);transform-origin:top right;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s}",
       ".usage-settings-menu[open]:not(.is-closing)>.usage-settings-popover{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0) scale(1);transition-delay:0s}",
       ".usage-settings-item{position:relative;min-width:0}",
-      ".usage-settings-item>summary{display:grid;grid-template-columns:minmax(82px,1fr) 104px 10px;align-items:center;column-gap:6px;min-height:31px;padding:5px 6px;border-radius:6px;color:var(--usage-text-secondary);font-size:11px;line-height:1.35;cursor:pointer}",
+      ".usage-settings-item>summary{display:grid;grid-template-columns:minmax(72px,1fr) 76px 10px;align-items:center;column-gap:6px;min-height:31px;padding:5px 6px;border-radius:6px;color:var(--usage-text-secondary);font-size:11px;line-height:1.35;cursor:pointer}",
       ".usage-settings-item>summary:hover,.usage-settings-item[open]>summary,.usage-settings-item:focus-within>summary{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
       ".usage-settings-category-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:1.35;font-weight:650}",
-      ".usage-settings-current{width:104px;min-width:0;justify-self:stretch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-muted);font-size:11px;line-height:1.35;text-align:right;font-variant-numeric:tabular-nums}",
+      ".usage-settings-current{width:76px;min-width:0;justify-self:stretch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-muted);font-size:11px;line-height:1.35;text-align:right;font-variant-numeric:tabular-nums}",
       ".usage-settings-current:empty{visibility:hidden}",
       ".usage-settings-arrow{width:10px;font-size:15px;line-height:1;color:var(--usage-text-muted);text-align:center}",
-      ".usage-settings-submenu{position:absolute;z-index:31;top:-5px;right:calc(100% - 1px);display:grid;gap:2px;width:176px;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateX(5px) scale(.985);transform-origin:top right;transition:opacity .15s ease,transform .15s ease,visibility 0s linear .15s}",
-      ".usage-settings-item:not(.is-closing):hover>.usage-settings-submenu,.usage-settings-item:not(.is-closing):focus-within>.usage-settings-submenu,.usage-settings-item[open]:not(.is-closing)>.usage-settings-submenu{opacity:1;visibility:visible;pointer-events:auto;transform:translateX(0) scale(1);transition-delay:0s}",
+      ".usage-settings-submenu{position:absolute;z-index:31;top:-5px;right:calc(100% - 1px);display:grid;gap:2px;width:192px;max-height:min(320px,calc(100vh - 96px));overflow:auto;overscroll-behavior:contain;padding:5px;border:1px solid var(--usage-border-panel);border-radius:9px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-4px) scale(.985);transform-origin:top right;transition:opacity .15s ease,transform .15s ease,visibility 0s linear .15s}",
+      ".usage-settings-menu .usage-settings-item[open]:not(.is-closing)>.usage-settings-submenu,.usage-settings-menu:not([data-interaction-mode=\"click\"]) .usage-settings-item:not(.is-closing):hover>.usage-settings-submenu,.usage-settings-menu:not([data-interaction-mode=\"click\"]) .usage-settings-item:not(.is-closing):focus-within>.usage-settings-submenu{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0) scale(1);transition-delay:0s}",
       ".usage-settings-option{display:grid;grid-template-columns:minmax(0,1fr) 15px;align-items:center;gap:6px;width:100%;min-height:30px;border:0;border-radius:6px;padding:5px 7px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer}",
       ".usage-settings-option:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
       ".usage-settings-option.active{color:var(--usage-accent-link);font-weight:700}",
@@ -6844,17 +8155,30 @@
       ".usage-settings-action{display:flex;align-items:center;width:100%;min-height:30px;border:0;border-radius:6px;padding:5px 7px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer}",
       ".usage-settings-action:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
       ".usage-settings-action:disabled{opacity:.55;cursor:not-allowed}",
-      ".usage-settings-data-submenu{width:176px}",
+      ".usage-settings-data-submenu{width:192px}",
       ".usage-statistics-visibility-option{display:grid!important;grid-template-columns:13px minmax(0,1fr) 15px!important;align-items:center;gap:7px!important;padding:5px 6px;border-radius:5px;color:var(--usage-text-secondary);font-size:11px;cursor:pointer}",
       ".usage-statistics-visibility-option:hover{background:var(--usage-surface-track);color:var(--usage-text-primary)}",
       ".usage-statistics-visibility-option input{width:13px!important;height:13px;margin:0;padding:0!important;border:0;background:transparent;accent-color:var(--usage-accent-link)}",
       ".usage-statistics-visibility-indicator::before{content:\"—\";display:block;text-align:center;color:var(--usage-text-muted);font-style:normal;font-weight:700}",
       ".usage-statistics-visibility-option:has(input:checked) .usage-statistics-visibility-indicator::before{content:\"✓\";color:var(--usage-accent-link)}",
       ".usage-statistics-warning{padding:6px 8px;border:1px solid var(--usage-warning-text);border-radius:7px;background:var(--usage-surface-row-hover);color:var(--usage-warning-text);font-size:11px;line-height:1.4}",
-      ".usage-view-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin:7px 0 8px;padding:2px;border:1px solid var(--usage-border-panel);border-radius:6px;background:var(--usage-surface-track)}",
+      ".usage-view-tabs{position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:3px;margin:7px 0 8px;padding:2px;border:1px solid var(--usage-border-panel);border-radius:6px;background:var(--usage-surface-track)}",
+      ".usage-view-tab-item{position:relative;min-width:0}",
+      ".usage-view-tab-item>.usage-view-tab{width:100%}",
+      ".usage-view-model-menu{position:absolute;z-index:29;top:100%;left:0;box-sizing:border-box;display:grid;gap:2px;width:100%;max-height:250px;overflow:auto;overscroll-behavior:contain;padding:4px;border:1px solid var(--usage-border-panel);border-radius:0 0 7px 7px;background:var(--usage-surface-panel);box-shadow:0 10px 28px var(--usage-shadow-tooltip);opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-2px) scale(.985);transform-origin:top left;transition:opacity .15s ease,transform .15s ease,visibility 0s linear .15s}",
+      ".usage-view-tab-item-chart[data-model-menu-open=\"true\"]>.usage-view-model-menu{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0) scale(1);transition-delay:0s}",
+      ".usage-view-model-option{display:block;width:100%;min-height:28px;overflow:hidden;border:0;border-radius:5px;padding:5px 6px;background:transparent;color:var(--usage-text-secondary);font:650 11px/1.35 system-ui,sans-serif;text-align:left;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}",
+      ".usage-view-model-option:hover,.usage-view-model-option:focus-visible{background:var(--usage-surface-track);color:var(--usage-text-primary);outline:none}",
+      ".usage-view-model-option.active{background:var(--usage-surface-track);color:var(--series);font-weight:750}",
+      ".usage-view-model-option:not(.active){opacity:.58}",
       ".usage-view-tab{border:0;background:transparent;color:var(--usage-text-secondary)}",
       ".usage-view-tab.active{background:var(--usage-surface-panel);color:var(--usage-text-primary);box-shadow:0 1px 1px var(--usage-shadow-active-tab)}",
       ".usage-export-panel{padding:6px 2px 4px;display:flex;flex-direction:column;gap:8px}",
+      ".usage-export-import-row{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;padding:7px;border:1px solid var(--usage-border-panel);border-radius:8px;background:var(--usage-surface-track)}",
+      ".usage-export-import{min-height:29px;border:1px solid var(--usage-border-control);border-radius:6px;padding:0 9px;background:var(--usage-surface-panel);color:var(--usage-text-primary);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}",
+      ".usage-export-import:hover{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
+      ".usage-export-import:disabled{opacity:.55;cursor:not-allowed}",
+      ".usage-export-import-copy{min-width:0;color:var(--usage-text-secondary);font-size:10px;line-height:1.4}",
       ".usage-export-title{margin:0;font-size:14px;line-height:1.35;font-weight:700;color:var(--usage-text-primary)}",
       ".usage-export-hint{margin:0;font-size:11px;line-height:1.5;color:var(--usage-text-secondary)}",
       ".usage-export-actions{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;padding:3px;border:1px solid var(--usage-border-panel);border-radius:8px;background:var(--usage-surface-track)}",
@@ -6875,19 +8199,19 @@
       ".usage-export-current{padding-bottom:3px;border-bottom:1px solid var(--usage-border-divider)}",
       ".usage-export-group{border-bottom:1px solid var(--usage-border-divider);padding:2px 0}",
       ".usage-export-group:last-child{border-bottom:0}",
-      ".usage-export-group summary{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px;color:var(--usage-text-secondary);font-size:11px;font-weight:700;cursor:pointer;list-style:none}",
+      ".usage-export-group summary{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:6px 4px;color:var(--usage-text-primary);font-size:14px;line-height:1.35;font-weight:800;cursor:pointer;list-style:none}",
       ".usage-export-group summary::-webkit-details-marker{display:none}",
       ".usage-export-group summary::before{content:\"▸\";flex:0 0 auto;color:var(--usage-text-muted);transition:transform .12s ease}",
       ".usage-export-group[open] summary::before{transform:rotate(90deg)}",
       ".usage-export-group-check{flex:0 0 auto;width:13px;height:13px;margin:0;accent-color:var(--usage-accent-primary);cursor:pointer}",
       ".usage-export-group summary span{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".usage-export-group summary small{flex:0 0 auto;color:var(--usage-text-muted);font-weight:600}",
+      ".usage-export-group summary small{flex:0 0 auto;color:var(--usage-text-muted);font-size:11px;font-weight:650}",
       ".usage-export-group:not([open])>.usage-export-group-list{display:none}",
-      ".usage-export-group-list{display:flex;flex-direction:column;gap:2px;padding-left:8px}",
-      ".usage-export-conv{display:flex;align-items:center;gap:6px;padding:3px 4px;border-radius:4px;cursor:pointer;font-size:12px}",
+      ".usage-export-group-list{display:flex;flex-direction:column;gap:1px;margin-left:12px;padding:2px 0 4px 10px;border-left:1px solid var(--usage-border-divider)}",
+      ".usage-export-conv{display:flex;align-items:center;gap:6px;padding:4px;border-radius:4px;cursor:pointer;font-size:11px}",
       ".usage-export-conv:hover{background:var(--usage-surface-track)}",
       ".usage-export-conv-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:1px}",
-      ".usage-export-conv-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600;color:var(--usage-text-primary)}",
+      ".usage-export-conv-copy b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:620;color:var(--usage-text-primary)}",
       ".usage-export-conv-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--usage-text-muted)}",
       ".usage-export-conv input{flex:0 0 auto}",
       ".usage-export-conv-badge{margin-left:auto;flex:0 0 auto;border:1px solid var(--usage-border-divider);border-radius:999px;padding:1px 5px;color:var(--usage-text-muted);font-size:10px}",
@@ -6914,17 +8238,6 @@
       ".usage-model-chip b{color:var(--usage-accent-link)}",
       ".usage-model-chip:has(input:not(:checked)){opacity:.62}",
       ".usage-model-chip:has(input:checked){background:var(--usage-surface-chip);border-color:var(--chip)}",
-      ".usage-chart-legend{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;padding:0 8px 7px}",
-      ".usage-chart-legend-row{appearance:none;display:grid;grid-template-columns:10px minmax(0,1fr) auto 43px;align-items:center;gap:5px;min-width:0;min-height:29px;padding:3px 5px;border:0;border-radius:6px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer;transition:background .15s ease,opacity .15s ease}",
-      ".usage-chart-legend-toggle{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}",
-      ".usage-chart-legend-row:hover,.usage-chart-legend-row:focus-visible{background:var(--usage-surface-row-hover)}",
-      ".usage-chart-legend-row:focus-within{background:var(--usage-surface-row-hover);outline:2px solid var(--usage-accent-link);outline-offset:-1px}",
-      ".usage-chart-legend-row i{width:8px;height:8px;border:2px solid var(--series);border-radius:999px;background:transparent;box-shadow:none;transition:background .15s ease,opacity .15s ease}",
-      ".usage-chart-legend-row.active i{background:var(--series)}",
-      ".usage-chart-legend-row:not(.active){opacity:.58}",
-      ".usage-chart-legend-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.35;font-weight:700}",
-      ".usage-chart-legend-row b{color:var(--series);font-size:15px;line-height:1.35;font-weight:750;font-variant-numeric:tabular-nums}",
-      ".usage-chart-legend-row small{min-width:43px;text-align:right;color:var(--usage-text-muted);font-size:14px;line-height:1.35;font-weight:650;font-variant-numeric:tabular-nums}",
       ".usage-view-panel{min-height:0;animation:usage-panel-in .16s ease-out both}",
       ".usage-chart-wrap{position:relative;border:1px solid var(--usage-border-panel);border-radius:7px;background:var(--usage-surface-panel);margin:3px 0 5px;overflow:hidden}",
       ".usage-chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:8px 8px 6px}",
@@ -6933,28 +8246,34 @@
       ".usage-donut-wrap{overflow:visible}",
       ".usage-donut-layout{display:grid;grid-template-columns:minmax(142px,44%) minmax(0,1fr);align-items:center;gap:8px;padding:2px 8px 10px}",
       ".usage-donut{display:block;width:100%;max-width:164px;height:auto;justify-self:center;overflow:visible}",
-      ".usage-donut-layout>.usage-chart-legend{grid-template-columns:minmax(0,1fr);align-content:center;padding:0}",
+      ".usage-two-chart-only .usage-chart-wrap{margin-top:2px;margin-bottom:4px}",
+      ".usage-two-chart-only .usage-chart-head{padding-top:6px;padding-bottom:4px}",
+      ".usage-two-chart-only .usage-donut-layout{padding-bottom:6px}",
+      ".usage-two-chart-only .usage-donut{max-width:148px}",
+      ".usage-two-chart-only .usage-donut-label{min-height:26px}",
       ".usage-donut-track{stroke:var(--usage-surface-track)}",
       ".usage-donut-slice{cursor:pointer;opacity:.96;transition:opacity .16s ease,stroke-width .16s ease,filter .16s ease;animation:usage-donut-draw .52s cubic-bezier(.22,.72,.25,1) var(--usage-donut-delay,0s) both}",
-      ".usage-donut-slice:hover,.usage-donut-slice:focus-visible,.usage-donut-slice[data-effort-active=\"true\"]{opacity:1;stroke-width:32;filter:drop-shadow(0 2px 3px var(--usage-shadow-accent));outline:none}",
+      ".usage-donut-slice:hover,.usage-donut-slice:focus-visible,.usage-donut-slice[data-stat-highlighted=\"true\"]{opacity:1;stroke-width:28;filter:drop-shadow(0 2px 3px var(--usage-shadow-accent));outline:none}",
       ".usage-donut-total{fill:var(--usage-text-primary);font-size:32px;font-weight:800;font-variant-numeric:tabular-nums}",
       ".usage-donut-center-label{fill:var(--usage-text-muted);font-size:12px;font-weight:700}",
-      ".usage-donut-legend{display:grid;align-content:center;gap:2px;min-width:0}",
-      ".usage-donut-legend-row{display:grid;grid-template-columns:9px minmax(0,1fr) auto auto;align-items:center;gap:5px;min-height:27px;padding:3px 4px;border-radius:6px;color:var(--usage-text-secondary)}",
-      ".usage-donut-legend-row[role=\"button\"]{cursor:pointer}",
-      ".usage-donut-legend-row[role=\"button\"]:hover,.usage-donut-legend-row[role=\"button\"]:focus-visible{background:var(--usage-surface-row-hover);outline:2px solid var(--usage-accent-link);outline-offset:-1px}",
-      ".usage-donut-legend-row[data-effort-active=\"true\"]{background:var(--usage-surface-row-hover);box-shadow:inset 0 0 0 1px var(--usage-border-panel)}",
-      ".usage-donut-legend-row i{width:8px;height:8px;border-radius:999px;background:var(--slice);box-shadow:0 0 0 1px var(--usage-border-panel)}",
-      ".usage-donut-legend-row span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.35;font-weight:700}",
-      ".usage-donut-legend-row b{font-size:15px;line-height:1.35;font-weight:750;color:var(--slice);font-variant-numeric:tabular-nums}",
-      ".usage-donut-legend-row small{min-width:43px;text-align:right;font-size:14px;line-height:1.35;font-weight:650;color:var(--usage-text-muted);font-variant-numeric:tabular-nums}",
+      ".usage-donut-labels{display:grid;align-content:center;gap:2px;min-width:0}",
+      ".usage-donut-label{appearance:none;display:grid;grid-template-columns:9px minmax(0,1fr) auto auto;align-items:center;gap:6px;min-height:29px;padding:3px 4px;border:0;border-radius:6px;background:transparent;color:var(--usage-text-secondary);text-align:left;cursor:pointer}",
+      ".usage-donut-label:hover,.usage-donut-label:focus-visible,.usage-donut-label[data-stat-highlighted=\"true\"]{background:var(--usage-surface-row-hover);outline:2px solid var(--usage-accent-link);outline-offset:-1px}",
+      ".usage-donut-label i{width:8px;height:8px;border-radius:999px;background:var(--slice);box-shadow:0 0 0 1px var(--usage-border-panel)}",
+      ".usage-donut-label span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.35;font-weight:700}",
+      ".usage-donut-label b{font-size:17px;line-height:1.25;font-weight:780;color:var(--slice);font-variant-numeric:tabular-nums}",
+      ".usage-donut-label small{min-width:45px;text-align:right;font-size:14px;line-height:1.3;font-weight:700;color:var(--usage-text-muted);font-variant-numeric:tabular-nums}",
       ".usage-donut-back{border:0;background:transparent;color:var(--usage-accent-link);padding:2px 0;font:inherit;font-size:10px;font-weight:700;cursor:pointer}",
       ".usage-donut-back:hover{color:var(--usage-accent-link-hover);text-decoration:underline}",
       ".usage-donut-back:focus-visible{outline:2px solid var(--usage-accent-link);outline-offset:2px;border-radius:3px}",
       ".usage-donut-warning{margin:0 8px 6px;padding:6px 7px;border-radius:6px;background:var(--usage-surface-chip);color:var(--usage-warning-text);font-size:10px;line-height:1.4}",
       ".usage-donut-models{padding-bottom:5px}",
       ".usage-chart{display:block;width:100%;height:auto}",
-      ".usage-grid{stroke:var(--usage-border-chart-grid);stroke-width:1;stroke-opacity:1}",
+      ".usage-plot-background{fill:var(--usage-surface-row-hover);fill-opacity:.36;stroke:var(--usage-border-chart-grid);stroke-width:1}",
+      ".usage-grid{stroke:var(--usage-border-chart-grid);stroke-width:1;shape-rendering:crispEdges}",
+      ".usage-grid-horizontal{stroke-opacity:.72}",
+      ".usage-grid-vertical{stroke-opacity:.34}",
+      ".usage-axis-line{stroke:var(--usage-text-muted);stroke-width:1.1;stroke-opacity:.72;shape-rendering:crispEdges}",
       ".usage-axis{fill:var(--usage-text-muted);font-size:9px;font-weight:500}",
       ".usage-axis-label{font-size:9px;font-weight:650}",
       ".usage-axis-date{font-size:9px}",
@@ -6962,6 +8281,7 @@
       ".usage-series{opacity:1}",
       ".usage-line-mask{stroke:#fff;stroke-width:8;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:usage-line-reveal .56s linear forwards}",
       ".usage-line{stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:var(--usage-line-dash,none);transition:opacity .12s ease}",
+      ".usage-line-hit{stroke:transparent;stroke-width:12;pointer-events:stroke;cursor:pointer;outline:none}",
       ".usage-point{stroke:var(--usage-chart-point-stroke);stroke-width:1.25;cursor:pointer;animation:usage-point-in .18s ease-out var(--usage-point-delay,.06s) both;transition:r .16s ease,opacity .12s ease}",
       ".usage-point:hover{r:6}",
       ".usage-line[data-focus-dimmed=\"true\"],.usage-point[data-focus-dimmed=\"true\"]{opacity:.12}",
@@ -6969,11 +8289,19 @@
       ".usage-line-focus[data-focus-active=\"true\"]{opacity:1}",
       ".usage-line-focus-halo{stroke:var(--usage-surface-panel);stroke-width:7}",
       ".usage-line-focus-color{stroke-width:3.5}",
+      ".usage-line-direct-label{cursor:pointer;outline:none;transition:opacity .14s ease}",
+      ".usage-line-direct-label-hit{fill:transparent;pointer-events:all}",
+      ".usage-line-direct-label line{stroke-width:1;stroke-opacity:.7;pointer-events:none}",
+      ".usage-line-direct-label text{font-size:9px;font-weight:750;paint-order:stroke;stroke:var(--usage-surface-panel);stroke-width:3px;stroke-linejoin:round;pointer-events:none}",
       ".usage-overlap-ring{fill:none;stroke:var(--usage-text-muted);stroke-width:1.2;stroke-dasharray:2 2;pointer-events:none}",
-      ".usage-model-chip[data-focus-active=\"true\"]{box-shadow:0 0 0 1px var(--chip)}",
+      "[data-stat-dimmed=\"true\"]{opacity:.13!important}",
+      ".usage-stat-model-name{cursor:pointer;border-radius:4px;outline:none;transition:opacity .14s ease,background .14s ease}",
+      ".usage-stat-model-name:hover,.usage-stat-model-name:focus-visible,.usage-stat-model-name[data-stat-highlighted=\"true\"]{background:var(--usage-surface-chip)}",
       ".usage-tooltip{position:absolute;z-index:2;max-width:min(260px,calc(100% - 12px));padding:6px 8px;border-radius:7px;background:var(--usage-tooltip-surface);color:var(--usage-text-inverse);font-size:12px;white-space:pre-line;pointer-events:none;box-shadow:0 8px 24px var(--usage-shadow-tooltip)}",
       ".usage-text-panel{min-width:0}",
       ".usage-count-panel .usage-text-panel{display:grid;gap:6px}",
+      ".usage-statistics-focusbar{display:flex;align-items:center;min-height:28px;padding:4px 7px;border:1px solid var(--usage-border-panel);border-radius:7px;background:var(--usage-surface-track)}",
+      ".usage-statistics-focusbar button{border:0;background:transparent;color:var(--usage-accent-link);font-size:10px;font-weight:700;cursor:pointer}",
       ".usage-model-text-list{display:grid;gap:6px;margin-top:6px}",
       ".usage-count-list{display:grid;gap:0;margin-top:2px;border-top:1px solid var(--usage-border-divider)}",
       ".usage-count-record{border:0;border-bottom:1px solid var(--usage-border-divider);border-radius:0;background:transparent;overflow:visible}",
@@ -6983,6 +8311,7 @@
       ".usage-mapped-record>.usage-count-row{cursor:pointer}",
       ".usage-mapped-record[open]>.usage-count-row{padding-bottom:7px}",
       ".usage-count-details{display:grid;gap:5px;padding:0 0 8px 12px}",
+      ".usage-mapped-effort-summary{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;padding:1px 0 3px}",
       ".usage-count-row strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary)}",
       ".usage-count-numbers{text-align:right}",
       ".usage-count-numbers b{display:block;color:var(--usage-accent-link)}",
@@ -7008,18 +8337,25 @@
       ".usage-internal-response-summary>.usage-count-features{margin-top:0}",
       ".usage-internal-response[open]>.usage-internal-response-summary{padding-bottom:5px;border-bottom:1px solid var(--usage-border-divider)}",
       ".usage-internal-response-model-row{display:block;min-height:21px}",
-      ".usage-relation-values.usage-internal-response-value{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:4px 7px}",
-      ".usage-internal-response-value>.usage-internal-response-copy{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 7px;min-width:0}",
+      ".usage-relation-values.usage-internal-response-value{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:4px 7px}",
+      ".usage-internal-response-value>.usage-internal-response-copy{display:grid;grid-template-rows:auto auto;align-items:baseline;row-gap:1px;min-width:0}",
+      ".usage-internal-response-headings,.usage-internal-response-data{display:grid;grid-template-columns:minmax(0,1fr) minmax(96px,1fr);align-items:baseline;column-gap:10px;min-width:0}",
+      ".usage-internal-response-headings{grid-row:1;white-space:nowrap}",
+      ".usage-internal-response-data{grid-row:2}",
+      ".usage-internal-response-heading{grid-column:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".usage-internal-effort-heading{grid-column:2}",
+      ".usage-internal-response-data>code{grid-column:1}",
       ".usage-internal-response-value code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--usage-text-primary)}",
-      ".usage-internal-efforts-inline{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;min-width:0}",
+      ".usage-internal-effort-values{grid-column:2;display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:4px 8px;min-width:0}",
+      ".usage-internal-effort-heading{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--usage-text-muted);font-size:11px;line-height:1.35;font-weight:650;white-space:nowrap;pointer-events:none}",
       ".usage-internal-effort-label{font-size:11px;line-height:1.35;font-weight:650;color:var(--usage-text-muted)}",
-      ".usage-internal-efforts-inline>span{display:inline-flex;align-items:baseline;gap:4px;color:var(--usage-text-secondary)}",
+      ".usage-internal-effort-values>span{display:inline-flex;align-items:baseline;gap:4px;color:var(--usage-text-secondary)}",
       ".usage-effort-token{border-radius:5px;padding:1px 3px;cursor:pointer;transition:background .15s ease,box-shadow .15s ease}",
       ".usage-effort-token:hover,.usage-effort-token:focus-visible,.usage-effort-token[data-effort-active=\"true\"]{background:var(--usage-surface-chip);box-shadow:0 0 0 1px var(--usage-border-panel);outline:none}",
       ".usage-internal-subcount,.usage-subcount{color:var(--usage-accent-link);font-variant-numeric:tabular-nums}",
-      ".usage-internal-subcount{align-self:start;white-space:nowrap}",
+      ".usage-internal-subcount{align-self:end;white-space:nowrap}",
       ".usage-count-row strong,.usage-count-numbers b,.usage-internal-request-head .usage-internal-model-copy code,.usage-internal-count{font-size:13px;line-height:1.35;font-weight:750}",
-      ".usage-internal-response-value code,.usage-internal-efforts-inline>span,.usage-internal-efforts-inline b,.usage-internal-subcount,.usage-subcount{font-size:12px;line-height:1.4;font-weight:650}",
+      ".usage-internal-response-value code,.usage-internal-effort-values>span,.usage-internal-effort-values b,.usage-internal-subcount,.usage-subcount{font-size:12px;line-height:1.4;font-weight:650}",
       ".usage-internal-request-head .usage-internal-model-copy small,.usage-internal-response-heading,.usage-record-label,.usage-relation-model small{font-size:11px;line-height:1.35;font-weight:650}",
       ".usage-count-row strong,.usage-internal-request-head .usage-internal-model-copy code,.usage-internal-response-value code,.usage-relation-head code{font-family:system-ui,sans-serif!important;font-style:normal;letter-spacing:normal}",
       ".usage-model-record{border-top:1px solid var(--usage-border-divider);padding-top:6px}",
@@ -7170,8 +8506,7 @@
       "@keyframes usage-point-in{from{opacity:0}to{opacity:1}}",
       "@keyframes usage-panel-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}",
       "@keyframes usage-skeleton{from{background-position:100% 0}to{background-position:-100% 0}}",
-      "@media (max-width:390px){.usage-settings-submenu{top:0;right:0;width:100%;transform:translateX(5px) scale(.985)}.usage-settings-item:not(.is-closing):hover>.usage-settings-submenu,.usage-settings-item:not(.is-closing):focus-within>.usage-settings-submenu,.usage-settings-item[open]:not(.is-closing)>.usage-settings-submenu{transform:translateX(0) scale(1)}}",
-      "@media (max-width:380px){.usage-donut-layout{grid-template-columns:124px minmax(0,1fr);gap:5px;padding-left:5px;padding-right:5px}.usage-donut-legend-row{gap:4px;padding-left:2px;padding-right:2px}.usage-donut-legend-row small{min-width:34px}}",
+      "@media (max-width:380px){.usage-donut-layout{grid-template-columns:124px minmax(0,1fr);gap:5px;padding-left:5px;padding-right:5px}.usage-donut-label{gap:4px;padding-left:2px;padding-right:2px}.usage-donut-label small{min-width:34px}}",
       "@media (prefers-reduced-motion:reduce){.usage-view-panel,.usage-line-mask,.usage-refresh.is-refreshing svg,.usage-point,.usage-donut-slice,.usage-skeleton i{animation:none}.usage-line-mask{stroke-dashoffset:0}.usage-point{opacity:1}.usage-point,.usage-donut-slice,.usage-param-row,.usage-variant-row,.usage-settings-popover,.usage-settings-submenu,.usage-relation-conversation-list,.usage-count-details{transition:none}}"
     ].join("");
     root.document.head.appendChild(style);
@@ -7184,6 +8519,7 @@
       options: options || {},
       language: DEFAULT_LANGUAGE,
       activeView: "chart",
+      committedView: "chart",
       activeViewSettingsLoaded: false,
       activeViewInteractionRevision: 0,
       sourceModeFilter: "all",
@@ -7195,8 +8531,17 @@
       showDonutChart: false,
       showTrendChart: true,
       showTextStatistics: true,
+      statisticsSectionOrder: DEFAULT_STATISTICS_SECTION_ORDER.slice(),
       settingsMenuOpen: false,
       settingsSubmenu: "",
+      settingsInteractionMode: "",
+      viewInteractionMode: "",
+      viewPreviewActive: false,
+      viewPreviewOrigin: "",
+      viewPointerMonitor: null,
+      modelMenuOpen: false,
+      focusedModel: "",
+      focusedEffort: "",
       startDate: "",
       endDate: "",
       dateSettingsLoaded: false,
@@ -7223,11 +8568,14 @@
       exportSelected: {},
       exportSelectAllMode: false,
       exportSelectionInitialized: false,
+      exportSelectionTouched: false,
       exportSearch: "",
       exportBusy: false,
       exportCancelRequested: false,
+      activeDownloadId: null,
       exportStatusText: "",
       exportStatusError: false,
+      conversationImportBusy: false,
       statisticsDataBusy: false,
       refreshing: false,
       stats: { totals: {}, byDate: {}, models: {}, sessionsByModel: {}, variantsByModel: {}, parametersByModel: {}, events: [] }
@@ -7240,6 +8588,19 @@
     return {
       reload: function reloadHandle(options) {
         return reload(state, options);
+      },
+      resetInteractionMode: function resetInteractionMode() {
+        state.activeView = normalizeView(state.committedView || state.activeView);
+        state.viewInteractionMode = "";
+        state.viewPreviewActive = false;
+        state.viewPreviewOrigin = "";
+        state.settingsInteractionMode = "";
+        state.settingsMenuOpen = false;
+        state.settingsSubmenu = "";
+        state.modelMenuOpen = false;
+      },
+      cancelPendingExportConversationList: function cancelPendingExportConversationListHandle() {
+        return cancelPendingExportConversationList(state);
       },
       state: state
     };
@@ -7274,8 +8635,14 @@
       statisticsColorMap: statisticsColorMap,
       applyPopupThemeVariables: applyPopupThemeVariables,
       applyExportConversationList: applyExportConversationList,
+      cancelPendingExportConversationList: cancelPendingExportConversationList,
+      loadExportConversationList: loadExportConversationList,
       buildExportArtifacts: buildExportArtifacts,
+      confirmedDownloadError: confirmedDownloadError,
+      downloadOneFile: downloadOneFile,
+      downloadSingleConversation: downloadSingleConversation,
       downloadConversationArchiveByIds: downloadConversationArchiveByIds,
+      exportConversations: exportConversations,
       exportTargetPlan: exportTargetPlan,
       finishConversationArchive: finishConversationArchive,
       localExportDateStamp: localExportDateStamp,
@@ -7287,9 +8654,11 @@
       exportStatisticsData: exportStatisticsData,
       importStatisticsBackup: importStatisticsBackup,
       readStatisticsBackupFile: readStatisticsBackupFile,
+      refreshStatsFromStorage: refreshStatsFromStorage,
       statisticsDataDateStamp: statisticsDataDateStamp,
       modelRelations: modelRelations,
       reasoningEffortClass: reasoningEffortClass,
+      applyStatisticsDrilldown: applyStatisticsDrilldown,
       focusDonutEffortConversations: focusDonutEffortConversations,
       fitStatusPanel: fitStatusPanel,
       setExportStatus: setExportStatus,

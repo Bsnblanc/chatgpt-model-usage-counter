@@ -25,13 +25,20 @@
   var STORAGE_KEY = "chatgptModelUsageStats.v1";
   var SETTINGS_KEY = "chatgptModelUsageSettings.v1";
   var STATUS_KEY = "chatgptModelUsageOpenAIStatus.v1";
+  var IMPORTED_CONVERSATION_INDEX_KEY = "chatgptImportedConversations.index.v1";
+  var IMPORTED_CONVERSATION_STAGING_KEY = "chatgptImportedConversations.staging.v1";
+  var IMPORTED_CONVERSATION_RECORD_PREFIX = "chatgptImportedConversations.record.v1.";
   var STATISTICS_BACKUP_FORMAT = "chatgpt-model-usage-counter.statistics";
   var STATISTICS_BACKUP_VERSION = 1;
   var CATALOG_SESSION_KEY = "chatgptModelUsageCatalog.session.v1";
+  var CATALOG_BINDING_SALT_SESSION_KEY = "chatgptModelUsageCatalogBindingSalt.session.v1";
   var CATALOG_REFRESH_SESSION_KEY = "chatgptModelUsageCatalogRefresh.session.v1";
   var STATUS_ALARM_NAME = "chatgpt-model-usage-openai-status";
   var STATUS_ALARM_PERIOD_MINUTES = 5;
   var MAX_EVENTS = 500;
+  var DOWNLOAD_FINAL_TIMEOUT_MS = 5 * 60 * 1000;
+  var activeDownloadsByOperationId = {};
+  var cancelledDownloadOperationIds = {};
   var CATALOG_REFRESH_CLAIM_TTL_MS = 5 * 60 * 1000;
   var catalogRefreshClaimQueue = Promise.resolve();
   var inMemoryCatalogRefreshClaims = {};
@@ -55,6 +62,7 @@
     "src/model-catalog.js",
     "src/detector.js",
     "src/exporter.js",
+    "src/conversation-importer.js",
     "src/conversation-source.js",
     "src/dashboard.js",
     "src/content.js"
@@ -66,6 +74,9 @@
   var recentUsageSubmissions = [];
   var usageIncrementQueue = Promise.resolve();
   var activeRuntimeModelCatalog = null;
+  var activeRuntimeModelCatalogAccountKey = "";
+  var activeRuntimeModelCatalogContextKey = "";
+  var inMemoryCatalogBindingSalt = "";
   var ACCOUNT_REQUEST_MAX_CONCURRENCY = 1;
   var ACCOUNT_REQUEST_MIN_GAP_MS = 1000;
   var ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS = 60 * 1000;
@@ -98,6 +109,9 @@
       analyticsHistoryComplete: true,
       events: [],
       eventHistoryComplete: true,
+      responseMigrationIndex: {},
+      responseMigrationIndexComplete: true,
+      submissionDedupeIndex: {},
       lastUpdated: null
     };
   }
@@ -135,6 +149,7 @@
       showDonutChart: false,
       showTrendChart: true,
       showTextStatistics: true,
+      statisticsSectionOrder: ["line", "donut", "text"],
       mappedVisibleModels: [],
       mappedKnownModels: [],
       mappedModelSelectionInitialized: false,
@@ -162,6 +177,25 @@
 
   function sanitizeSourceModeFilter(value) {
     return value === "chat" || value === "work" ? value : "all";
+  }
+
+  function sanitizeStatisticsSectionOrder(value) {
+    var allowed = ["line", "donut", "text"];
+    var seen = {};
+    var result = [];
+    (Array.isArray(value) ? value : []).forEach(function keepSection(item) {
+      var section = String(item || "").trim().toLowerCase();
+      if (allowed.indexOf(section) !== -1 && !seen[section]) {
+        seen[section] = true;
+        result.push(section);
+      }
+    });
+    allowed.forEach(function appendMissing(section) {
+      if (!seen[section]) {
+        result.push(section);
+      }
+    });
+    return result;
   }
 
   function sanitizeDateSetting(value) {
@@ -200,6 +234,7 @@
       showDonutChart: showDonutChart,
       showTrendChart: showLineChart || showDonutChart,
       showTextStatistics: base.showTextStatistics !== false,
+      statisticsSectionOrder: sanitizeStatisticsSectionOrder(base.statisticsSectionOrder),
       mappedVisibleModels: sanitizeSettingsModelList(base.mappedVisibleModels),
       mappedKnownModels: sanitizeSettingsModelList(base.mappedKnownModels),
       mappedModelSelectionInitialized: base.mappedModelSelectionInitialized === true,
@@ -257,11 +292,104 @@
     return year + "-" + month + "-" + day;
   }
 
+  function responseMigrationKey(event) {
+    var submissionId = String((event && event.submissionId) || "").slice(0, 96);
+    if (submissionId) {
+      return "submission:" + submissionId;
+    }
+    var requestMessageId = sanitizeMessageId(event && event.requestMessageId);
+    if (requestMessageId) {
+      return "request:" + requestMessageId;
+    }
+    var responseMessageId = sanitizeMessageId(event && event.responseMessageId);
+    return responseMessageId ? "response:" + responseMessageId : "";
+  }
+
+  function setSafeObjectEntry(target, key, value) {
+    Object.defineProperty(target, key, {
+      value: value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  }
+
+  function sanitizeResponseMigrationIndex(value, sourceModels) {
+    var source = value && typeof value === "object" ? value : {};
+    var clean = {};
+    Object.keys(source).forEach(function copyMigrationRecord(storedKey) {
+      var event = source[storedKey];
+      if (!event || typeof event !== "object") {
+        return;
+      }
+      var metadata = Object.assign(
+        Object.create(null),
+        sourceModels && sourceModels[event.model] || {},
+        event
+      );
+      var canonicalModel = canonicalStoredModelName(event.model, metadata);
+      if (!isStoredModelValid(canonicalModel, metadata, event.model)) {
+        return;
+      }
+      var canonicalEvent = canonicalizeStoredEvent(event, canonicalModel, metadata);
+      if (exactResponseModelFromMetadata(canonicalEvent)) {
+        return;
+      }
+      var key = responseMigrationKey(canonicalEvent);
+      if (key) {
+        setSafeObjectEntry(clean, key, canonicalEvent);
+      }
+    });
+    return clean;
+  }
+
+  function sanitizeSubmissionDedupeIndex(value) {
+    var source = value && typeof value === "object" ? value : {};
+    var clean = {};
+    Object.keys(source).forEach(function copySubmissionId(id) {
+      var submissionId = String(id || "").slice(0, 96);
+      if (!submissionId) {
+        return;
+      }
+      setSafeObjectEntry(
+        clean,
+        submissionId,
+        String(source[id] || "").slice(0, 48)
+      );
+    });
+    return clean;
+  }
+
+  function storeArchivedMigrationEvent(stats, event, previousKey) {
+    stats.responseMigrationIndex = stats.responseMigrationIndex &&
+      typeof stats.responseMigrationIndex === "object"
+      ? stats.responseMigrationIndex
+      : {};
+    var key = responseMigrationKey(event);
+    if (previousKey && previousKey !== key) {
+      delete stats.responseMigrationIndex[previousKey];
+    }
+    if (exactResponseModelFromMetadata(event)) {
+      if (key) {
+        delete stats.responseMigrationIndex[key];
+      }
+      return "";
+    }
+    if (!key) {
+      stats.responseMigrationIndexComplete = false;
+      return "";
+    }
+    setSafeObjectEntry(stats.responseMigrationIndex, key, event);
+    return key;
+  }
+
   function cloneStats(stats) {
     var base = stats && typeof stats === "object" ? stats : createEmptyStats();
     var migratedCatalog = sanitizeRuntimeModelCatalog(base.runtimeModelCatalog);
     if (migratedCatalog) {
       activeRuntimeModelCatalog = migratedCatalog;
+      activeRuntimeModelCatalogAccountKey = "";
+      activeRuntimeModelCatalogContextKey = "";
     }
     var rebuiltFromEvents = rebuildStatsFromCompleteEventHistory(base);
     if (rebuiltFromEvents) {
@@ -285,6 +413,8 @@
     var sourceParametersByModel = base.parametersByModel || {};
     var sourceRelationsByModel = base.relationsByModel || {};
     var sourceAnalyticsByDate = base.analyticsByDate || {};
+    var sourceResponseMigrationIndex = base.responseMigrationIndex || {};
+    var sourceSubmissionDedupeIndex = base.submissionDedupeIndex || {};
 
     Object.keys(sourceTotals).forEach(function copyTotal(model) {
       var metadata = sourceModels[model];
@@ -462,8 +592,52 @@
           base.events.length === totalCount(base)
         )
       ),
+      responseMigrationIndex: sanitizeResponseMigrationIndex(
+        sourceResponseMigrationIndex,
+        sourceModels
+      ),
+      responseMigrationIndexComplete: false,
+      submissionDedupeIndex: sanitizeSubmissionDedupeIndex(
+        sourceSubmissionDedupeIndex
+      ),
       lastUpdated: base.lastUpdated || null
     };
+    cloned.events.forEach(function retainSubmissionId(event) {
+      var submissionId = String(event && event.submissionId || "").slice(0, 96);
+      if (submissionId) {
+        setSafeObjectEntry(
+          cloned.submissionDedupeIndex,
+          submissionId,
+          String(event.submittedAt || "").slice(0, 48)
+        );
+      }
+    });
+    Object.keys(cloned.responseMigrationIndex).forEach(function retainArchivedSubmissionId(key) {
+      var event = cloned.responseMigrationIndex[key];
+      var submissionId = String(event && event.submissionId || "").slice(0, 96);
+      if (submissionId) {
+        setSafeObjectEntry(
+          cloned.submissionDedupeIndex,
+          submissionId,
+          String(event.submittedAt || "").slice(0, 48)
+        );
+      }
+    });
+    cloned.events.forEach(function removeRetainedMigrationDuplicate(event) {
+      var key = responseMigrationKey(event);
+      if (key) {
+        delete cloned.responseMigrationIndex[key];
+      }
+    });
+    var hasStoredResponseMigrationIndex = Object.prototype.hasOwnProperty.call(
+      base,
+      "responseMigrationIndex"
+    );
+    cloned.responseMigrationIndexComplete = Boolean(
+      hasStoredResponseMigrationIndex
+        ? base.responseMigrationIndexComplete === true
+        : cloned.eventHistoryComplete
+    );
     var hasStoredAnalytics = Object.prototype.hasOwnProperty.call(base, "analyticsByDate");
     if (!hasStoredAnalytics) {
       cloned.analyticsByDate = {};
@@ -515,10 +689,51 @@
     return "";
   }
 
+  function statisticsWithoutCatalogBindings(stats) {
+    var source = stats && typeof stats === "object" ? stats : {};
+    var clean = {};
+    Object.keys(source).forEach(function copyTopLevel(key) {
+      setSafeObjectEntry(clean, key, source[key]);
+    });
+    delete clean.runtimeModelCatalog;
+    delete clean.runtimeModelCatalogAccountKey;
+    delete clean.runtimeModelCatalogContextKey;
+
+    function stripRecord(record) {
+      var value = record && typeof record === "object" ? record : {};
+      var copy = {};
+      Object.keys(value).forEach(function copyField(key) {
+        setSafeObjectEntry(copy, key, value[key]);
+      });
+      delete copy.catalogAccountKey;
+      delete copy.catalogContextKey;
+      delete copy.runtimeModelCatalog;
+      delete copy.runtimeModelCatalogAccountKey;
+      delete copy.runtimeModelCatalogContextKey;
+      return copy;
+    }
+
+    clean.events = Array.isArray(source.events)
+      ? source.events.map(stripRecord)
+      : [];
+    clean.models = {};
+    Object.keys(source.models || {}).forEach(function stripModel(model) {
+      setSafeObjectEntry(clean.models, model, stripRecord(source.models[model]));
+    });
+    clean.responseMigrationIndex = {};
+    Object.keys(source.responseMigrationIndex || {}).forEach(function stripMigration(key) {
+      setSafeObjectEntry(
+        clean.responseMigrationIndex,
+        key,
+        stripRecord(source.responseMigrationIndex[key])
+      );
+    });
+    return clean;
+  }
+
   function createStatisticsBackup(stats, options) {
     var settings = options && typeof options === "object" ? options : {};
-    var cleanStats = cloneStats(stats);
-    delete cleanStats.runtimeModelCatalog;
+    var cleanStats = statisticsWithoutCatalogBindings(cloneStats(stats));
     return {
       format: STATISTICS_BACKUP_FORMAT,
       formatVersion: STATISTICS_BACKUP_VERSION,
@@ -550,8 +765,9 @@
     ) {
       throw new Error("invalid-statistics-backup-data");
     }
-    var cleanStats = cloneStats(source.statistics);
-    delete cleanStats.runtimeModelCatalog;
+    var cleanStats = statisticsWithoutCatalogBindings(
+      cloneStats(statisticsWithoutCatalogBindings(source.statistics))
+    );
     return {
       format: STATISTICS_BACKUP_FORMAT,
       formatVersion: STATISTICS_BACKUP_VERSION,
@@ -574,6 +790,61 @@
     return modelCatalog.sanitizeRuntimeModelCatalog(catalog);
   }
 
+  function sanitizeCatalogAccountKey(value) {
+    var clean = String(value || "").trim().toLowerCase();
+    return /^acct-[0-9a-f]{16}$/.test(clean) ? clean : "";
+  }
+
+  function sanitizeCatalogContextKey(value) {
+    var clean = String(value || "").trim().toLowerCase();
+    return /^ctx-[0-9a-f]{16}$/.test(clean) ? clean : "";
+  }
+
+  function storedCatalogAccountKey(metadata) {
+    return sanitizeCatalogAccountKey(metadata && metadata.catalogAccountKey);
+  }
+
+  function storedCatalogContextKey(metadata) {
+    return sanitizeCatalogContextKey(metadata && metadata.catalogContextKey);
+  }
+
+  function activeCatalogAllowedForMetadata(metadata) {
+    if (!activeRuntimeModelCatalog || !activeRuntimeModelCatalogAccountKey) {
+      return false;
+    }
+    var accountKey = storedCatalogAccountKey(metadata);
+    if (accountKey) {
+      return accountKey === activeRuntimeModelCatalogAccountKey;
+    }
+    var contextKey = storedCatalogContextKey(metadata);
+    return Boolean(
+      contextKey &&
+      activeRuntimeModelCatalogContextKey &&
+      contextKey === activeRuntimeModelCatalogContextKey
+    );
+  }
+
+  function boundRuntimeCatalog(metadata, catalogOverride, hasCatalogOverride) {
+    var source = metadata && typeof metadata === "object" ? metadata : {};
+    if (hasCatalogOverride) {
+      var explicitCatalog = sanitizeRuntimeModelCatalog(catalogOverride);
+      var explicitAccountKey = sanitizeCatalogAccountKey(
+        source.runtimeModelCatalogAccountKey
+      );
+      return explicitCatalog && explicitAccountKey ? explicitCatalog : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(source, "runtimeModelCatalog")) {
+      var payloadCatalog = sanitizeRuntimeModelCatalog(source.runtimeModelCatalog);
+      var payloadAccountKey = sanitizeCatalogAccountKey(
+        source.runtimeModelCatalogAccountKey
+      );
+      return payloadCatalog && payloadAccountKey ? payloadCatalog : null;
+    }
+    return activeCatalogAllowedForMetadata(source)
+      ? activeRuntimeModelCatalog
+      : null;
+  }
+
   function sanitizePublicModelName(model) {
     if (modelCatalog && typeof modelCatalog.sanitizePublicModelLabel === "function") {
       return modelCatalog.sanitizePublicModelLabel(model);
@@ -586,7 +857,11 @@
       return null;
     }
     var source = metadata && typeof metadata === "object" ? metadata : {};
-    var catalog = sanitizeRuntimeModelCatalog(catalogOverride || source.runtimeModelCatalog || activeRuntimeModelCatalog);
+    var catalog = boundRuntimeCatalog(
+      source,
+      catalogOverride,
+      arguments.length >= 3
+    );
     if (!catalog) {
       return null;
     }
@@ -651,24 +926,28 @@
     var selectedModeSource = String(
       source.selectedPublicModeSource || (selectedMode ? "selector-dom" : "")
     ).slice(0, 80);
-    var catalog = sanitizeRuntimeModelCatalog(
-      catalogOverride || source.runtimeModelCatalog || activeRuntimeModelCatalog
+    var hasCatalogOverride = arguments.length >= 3;
+    var catalog = boundRuntimeCatalog(
+      source,
+      catalogOverride,
+      hasCatalogOverride
     );
     if (!plausibleSelectedPublicModel(selected, selectedSource, catalog)) {
       selected = "";
       selectedSource = "";
     }
     var requestSlug = sanitizeChatGPTModel(requestModel);
+    var runtimeMetadata = Object.assign({}, source, {
+      selectedPublicModel: selected,
+      selectedPublicMode: selectedMode,
+      selectedPublicModeLabel: selectedModeLabel,
+      selectedPublicModeSource: selectedModeSource
+    });
     var resolved = isChatGPTRequestRoute(requestSlug)
-      ? resolveRuntimePublicModel(
-          requestSlug,
-          Object.assign({}, source, {
-            selectedPublicModel: selected,
-            selectedPublicMode: selectedMode,
-            selectedPublicModeLabel: selectedModeLabel,
-            selectedPublicModeSource: selectedModeSource
-          }),
-          catalogOverride
+      ? (
+          hasCatalogOverride
+            ? resolveRuntimePublicModel(requestSlug, runtimeMetadata, catalog)
+            : resolveRuntimePublicModel(requestSlug, runtimeMetadata)
         )
       : null;
 
@@ -803,7 +1082,7 @@
   function sanitizeModelRelationStats(value) {
     var source = value && typeof value === "object" ? value : {};
     var clean = {};
-    Object.keys(source).slice(0, 400).forEach(function copyRelation(key) {
+    Object.keys(source).forEach(function copyRelation(key) {
       var relation = source[key] && typeof source[key] === "object" ? source[key] : {};
       var requestModel = sanitizeChatGPTModel(relation.requestModel);
       var responseModel = sanitizeChatGPTModel(relation.responseModel);
@@ -843,7 +1122,7 @@
         }
       });
       var conversations = {};
-      Object.keys(relation.conversations || {}).slice(0, 5000).forEach(function copyConversation(id) {
+      Object.keys(relation.conversations || {}).forEach(function copyConversation(id) {
         var conversation = sanitizeRelationConversation(relation.conversations[id], id);
         if (conversation && conversation.count > 0) {
           conversations[conversation.conversationId] = conversation;
@@ -915,7 +1194,7 @@
   function sanitizeAnalyticsByDate(value, sourceModels) {
     var source = value && typeof value === "object" ? value : {};
     var clean = {};
-    Object.keys(source).sort().slice(-5000).forEach(function copyDate(dateKey) {
+    Object.keys(source).sort().forEach(function copyDate(dateKey) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
         return;
       }
@@ -928,7 +1207,7 @@
           ? sourceDay[sourceMode]
           : {};
         var modelsForMode = {};
-        Object.keys(sourceModelsForMode).slice(0, 400).forEach(function copyModel(rawModel) {
+        Object.keys(sourceModelsForMode).forEach(function copyModel(rawModel) {
           var metadata = sourceModels && sourceModels[rawModel];
           var model = canonicalStoredModelName(rawModel, metadata);
           if (!isStoredModelValid(model, metadata, rawModel)) {
@@ -1004,11 +1283,16 @@
     var day = stats && stats.analyticsByDate && stats.analyticsByDate[dateKey];
     var source = day && day[sourceMode];
     if (!source || !source[model]) {
-      return;
+      return false;
     }
+    var beforeRelations = sanitizeModelRelationStats(source[model]);
+    var beforeCount = Object.keys(beforeRelations)
+      .reduce(function sumRelations(total, key) {
+        return total + sanitizeCount(beforeRelations[key] && beforeRelations[key].count);
+      }, 0);
     var temporaryStats = {
       relationsByModel: {
-        [model]: sanitizeModelRelationStats(source[model])
+        [model]: beforeRelations
       }
     };
     removeRelationContribution(temporaryStats, model, event);
@@ -1027,6 +1311,13 @@
     if (!Object.keys(day).length) {
       delete stats.analyticsByDate[dateKey];
     }
+    var remainingRelations = source[model]
+      ? sanitizeModelRelationStats(source[model])
+      : {};
+    var afterCount = Object.keys(remainingRelations).reduce(function sumRemaining(total, key) {
+      return total + sanitizeCount(remainingRelations[key] && remainingRelations[key].count);
+    }, 0);
+    return beforeCount > 0 && afterCount === beforeCount - 1;
   }
 
   function updateRelationStats(stats, model, event) {
@@ -1487,12 +1778,38 @@
     return declaredPublic;
   }
 
+  function catalogBindingForResolvedMapping(metadata, runtimePublic) {
+    var source = metadata && typeof metadata === "object" ? metadata : {};
+    var accountKey = storedCatalogAccountKey(source);
+    var contextKey = storedCatalogContextKey(source);
+    if (
+      runtimePublic &&
+      runtimePublic.mappingStatus === "mapped" &&
+      activeCatalogAllowedForMetadata(source)
+    ) {
+      accountKey = accountKey || activeRuntimeModelCatalogAccountKey;
+      contextKey = contextKey || activeRuntimeModelCatalogContextKey;
+    }
+    return {
+      accountKey: accountKey,
+      contextKey: contextKey
+    };
+  }
+
   function canonicalStoredModelName(model, metadata) {
     var rawModel = sanitizeModelName(model);
     var sourceParameters = modelParametersFromMetadata(metadata);
     var exactModel = exactIdentityModelFromMetadata(metadata) ||
       sanitizeChatGPTModel(exactModelCandidate(metadata && metadata.chatgptModel, sourceParameters.model));
     var identityModel = exactIdentityModelFromMetadata(metadata);
+    // A catalog-proven public label stored with an event or aggregate is
+    // evidence from that account and time. A later catalog may map the same
+    // internal slug differently, so it must not relabel an incomplete
+    // historical aggregate that can no longer be split event-by-event.
+    var storedMappedPublic = storedCatalogMappedPublicModel(metadata);
+    if (storedMappedPublic) {
+      return storedMappedPublic;
+    }
     var runtimePublic = identityModel ? resolveRuntimePublicModel(identityModel, metadata) : null;
     if (runtimePublic && runtimePublic.mappingStatus === "mapped" && runtimePublic.publicModel) {
       return sanitizePublicModelName(runtimePublic.publicModel);
@@ -1515,10 +1832,6 @@
     // catalog is fetched again, keep the last catalog-proven public mapping
     // already stored on the event/aggregate. A fresh live catalog still wins
     // above, while unknown/unmapped slugs never enter this fallback.
-    var storedMappedPublic = storedCatalogMappedPublicModel(metadata);
-    if (storedMappedPublic) {
-      return storedMappedPublic;
-    }
     if (exactResponseModelFromMetadata(metadata)) {
       if (modelCatalog && typeof modelCatalog.resolveModelInfo === "function") {
         var responseResolved = modelCatalog.resolveModelInfo(exactModel);
@@ -1666,6 +1979,10 @@
       : sanitizeModelMode((identityResolved && identityResolved.mode) || source.mode || previous.mode || (resolved && resolved.mode));
     var observedSource = String(source.observedSource || previous.observedSource || "").slice(0, 64);
     var parameters = sanitizeModelParameters(sourceParameters, apiModel);
+    var catalogBinding = catalogBindingForResolvedMapping(
+      Object.assign({}, previous, source),
+      runtimePublic
+    );
     if (requestModel) {
       parameters.model = requestModel;
     }
@@ -1703,6 +2020,8 @@
               : (runtimePublic && runtimePublic.source) || source.publicModelSource || previous.publicModelSource || ""
       ).slice(0, 80),
       catalogObservedAt: String((runtimePublic && runtimePublic.catalogObservedAt) || source.catalogObservedAt || previous.catalogObservedAt || "").slice(0, 48),
+      catalogAccountKey: catalogBinding.accountKey,
+      catalogContextKey: catalogBinding.contextKey,
       deprecated: Boolean(source.deprecated || previous.deprecated || (resolved && resolved.deprecated)),
       parameters: parameters
     };
@@ -1763,9 +2082,15 @@
       selectedPublicModeSource: sourceEvent.selectedPublicModeSource || (metadata && metadata.selectedPublicModeSource),
       selectedModelText: sourceEvent.selectedModelText || (metadata && metadata.selectedModelText),
       modelParameters: eventParameters,
-      sourceMode: sourceEvent.sourceMode
+      sourceMode: sourceEvent.sourceMode,
+      catalogAccountKey: storedCatalogAccountKey(sourceEvent) || storedCatalogAccountKey(metadata),
+      catalogContextKey: storedCatalogContextKey(sourceEvent) || storedCatalogContextKey(metadata)
     };
     var runtimePublic = identityModel ? resolveRuntimePublicModel(identityModel, safeMappingMetadata) : null;
+    var catalogBinding = catalogBindingForResolvedMapping(
+      safeMappingMetadata,
+      runtimePublic
+    );
     var selectedMetadata = resolveSelectedPublicModelMetadata(
       requestModel,
       safeMappingMetadata
@@ -1849,6 +2174,8 @@
               : (runtimePublic && runtimePublic.source) || sourceEvent.publicModelSource || (metadata && metadata.publicModelSource) || ""
       ).slice(0, 80),
       catalogObservedAt: String((runtimePublic && runtimePublic.catalogObservedAt) || sourceEvent.catalogObservedAt || (metadata && metadata.catalogObservedAt) || "").slice(0, 48),
+      catalogAccountKey: catalogBinding.accountKey,
+      catalogContextKey: catalogBinding.contextKey,
       modelParameters: eventParameters,
       requestReasoningEffort: requestReasoningEffortFromParameters(eventParameters),
       usageFeatures: normalizeUsageFeaturesForPage(
@@ -3284,7 +3611,7 @@
   function removeUsageEventContribution(stats, event) {
     var model = sanitizePublicModelName(event && event.model);
     if (!model) {
-      return;
+      return false;
     }
     decrementCountEntry(stats.totals, model, 1);
     var submittedDate = new Date(String((event && event.submittedAt) || ""));
@@ -3300,10 +3627,11 @@
     removeFeatureContribution(stats, model, event);
     removeSessionContribution(stats, model, event);
     removeRelationContribution(stats, model, event);
-    removeAnalyticsContribution(stats, model, event);
+    var analyticsRemoved = removeAnalyticsContribution(stats, model, event);
     if (!sanitizeCount(stats.totals[model])) {
       delete stats.models[model];
     }
+    return analyticsRemoved;
   }
 
   function addUsageEventContribution(stats, event, modelInfo) {
@@ -4011,6 +4339,18 @@
       modelMappingStatus: "mapped",
       publicModelSource: "conversation-mode",
       catalogObservedAt: "",
+      catalogAccountKey: sanitizeCatalogAccountKey(
+        payload && (
+          payload.runtimeModelCatalogAccountKey ||
+          payload.catalogAccountKey
+        )
+      ),
+      catalogContextKey: sanitizeCatalogContextKey(
+        payload && (
+          payload.runtimeModelCatalogContextKey ||
+          payload.catalogContextKey
+        )
+      ),
       deprecated: false,
       parameters: { model: key },
       usageFeatures: [mode.feature]
@@ -4083,12 +4423,43 @@
     }
 
     var apiModel = requestModel;
-    var runtimePublic = resolveRuntimePublicModel(identityModel, payload, payload && payload.runtimeModelCatalog);
-    var selectedMetadata = resolveSelectedPublicModelMetadata(
-      requestModel,
-      payload,
+    var payloadCatalogAccountKey = sanitizeCatalogAccountKey(
+      payload && (
+        payload.runtimeModelCatalogAccountKey ||
+        payload.catalogAccountKey
+      )
+    );
+    var payloadCatalogContextKey = sanitizeCatalogContextKey(
+      payload && (
+        payload.runtimeModelCatalogContextKey ||
+        payload.catalogContextKey
+      )
+    );
+    var payloadRuntimeCatalog = sanitizeRuntimeModelCatalog(
       payload && payload.runtimeModelCatalog
     );
+    var hasPayloadCatalog = Boolean(
+      payloadRuntimeCatalog &&
+      payloadCatalogAccountKey
+    );
+    var runtimePublic = hasPayloadCatalog
+      ? resolveRuntimePublicModel(
+          identityModel,
+          Object.assign({}, payload, {
+            runtimeModelCatalogAccountKey: payloadCatalogAccountKey
+          }),
+          payloadRuntimeCatalog
+        )
+      : resolveRuntimePublicModel(identityModel, payload);
+    var selectedMetadata = hasPayloadCatalog
+      ? resolveSelectedPublicModelMetadata(
+          requestModel,
+          Object.assign({}, payload, {
+            runtimeModelCatalogAccountKey: payloadCatalogAccountKey
+          }),
+          payloadRuntimeCatalog
+        )
+      : resolveSelectedPublicModelMetadata(requestModel, payload);
     var selectedPublicModel = selectedMetadata.selectedPublicModel;
     var selectedPublicModelSource = selectedMetadata.selectedPublicModelSource;
     var selectedPublicMode = selectedMetadata.selectedPublicMode;
@@ -4108,11 +4479,15 @@
     var mappedPublicModel = runtimePublic &&
       runtimePublic.mappingStatus === "mapped" &&
       runtimePublic.publicModel;
+    var preservedCatalogPublicModel = !mappedPublicModel
+      ? storedCatalogMappedPublicModel(payload)
+      : "";
     var storedModel = sanitizePublicModelName(
       responseModel
         ? (
             mappedPublicModel ||
             directPublicSelection ||
+            preservedCatalogPublicModel ||
             chatGPTModeLabelFromSlug(identityModel) ||
             (resolved && resolved.label) ||
             identityModel
@@ -4121,6 +4496,7 @@
             directPublicSelection ||
             selectedPublicModel ||
             mappedPublicModel ||
+            preservedCatalogPublicModel ||
             chatGPTModeLabelFromSlug(identityModel) ||
             (resolved && resolved.label) ||
             (identityModel === "auto" ? "Auto" : identityModel)
@@ -4131,16 +4507,26 @@
       selectedPublicModel &&
       !/^request\+account-catalog$/i.test(String(selectedPublicModelSource || ""));
     var mappingStatus = responseModel
-      ? (mappedPublicModel ? "mapped" : directPublicSelection ? "selector" : "unmapped")
+      ? (
+          mappedPublicModel || preservedCatalogPublicModel
+            ? "mapped"
+            : directPublicSelection
+              ? "selector"
+              : "unmapped"
+        )
       : (directPublicSelection || explicitSelectedPublicModel)
         ? "selector"
-        : mappedPublicModel ? "mapped" : selectedPublicModel ? "mapped" : "unmapped";
+        : (mappedPublicModel || preservedCatalogPublicModel)
+          ? "mapped"
+          : selectedPublicModel ? "mapped" : "unmapped";
     var publicModelSource = directPublicSelection
         ? (sourceMode === "work" ? "work-selector+same-route" : "selector+same-route")
         : explicitSelectedPublicModel
           ? selectedPublicModelSource
           : mappedPublicModel
             ? runtimePublic.source
+            : preservedCatalogPublicModel
+              ? String(payload && payload.publicModelSource || "account-catalog:preserved")
             : (!responseModel && selectedPublicModel)
               ? selectedPublicModelSource
               : (responseModel ? "unmapped-response-slug" : "unmapped-request-slug");
@@ -4165,7 +4551,21 @@
       observedSource: String((payload && payload.modelObservedSource) || "").slice(0, 64),
       modelMappingStatus: String(mappingStatus).slice(0, 24),
       publicModelSource: String(publicModelSource).slice(0, 80),
-      catalogObservedAt: String((runtimePublic && runtimePublic.catalogObservedAt) || "").slice(0, 48),
+      catalogObservedAt: String(
+        (runtimePublic && runtimePublic.catalogObservedAt) ||
+        (preservedCatalogPublicModel && payload && payload.catalogObservedAt) ||
+        ""
+      ).slice(0, 48),
+      catalogAccountKey: payloadCatalogAccountKey || (
+        mappedPublicModel && activeCatalogAllowedForMetadata(payload)
+          ? activeRuntimeModelCatalogAccountKey
+          : ""
+      ),
+      catalogContextKey: payloadCatalogContextKey || (
+        mappedPublicModel && activeCatalogAllowedForMetadata(payload)
+          ? activeRuntimeModelCatalogContextKey
+          : ""
+      ),
       sourceMode: sourceMode,
       deprecated: Boolean(resolved && resolved.deprecated),
       parameters: parameters
@@ -4188,9 +4588,21 @@
     if (!id) {
       return false;
     }
-    return (stats.events || []).some(function duplicate(event) {
+    if ((stats.events || []).some(function duplicate(event) {
       return event && String(event.submissionId || "") === id;
-    });
+    })) {
+      return true;
+    }
+    if (Object.prototype.hasOwnProperty.call(
+      stats && stats.submissionDedupeIndex || {},
+      id
+    )) {
+      return true;
+    }
+    return Object.prototype.hasOwnProperty.call(
+      stats && stats.responseMigrationIndex || {},
+      "submission:" + id
+    );
   }
 
   function isDuplicatePayloadEvent(stats, payload) {
@@ -4299,7 +4711,13 @@
       stats,
       payload && payload.submissionId
     );
-    if (eventIndex < 0 || !stats.events[eventIndex]) {
+    var archivedEntry = eventIndex < 0
+      ? archivedResponseObservationEntry(stats, payload, nowDate)
+      : null;
+    if (
+      (eventIndex < 0 || !stats.events[eventIndex]) &&
+      (!archivedEntry || !archivedEntry.event)
+    ) {
       return stats;
     }
 
@@ -4312,7 +4730,10 @@
       return stats;
     }
 
-    var previousEvent = Object.assign({}, stats.events[eventIndex]);
+    var previousEvent = Object.assign(
+      {},
+      eventIndex >= 0 ? stats.events[eventIndex] : archivedEntry.event
+    );
     var previousRequestModel = exactRequestModelFromMetadata(previousEvent);
     if (previousRequestModel && previousRequestModel !== requestModel) {
       return stats;
@@ -4335,6 +4756,9 @@
 
     var previousResponseModel = exactResponseModelFromMetadata(previousEvent);
     var candidateEvent = Object.assign({}, previousEvent, {
+      submissionId: String(
+        previousEvent.submissionId || (payload && payload.submissionId) || ""
+      ).slice(0, 96),
       requestModel: requestModel,
       requestModelEvidence: "trusted",
       apiModel: requestModel,
@@ -4362,7 +4786,9 @@
     }
 
     var modelInfo = resolvePayloadModelInfo(Object.assign({}, candidateEvent, {
-      runtimeModelCatalog: payload && payload.runtimeModelCatalog
+      runtimeModelCatalog: payload && payload.runtimeModelCatalog,
+      runtimeModelCatalogAccountKey: payload && payload.runtimeModelCatalogAccountKey,
+      runtimeModelCatalogContextKey: payload && payload.runtimeModelCatalogContextKey
     }));
     if (!modelInfo || !modelInfo.label) {
       return stats;
@@ -4371,7 +4797,11 @@
     if (JSON.stringify(updatedEvent) === JSON.stringify(previousEvent)) {
       return stats;
     }
-    stats.events[eventIndex] = updatedEvent;
+    if (eventIndex >= 0) {
+      stats.events[eventIndex] = updatedEvent;
+    } else {
+      storeArchivedMigrationEvent(stats, updatedEvent, archivedEntry.key);
+    }
 
     var rebuilt = rebuildStatsFromCompleteEventHistory(stats, true);
     if (rebuilt) {
@@ -4382,8 +4812,18 @@
       return rebuilt;
     }
 
-    removeUsageEventContribution(stats, previousEvent);
+    var analyticsWasComplete = stats.analyticsHistoryComplete === true;
+    var analyticsRemoved = removeUsageEventContribution(stats, previousEvent);
     addUsageEventContribution(stats, updatedEvent, modelInfo);
+    if (
+      analyticsWasComplete &&
+      (
+        !analyticsRemoved ||
+        (!exactRequestModelFromMetadata(updatedEvent) && !exactResponseModelFromMetadata(updatedEvent))
+      )
+    ) {
+      stats.analyticsHistoryComplete = false;
+    }
     stats.lastUpdated = String(
       (payload && payload.submittedAt) ||
       (nowDate instanceof Date ? nowDate.toISOString() : new Date().toISOString())
@@ -4393,11 +4833,19 @@
 
   function applyIncrement(existingStats, payload, nowDate) {
     var incomingCatalog = sanitizeRuntimeModelCatalog(payload && payload.runtimeModelCatalog);
+    var incomingCatalogAccountKey = sanitizeCatalogAccountKey(
+      payload && payload.runtimeModelCatalogAccountKey
+    );
+    var incomingCatalogContextKey = sanitizeCatalogContextKey(
+      payload && payload.runtimeModelCatalogContextKey
+    );
     var sourceStats = existingStats && typeof existingStats === "object"
       ? Object.assign({}, existingStats)
       : createEmptyStats();
-    if (incomingCatalog) {
+    if (incomingCatalog && incomingCatalogAccountKey) {
       activeRuntimeModelCatalog = incomingCatalog;
+      activeRuntimeModelCatalogAccountKey = incomingCatalogAccountKey;
+      activeRuntimeModelCatalogContextKey = incomingCatalogContextKey;
     }
     var stats = cloneStats(sourceStats);
     var now = nowDate || new Date();
@@ -4409,7 +4857,11 @@
     var model = modelInfo.label;
     var submittedAt = payload && payload.submittedAt ? String(payload.submittedAt) : now.toISOString();
     var submittedDate = new Date(submittedAt);
-    var dateKey = todayKey(Number.isNaN(submittedDate.getTime()) ? now : submittedDate);
+    if (Number.isNaN(submittedDate.getTime())) {
+      submittedAt = now.toISOString();
+      submittedDate = now;
+    }
+    var dateKey = todayKey(submittedDate);
     var pageUrl = String((payload && payload.pageUrl) || "").slice(0, 500);
     var conversationId = sanitizeConversationId(
       (payload && payload.conversationId) || extractConversationId(pageUrl)
@@ -4469,6 +4921,8 @@
       modelMappingStatus: modelInfo.modelMappingStatus || "",
       publicModelSource: modelInfo.publicModelSource || "",
       catalogObservedAt: modelInfo.catalogObservedAt || "",
+      catalogAccountKey: modelInfo.catalogAccountKey || "",
+      catalogContextKey: modelInfo.catalogContextKey || "",
       modelParameters: modelInfo.parameters,
       requestReasoningEffort: requestReasoningEffortFromParameters(modelInfo.parameters),
       usageFeatures: usageFeatures,
@@ -4481,6 +4935,13 @@
       requestMessageId: requestMessageId,
       responseMessageId: sanitizeMessageId(payload && payload.responseMessageId)
     };
+    stats.submissionDedupeIndex = stats.submissionDedupeIndex &&
+      typeof stats.submissionDedupeIndex === "object"
+      ? stats.submissionDedupeIndex
+      : {};
+    if (submissionId) {
+      setSafeObjectEntry(stats.submissionDedupeIndex, submissionId, submittedAt);
+    }
     if (modelInfo.responseModel) {
       usageEvent.responseObservedAt = String(modelInfo.responseObservedAt || "").slice(0, 48);
       usageEvent.responseObservedSource = String(modelInfo.responseObservedSource || "").slice(0, 64);
@@ -4488,12 +4949,25 @@
     stats.events.unshift(usageEvent);
     updateRelationStats(stats, model, usageEvent);
     updateAnalyticsContribution(stats, model, usageEvent);
+    if (
+      stats.analyticsHistoryComplete &&
+      !exactRequestModelFromMetadata(usageEvent) &&
+      !exactResponseModelFromMetadata(usageEvent)
+    ) {
+      stats.analyticsHistoryComplete = false;
+    }
+    var evictedEvents = stats.events.slice(MAX_EVENTS);
     stats.events = stats.events.slice(0, MAX_EVENTS);
+    evictedEvents.forEach(function archiveEvictedEvent(event) {
+      storeArchivedMigrationEvent(stats, event);
+    });
     stats.eventHistoryComplete = Boolean(
       stats.eventHistoryComplete &&
       totalCount(stats) <= MAX_EVENTS &&
       stats.events.length === totalCount(stats)
     );
+    stats.responseMigrationIndexComplete =
+      stats.responseMigrationIndexComplete === true;
 
     return stats;
   }
@@ -4571,13 +5045,103 @@
     return -1;
   }
 
+  function archivedResponseObservationEntry(stats, payload, nowDate) {
+    var archive = stats && stats.responseMigrationIndex &&
+      typeof stats.responseMigrationIndex === "object"
+      ? stats.responseMigrationIndex
+      : {};
+    var submissionId = String((payload && payload.submissionId) || "").slice(0, 96);
+    var requestMessageId = sanitizeMessageId(payload && payload.requestMessageId);
+    if (submissionId) {
+      var directKey = "submission:" + submissionId;
+      var directEvent = archive[directKey];
+      if (directEvent) {
+        var directRequestMessageId = sanitizeMessageId(directEvent.requestMessageId);
+        if (
+          requestMessageId &&
+          directRequestMessageId &&
+          directRequestMessageId !== requestMessageId
+        ) {
+          return null;
+        }
+        return { key: directKey, event: directEvent };
+      }
+    }
+
+    var keys = Object.keys(archive);
+    if (requestMessageId) {
+      for (var requestIndex = 0; requestIndex < keys.length; requestIndex += 1) {
+        var requestEvent = archive[keys[requestIndex]];
+        if (
+          requestEvent &&
+          sanitizeMessageId(requestEvent.requestMessageId) === requestMessageId
+        ) {
+          return { key: keys[requestIndex], event: requestEvent };
+        }
+      }
+      return null;
+    }
+
+    var responseMessageId = sanitizeMessageId(payload && payload.responseMessageId);
+    if (responseMessageId) {
+      for (var responseIndex = 0; responseIndex < keys.length; responseIndex += 1) {
+        var responseEvent = archive[keys[responseIndex]];
+        if (
+          responseEvent &&
+          sanitizeMessageId(responseEvent.responseMessageId) === responseMessageId
+        ) {
+          return { key: keys[responseIndex], event: responseEvent };
+        }
+      }
+      return null;
+    }
+
+    var conversationId = responseObservationConversationId(payload);
+    if (!conversationId) {
+      return null;
+    }
+    var observedAt = new Date(String((payload && payload.observedAt) || ""));
+    var observedTime = Number.isNaN(observedAt.getTime())
+      ? (nowDate instanceof Date ? nowDate.getTime() : Date.now())
+      : observedAt.getTime();
+    for (var fallbackIndex = 0; fallbackIndex < keys.length; fallbackIndex += 1) {
+      var event = archive[keys[fallbackIndex]];
+      if (!event || exactResponseModelFromMetadata(event)) {
+        continue;
+      }
+      var eventConversationId = String(
+        event.conversationId || extractConversationId(event.pageUrl)
+      ).slice(0, 128);
+      if (eventConversationId !== conversationId) {
+        continue;
+      }
+      var submittedTime = new Date(String(event.submittedAt || "")).getTime();
+      if (
+        !Number.isNaN(submittedTime) &&
+        observedTime >= submittedTime &&
+        observedTime - submittedTime <= RESPONSE_MATCH_WINDOW_MS
+      ) {
+        return { key: keys[fallbackIndex], event: event };
+      }
+    }
+    return null;
+  }
+
   function applyResponseObservation(existingStats, payload, nowDate) {
     var incomingCatalog = sanitizeRuntimeModelCatalog(payload && payload.runtimeModelCatalog);
+    var incomingCatalogAccountKey = sanitizeCatalogAccountKey(
+      payload && payload.runtimeModelCatalogAccountKey
+    );
+    var incomingCatalogContextKey = sanitizeCatalogContextKey(
+      payload && payload.runtimeModelCatalogContextKey
+    );
     var sourceStats = existingStats && typeof existingStats === "object"
       ? Object.assign({}, existingStats)
       : createEmptyStats();
-    if (incomingCatalog) {
+    if (incomingCatalog && incomingCatalogAccountKey) {
       activeRuntimeModelCatalog = incomingCatalog;
+      activeRuntimeModelCatalogAccountKey = incomingCatalogAccountKey;
+      activeRuntimeModelCatalogContextKey = incomingCatalogContextKey;
     }
     var stats = cloneStats(sourceStats);
     var responseModel = sanitizeChatGPTModel(payload && payload.responseModel);
@@ -4592,11 +5156,20 @@
     }
 
     var eventIndex = responseObservationEventIndex(stats, payload, nowDate);
-    if (eventIndex < 0 || !stats.events[eventIndex]) {
+    var archivedEntry = eventIndex < 0
+      ? archivedResponseObservationEntry(stats, payload, nowDate)
+      : null;
+    if (
+      (eventIndex < 0 || !stats.events[eventIndex]) &&
+      (!archivedEntry || !archivedEntry.event)
+    ) {
       return stats;
     }
 
-    var previousEvent = Object.assign({}, stats.events[eventIndex]);
+    var previousEvent = Object.assign(
+      {},
+      eventIndex >= 0 ? stats.events[eventIndex] : archivedEntry.event
+    );
     var previousResponseModel = exactResponseModelFromMetadata(previousEvent);
 
     var observedSource = String((payload && payload.observedSource) || "").slice(0, 64);
@@ -4633,6 +5206,9 @@
       : previousConversationId;
     var submittedPublicMode = sanitizePublicMode(previousEvent.selectedPublicMode);
     var candidateEvent = Object.assign({}, previousEvent, {
+      submissionId: String(
+        previousEvent.submissionId || (payload && payload.submissionId) || ""
+      ).slice(0, 96),
       // These fields describe the selector state at submission time. A later
       // response slug may change the actual model classification, but it must
       // never rewrite the mode the user submitted with.
@@ -4678,7 +5254,11 @@
     if (JSON.stringify(updatedEvent) === JSON.stringify(previousEvent)) {
       return stats;
     }
-    stats.events[eventIndex] = updatedEvent;
+    if (eventIndex >= 0) {
+      stats.events[eventIndex] = updatedEvent;
+    } else {
+      storeArchivedMigrationEvent(stats, updatedEvent, archivedEntry.key);
+    }
 
     var rebuilt = rebuildStatsFromCompleteEventHistory(stats, true);
     if (rebuilt) {
@@ -4686,8 +5266,18 @@
       return rebuilt;
     }
 
-    removeUsageEventContribution(stats, previousEvent);
+    var analyticsWasComplete = stats.analyticsHistoryComplete === true;
+    var analyticsRemoved = removeUsageEventContribution(stats, previousEvent);
     addUsageEventContribution(stats, updatedEvent, modelInfo);
+    if (
+      analyticsWasComplete &&
+      (
+        !analyticsRemoved ||
+        (!exactRequestModelFromMetadata(updatedEvent) && !exactResponseModelFromMetadata(updatedEvent))
+      )
+    ) {
+      stats.analyticsHistoryComplete = false;
+    }
     stats.lastUpdated = observedAt || stats.lastUpdated;
     return stats;
   }
@@ -4732,7 +5322,7 @@
     }
     var selected = sanitizePublicModelName(source.selectedPublicModel);
     var selectedSource = String(source.selectedPublicModelSource || "");
-    var catalog = sanitizeRuntimeModelCatalog(source.runtimeModelCatalog || activeRuntimeModelCatalog);
+    var catalog = boundRuntimeCatalog(source, null, false);
     return Boolean(selected && !plausibleSelectedPublicModel(selected, selectedSource, catalog));
   }
 
@@ -5002,11 +5592,7 @@
   }
 
   function statusBadgeText(record, count) {
-    var clean = sanitizeOpenAIStatusRecord(record);
-    if (!isAbnormalOpenAIStatus(clean)) {
-      return badgeText(count);
-    }
-    return clean.state === "unavailable" || clean.state === "unknown" || clean.state === "timeout" || clean.state === "fetch-failure" ? "?" : "!";
+    return badgeText(count);
   }
 
   function statusBadgeColor(record) {
@@ -5022,7 +5608,12 @@
     // 悬停标题与角标口径一致:都用"当前所选日期范围"的计数,避免角标显示范围数、标题却显示全部总数。
     var count = computeBadgeCount(stats || createEmptyStats(), badgeFilter);
     var clean = sanitizeOpenAIStatusRecord(record);
-    var prefix = "ChatGPT Model Usage" + (count ? " · " + count : "");
+    var prefix = "ChatGPT Model Usage";
+    if (count === null) {
+      prefix += " · Statistics history incomplete";
+    } else if (count) {
+      prefix += " · " + count;
+    }
     if (!clean) return prefix;
     return prefix + " · OpenAI status: " + clean.label;
   }
@@ -5122,6 +5713,9 @@
       clean.statisticsMode === "internal" ||
       clean.sourceModeFilter !== "all"
     ) {
+      if (stats.analyticsHistoryComplete !== true) {
+        return null;
+      }
       return computeBadgeCountFromAnalytics(stats, clean, modelSet);
     }
     var byDate = stats.byDate || {};
@@ -5975,28 +6569,26 @@
   }
 
   function storageGet(callback) {
-    // A Manifest V3 service worker can be suspended between two page events.
-    // Restore the account's session-only model catalog before normalizing
-    // persisted statistics; otherwise a final response slug can briefly lose
-    // its public mapping on worker wake and that wrong raw-slug aggregate is
-    // written back to local storage.
-    sessionCatalogGet(function withSessionCatalog() {
-      chrome.storage.local.get([STORAGE_KEY], function handleGet(result) {
-        var rawStats = result[STORAGE_KEY];
-        var migratedCatalog = sanitizeRuntimeModelCatalog(rawStats && rawStats.runtimeModelCatalog);
-        if (migratedCatalog) {
-          activeRuntimeModelCatalog = migratedCatalog;
-          sessionCatalogSet(migratedCatalog);
-        }
-        var cleanStats = cloneStats(rawStats);
-        if (rawStats && JSON.stringify(rawStats) !== JSON.stringify(cleanStats)) {
-          chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleCleanedStats() {
-            callback(cleanStats);
-          });
-          return;
-        }
-        callback(cleanStats);
-      });
+    // A session catalog is account-specific. Normal statistics reads must not
+    // load whichever account happened to publish the latest catalog. Incoming
+    // events carry their already-sanitized current-account catalog explicitly;
+    // stored catalog-proven mappings preserve themselves without a live catalog.
+    chrome.storage.local.get([STORAGE_KEY], function handleGet(result) {
+      var rawStats = result[STORAGE_KEY];
+      var migratedCatalog = sanitizeRuntimeModelCatalog(rawStats && rawStats.runtimeModelCatalog);
+      if (migratedCatalog) {
+        activeRuntimeModelCatalog = migratedCatalog;
+        activeRuntimeModelCatalogAccountKey = "";
+        activeRuntimeModelCatalogContextKey = "";
+      }
+      var cleanStats = cloneStats(rawStats);
+      if (rawStats && JSON.stringify(rawStats) !== JSON.stringify(cleanStats)) {
+        chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleCleanedStats() {
+          callback(cleanStats);
+        });
+        return;
+      }
+      callback(cleanStats);
     });
   }
 
@@ -6011,33 +6603,122 @@
     });
   }
 
-  function sessionCatalogGet(callback) {
+  function sessionCatalogRecord(value) {
+    var source = value && typeof value === "object" ? value : {};
+    var wrappedCatalog = sanitizeRuntimeModelCatalog(source.catalog);
+    if (wrappedCatalog) {
+      return {
+        accountKey: sanitizeCatalogAccountKey(source.accountKey),
+        catalog: wrappedCatalog
+      };
+    }
+    var legacyCatalog = sanitizeRuntimeModelCatalog(source);
+    return legacyCatalog
+      ? { accountKey: "", catalog: legacyCatalog }
+      : { accountKey: "", catalog: null };
+  }
+
+  function catalogForAccountKey(value, accountKey) {
+    var requestedAccountKey = sanitizeCatalogAccountKey(accountKey);
+    var record = sessionCatalogRecord(value);
+    return requestedAccountKey &&
+      record.accountKey === requestedAccountKey
+      ? record.catalog
+      : null;
+  }
+
+  function sessionCatalogGet(accountKey, callback) {
+    if (typeof accountKey === "function") {
+      callback = accountKey;
+      accountKey = "";
+    }
+    var requestedAccountKey = sanitizeCatalogAccountKey(accountKey);
     var session = typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
     if (!session || typeof session.get !== "function") {
-      callback(activeRuntimeModelCatalog);
+      callback(
+        requestedAccountKey &&
+        requestedAccountKey === activeRuntimeModelCatalogAccountKey
+          ? activeRuntimeModelCatalog
+          : null
+      );
       return;
     }
     session.get([CATALOG_SESSION_KEY], function read(result) {
-      var catalog = sanitizeRuntimeModelCatalog(result && result[CATALOG_SESSION_KEY]);
+      var catalog = catalogForAccountKey(
+        result && result[CATALOG_SESSION_KEY],
+        requestedAccountKey
+      );
       if (catalog) {
         activeRuntimeModelCatalog = catalog;
+        activeRuntimeModelCatalogAccountKey = requestedAccountKey;
+        activeRuntimeModelCatalogContextKey = "";
+        callback(catalog);
+        return;
       }
-      callback(catalog || activeRuntimeModelCatalog);
+      callback(null);
     });
   }
 
-  function sessionCatalogSet(catalog, callback) {
+  function sessionCatalogSet(catalog, accountKey, callback) {
+    if (typeof accountKey === "function") {
+      callback = accountKey;
+      accountKey = "";
+    }
     var cleanCatalog = sanitizeRuntimeModelCatalog(catalog);
+    var cleanAccountKey = sanitizeCatalogAccountKey(accountKey);
     if (cleanCatalog) {
       activeRuntimeModelCatalog = cleanCatalog;
+      activeRuntimeModelCatalogAccountKey = cleanAccountKey;
+      activeRuntimeModelCatalogContextKey = "";
     }
     var session = typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
-    if (!cleanCatalog || !session || typeof session.set !== "function") {
+    if (!cleanCatalog || !cleanAccountKey || !session || typeof session.set !== "function") {
       if (callback) callback(cleanCatalog);
       return;
     }
-    session.set({ [CATALOG_SESSION_KEY]: cleanCatalog }, function saved() {
+    session.set({
+      [CATALOG_SESSION_KEY]: {
+        accountKey: cleanAccountKey,
+        catalog: cleanCatalog
+      }
+    }, function saved() {
       if (callback) callback(cleanCatalog);
+    });
+  }
+
+  function catalogBindingSalt(callback) {
+    if (inMemoryCatalogBindingSalt) {
+      callback(inMemoryCatalogBindingSalt);
+      return;
+    }
+    var session = typeof chrome !== "undefined" && chrome.storage && chrome.storage.session;
+    if (!session || typeof session.get !== "function" || typeof session.set !== "function") {
+      if (!inMemoryCatalogBindingSalt) {
+        inMemoryCatalogBindingSalt = "catalog-" + Date.now().toString(36) + "-" +
+          Math.random().toString(36).slice(2, 18);
+      }
+      callback(inMemoryCatalogBindingSalt);
+      return;
+    }
+    session.get([CATALOG_BINDING_SALT_SESSION_KEY], function readSalt(result) {
+      var stored = String(result && result[CATALOG_BINDING_SALT_SESSION_KEY] || "")
+        .replace(/[^0-9a-z-]/gi, "")
+        .slice(0, 96);
+      if (stored) {
+        inMemoryCatalogBindingSalt = stored;
+        callback(stored);
+        return;
+      }
+      if (inMemoryCatalogBindingSalt) {
+        callback(inMemoryCatalogBindingSalt);
+        return;
+      }
+      var created = "catalog-" + Date.now().toString(36) + "-" +
+        Math.random().toString(36).slice(2, 18);
+      inMemoryCatalogBindingSalt = created;
+      session.set({ [CATALOG_BINDING_SALT_SESSION_KEY]: created }, function savedSalt() {
+        callback(created);
+      });
     });
   }
 
@@ -6048,10 +6729,12 @@
       .toLowerCase()
       .slice(0, 32);
     var slug = sanitizeChatGPTModel(message && message.unknownSlug);
+    var accountKey = sanitizeCatalogAccountKey(message && message.accountKey);
+    var prefix = accountKey ? accountKey + ":" : "";
     if (slug) {
-      return "unknown:" + slug;
+      return prefix + "unknown:" + slug;
     }
-    return reason === "panel-open" ? "panel-open" : ("reason:" + reason);
+    return prefix + (reason === "panel-open" ? "panel-open" : ("reason:" + reason));
   }
 
   function claimRuntimeCatalogRefresh(message, callback) {
@@ -6285,17 +6968,26 @@
     var job = usageIncrementQueue.catch(function ignorePreviousFailure() {}).then(function runResponseObservation() {
       var nowDate = new Date();
       return storageGetPromise().then(function update(stats) {
-        var beforeEvents = JSON.stringify((stats && stats.events) || []);
+        var beforeResponseState = JSON.stringify({
+          events: (stats && stats.events) || [],
+          responseMigrationIndex: (stats && stats.responseMigrationIndex) || {}
+        });
         var nextStats = applyResponseObservation(stats, message && message.payload, nowDate);
-        var updated = JSON.stringify((nextStats && nextStats.events) || []) !== beforeEvents;
+        var updated = JSON.stringify({
+          events: (nextStats && nextStats.events) || [],
+          responseMigrationIndex: (nextStats && nextStats.responseMigrationIndex) || {}
+        }) !== beforeResponseState;
         return storageSetPromise(nextStats).then(function respond(savedStats) {
           var eventIndex = responseObservationEventIndex(savedStats, message && message.payload, nowDate);
           var submissionId = String((message && message.payload && message.payload.submissionId) || "");
+          var archivedEntry = eventIndex < 0
+            ? archivedResponseObservationEntry(savedStats, message && message.payload, nowDate)
+            : null;
           var event = eventIndex >= 0
             ? savedStats.events[eventIndex]
             : (savedStats.events || []).filter(function findObserved(candidate) {
                 return submissionId && candidate && candidate.submissionId === submissionId;
-              })[0] || null;
+              })[0] || (archivedEntry && archivedEntry.event) || null;
           sendResponse({
             ok: true,
             updated: updated,
@@ -6315,15 +7007,19 @@
     usageIncrementQueue = job.catch(function keepQueueAlive() {});
   }
 
-  function applyRuntimeModelCatalog(existingStats, catalog) {
+  function applyRuntimeModelCatalog(existingStats, catalog, accountKey, contextKey) {
     var cleanCatalog = sanitizeRuntimeModelCatalog(catalog);
+    var cleanAccountKey = sanitizeCatalogAccountKey(accountKey);
+    var cleanContextKey = sanitizeCatalogContextKey(contextKey);
     var source = existingStats && typeof existingStats === "object"
       ? Object.assign({}, existingStats)
       : createEmptyStats();
-    if (!cleanCatalog) {
+    if (!cleanCatalog || !cleanAccountKey) {
       return cloneStats(source);
     }
     activeRuntimeModelCatalog = cleanCatalog;
+    activeRuntimeModelCatalogAccountKey = cleanAccountKey;
+    activeRuntimeModelCatalogContextKey = cleanContextKey;
     var rebuilt = rebuildStatsFromCompleteEventHistory(source, true);
     if (rebuilt) {
       return rebuilt;
@@ -6334,11 +7030,21 @@
   function enqueueRuntimeModelCatalog(message, sendResponse) {
     var job = usageIncrementQueue.catch(function ignorePreviousFailure() {}).then(function updateCatalog() {
       var cleanCatalog = sanitizeRuntimeModelCatalog(message && message.catalog);
+      var accountKey = sanitizeCatalogAccountKey(message && message.accountKey);
+      var contextKey = sanitizeCatalogContextKey(message && message.contextKey);
+      if (!accountKey) {
+        throw new Error("model-catalog-account-binding-unavailable");
+      }
       return new Promise(function saveSession(resolve) {
-        sessionCatalogSet(cleanCatalog, resolve);
+        sessionCatalogSet(cleanCatalog, accountKey, resolve);
       }).then(function remapFromSession() {
         return storageGetPromise().then(function remap(stats) {
-          var nextStats = applyRuntimeModelCatalog(stats, cleanCatalog);
+          var nextStats = applyRuntimeModelCatalog(
+            stats,
+            cleanCatalog,
+            accountKey,
+            contextKey
+          );
           return storageSetPromise(nextStats).then(function respond(savedStats) {
             sendResponse({
               ok: true,
@@ -6417,13 +7123,26 @@
     if (!cleanConversationId) {
       return [];
     }
-    return (stats && Array.isArray(stats.events) ? stats.events : [])
+    var retained = stats && Array.isArray(stats.events) ? stats.events : [];
+    var archived = Object.keys(stats && stats.responseMigrationIndex || {})
+      .map(function archivedEvent(key) {
+        return stats.responseMigrationIndex[key];
+      });
+    var seen = {};
+    return retained.concat(archived)
       .filter(function sameConversation(event) {
         return sanitizeConversationId(
           event && (event.conversationId || extractConversationId(event.pageUrl))
         ) === cleanConversationId;
       })
       .map(function safeEvent(event) {
+        var dedupeKey = responseMigrationKey(event) ||
+          String(event && event.submittedAt || "") + ":" +
+          String(event && event.conversationId || "");
+        if (seen[dedupeKey]) {
+          return null;
+        }
+        seen[dedupeKey] = true;
         return {
           submissionId: String((event && event.submissionId) || "").slice(0, 96),
           conversationId: cleanConversationId,
@@ -6433,7 +7152,7 @@
           requestModel: exactRequestModelFromMetadata(event),
           responseModel: exactResponseModelFromMetadata(event)
         };
-      })
+      }).filter(Boolean)
       .sort(function oldestFirst(left, right) {
         return String(left.submittedAt).localeCompare(String(right.submittedAt));
       });
@@ -6712,6 +7431,7 @@
       origin: state.origin,
       tabId: item.tabId,
       expiresAt: now + ACCOUNT_REQUEST_PERMIT_TTL_MS,
+      startedAt: 0,
       leaseTimer: null
     };
     state.activeCount += 1;
@@ -6780,6 +7500,43 @@
     return true;
   }
 
+  function markAccountRequestPermitStarted(message, sender, sendResponse) {
+    hydrateAccountRequestCoordinator().then(function coordinatorReady() {
+      var permitId = String(message && message.permitId || "");
+      var permit = accountRequestPermits[permitId];
+      var senderTabId = Number(sender && sender.tab && sender.tab.id);
+      if (
+        !permit ||
+        (
+          Number.isFinite(senderTabId) &&
+          Number.isFinite(permit.tabId) &&
+          permit.tabId !== senderTabId
+        )
+      ) {
+        sendResponse({ ok: false, started: false });
+        return;
+      }
+      var state = accountRequestCoordinatorStates[permit.origin];
+      if (!state) {
+        sendResponse({ ok: false, started: false });
+        return;
+      }
+      // This message is sent immediately after window.fetch has synchronously
+      // started. Using the coordinator's receipt time is conservative and
+      // makes the cross-tab gap apply to real network starts rather than to
+      // permit creation before storage/callback latency.
+      permit.startedAt = Date.now();
+      state.nextStartAt = Math.max(
+        state.nextStartAt,
+        permit.startedAt + ACCOUNT_REQUEST_MIN_GAP_MS
+      );
+      persistAccountRequestCoordinator(function startedPermitPersisted() {
+        sendResponse({ ok: true, started: true });
+      });
+    });
+    return true;
+  }
+
   function completeAccountRequestPermitReady(message, sender, sendResponse) {
     var permitId = String(message && message.permitId || "");
     var permit = accountRequestPermits[permitId];
@@ -6797,6 +7554,15 @@
     var rejectRetryAfterMs = 0;
     if (state) {
       state.activeCount = Math.max(0, state.activeCount - 1);
+      if (!Number(permit.startedAt)) {
+        // A missing/failed real-start acknowledgement is an exceptional
+        // coordination path. Keep a full conservative gap from completion so
+        // another tab cannot start based only on the older permit time.
+        state.nextStartAt = Math.max(
+          state.nextStartAt,
+          Date.now() + ACCOUNT_REQUEST_MIN_GAP_MS
+        );
+      }
       var status = Number(message && message.status) || 0;
       if (status === 429) {
         var retryAfterMs = Math.max(1000, Math.min(
@@ -6870,6 +7636,416 @@
     }
   }
 
+  function importedConversationStorage() {
+    return typeof chrome !== "undefined" &&
+      chrome.storage &&
+      chrome.storage.local
+      ? chrome.storage.local
+      : null;
+  }
+
+  function importedStorageError(fallback) {
+    var runtimeError =
+      typeof chrome !== "undefined" &&
+      chrome.runtime &&
+      chrome.runtime.lastError;
+    return runtimeError
+      ? String(runtimeError.message || fallback || "local-storage-failed")
+      : String(fallback || "");
+  }
+
+  function importedStorageGet(keys, callback) {
+    var storage = importedConversationStorage();
+    if (!storage || typeof storage.get !== "function") {
+      callback(new Error("local-storage-unavailable"));
+      return;
+    }
+    try {
+      storage.get(keys, function got(result) {
+        var error = importedStorageError("");
+        callback(error ? new Error(error) : null, result || {});
+      });
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  function importedStorageSet(values, callback) {
+    var storage = importedConversationStorage();
+    if (!storage || typeof storage.set !== "function") {
+      callback(new Error("local-storage-unavailable"));
+      return;
+    }
+    try {
+      storage.set(values, function saved() {
+        var error = importedStorageError("");
+        callback(error ? new Error(error) : null);
+      });
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  function importedStorageRemove(keys, callback) {
+    var storage = importedConversationStorage();
+    if (!storage || typeof storage.remove !== "function" || !keys || !keys.length) {
+      callback(null);
+      return;
+    }
+    try {
+      storage.remove(keys, function removed() {
+        var error = importedStorageError("");
+        callback(error ? new Error(error) : null);
+      });
+    } catch (error) {
+      callback(error);
+    }
+  }
+
+  function importedConversationId(value) {
+    return String(value == null ? "" : value)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 180);
+  }
+
+  function importedConversationText(value, maxLength) {
+    return String(value == null ? "" : value)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, maxLength || 500);
+  }
+
+  function importedConversationRecordKey(importId, id) {
+    var safeImportId = String(importId || "").replace(/[^0-9a-z_-]/gi, "").slice(0, 80);
+    var safeId = encodeURIComponent(importedConversationId(id));
+    return IMPORTED_CONVERSATION_RECORD_PREFIX + safeImportId + "." + safeId;
+  }
+
+  function importedSafePlainValue(value, depth) {
+    if (depth > 5 || value == null) {
+      return value == null ? null : "";
+    }
+    if (typeof value === "string") {
+      return value.slice(0, 20000);
+    }
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, 100).map(function safeArray(item) {
+        return importedSafePlainValue(item, depth + 1);
+      });
+    }
+    if (typeof value !== "object") {
+      return "";
+    }
+    var clean = {};
+    Object.keys(value).slice(0, 100).forEach(function safeProperty(key) {
+      if (/authorization|cookie|token|account.?id|session|credential/i.test(key)) {
+        return;
+      }
+      clean[String(key).slice(0, 100)] = importedSafePlainValue(value[key], depth + 1);
+    });
+    return clean;
+  }
+
+  function sanitizeImportedMessage(message, index) {
+    var source = message && typeof message === "object" ? message : {};
+    return {
+      id: importedConversationId(source.id) || String(index),
+      role: importedConversationText(source.role, 40),
+      authorName: importedConversationText(source.authorName, 120),
+      createTime: importedConversationText(source.createTime || source.createdAt, 80),
+      createdAt: importedConversationText(source.createdAt || source.createTime, 80),
+      updateTime: importedConversationText(source.updateTime || source.updatedAt, 80),
+      contentType: importedConversationText(source.contentType, 80),
+      model: importedConversationText(source.model, 180),
+      selectedPublicModel: importedConversationText(source.selectedPublicModel, 180),
+      selectedPublicMode: importedConversationText(source.selectedPublicMode, 120),
+      selectedPublicModeLabel: importedConversationText(source.selectedPublicModeLabel, 120),
+      requestModel: importedConversationText(source.requestModel, 180),
+      responseModel: importedConversationText(source.responseModel, 180),
+      reasoningEffort: importedConversationText(source.reasoningEffort, 80),
+      thinkingPreamble: Boolean(source.thinkingPreamble),
+      modelCandidatePresent: Boolean(source.modelCandidatePresent),
+      parameters: importedSafePlainValue(source.parameters, 0) || {},
+      features: Array.isArray(source.features)
+        ? source.features.map(function feature(value) {
+            return importedConversationText(value, 120);
+          }).filter(Boolean).slice(0, 100)
+        : [],
+      content: String(source.content == null ? source.text || "" : source.content),
+      text: String(source.text == null ? source.content || "" : source.text)
+    };
+  }
+
+  function sanitizeImportedConversation(conversation) {
+    var source = conversation && typeof conversation === "object" ? conversation : {};
+    var id = importedConversationId(source.id || source.conversationId || source.conversation_id);
+    if (!id) {
+      return null;
+    }
+    var projectId = importedConversationId(source.projectId || source.project_id);
+    var folderId = projectId
+      ? ""
+      : importedConversationId(source.folderId || source.folder_id);
+    return {
+      id: id,
+      title: importedConversationText(source.title, 500) || "ChatGPT conversation",
+      url: String(source.url || "").slice(0, 1000),
+      createTime: importedConversationText(source.createTime || source.createdAt, 80),
+      createdAt: importedConversationText(source.createdAt || source.createTime, 80),
+      updateTime: importedConversationText(source.updateTime || source.updatedAt, 80),
+      updatedAt: importedConversationText(source.updatedAt || source.updateTime, 80),
+      source: "official-data-export",
+      archived: Boolean(source.archived),
+      projectId: projectId,
+      projectName: projectId ? importedConversationText(source.projectName, 240) : "",
+      folderId: folderId,
+      folderName: folderId ? importedConversationText(source.folderName, 240) : "",
+      groupType: projectId ? "project" : folderId ? "folder" : "",
+      messages: (Array.isArray(source.messages) ? source.messages : [])
+        .map(sanitizeImportedMessage)
+    };
+  }
+
+  function importedConversationMetadata(conversation) {
+    return {
+      id: conversation.id,
+      title: conversation.title,
+      createTime: conversation.createTime,
+      updateTime: conversation.updateTime,
+      archived: Boolean(conversation.archived),
+      projectId: conversation.projectId,
+      projectName: conversation.projectName,
+      folderId: conversation.folderId,
+      folderName: conversation.folderName,
+      groupType: conversation.groupType,
+      source: "official-data-export"
+    };
+  }
+
+  function importedConversationImportId() {
+    if (root.crypto && typeof root.crypto.randomUUID === "function") {
+      return root.crypto.randomUUID().replace(/-/g, "");
+    }
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 14);
+  }
+
+  function beginImportedConversationReplace(message, sendResponse) {
+    var importId = importedConversationImportId();
+    var staging = {
+      version: 1,
+      importId: importId,
+      sourceName: importedConversationText(message && message.sourceName, 260) || "conversations.json",
+      expectedCount: Math.max(0, Math.min(250000, Number(message && message.expectedCount) || 0)),
+      importedAt: new Date().toISOString(),
+      conversations: [],
+      recordKeys: []
+    };
+    importedStorageSet({ [IMPORTED_CONVERSATION_STAGING_KEY]: staging }, function started(error) {
+      sendResponse(error
+        ? { ok: false, error: String(error.message || error) }
+        : { ok: true, importId: importId });
+    });
+  }
+
+  function appendImportedConversationChunk(message, sendResponse) {
+    importedStorageGet([IMPORTED_CONVERSATION_STAGING_KEY], function withStaging(error, result) {
+      if (error) {
+        sendResponse({ ok: false, error: String(error.message || error) });
+        return;
+      }
+      var staging = result[IMPORTED_CONVERSATION_STAGING_KEY];
+      var importId = String(message && message.importId || "");
+      if (!staging || staging.importId !== importId) {
+        sendResponse({ ok: false, error: "conversation-import-session-expired" });
+        return;
+      }
+      var seen = {};
+      staging.conversations.forEach(function remember(item) {
+        if (item && item.id) {
+          seen[item.id] = true;
+        }
+      });
+      var records = {};
+      (Array.isArray(message && message.conversations) ? message.conversations : [])
+        .forEach(function addConversation(raw) {
+          var conversation = sanitizeImportedConversation(raw);
+          if (!conversation || seen[conversation.id]) {
+            return;
+          }
+          seen[conversation.id] = true;
+          var key = importedConversationRecordKey(importId, conversation.id);
+          records[key] = conversation;
+          staging.recordKeys.push(key);
+          staging.conversations.push(importedConversationMetadata(conversation));
+        });
+      records[IMPORTED_CONVERSATION_STAGING_KEY] = staging;
+      importedStorageSet(records, function appended(saveError) {
+        sendResponse(saveError
+          ? { ok: false, error: String(saveError.message || saveError) }
+          : { ok: true, importedCount: staging.conversations.length });
+      });
+    });
+  }
+
+  function finishImportedConversationReplace(message, sendResponse) {
+    importedStorageGet(
+      [IMPORTED_CONVERSATION_STAGING_KEY, IMPORTED_CONVERSATION_INDEX_KEY],
+      function withIndexes(error, result) {
+        if (error) {
+          sendResponse({ ok: false, error: String(error.message || error) });
+          return;
+        }
+        var staging = result[IMPORTED_CONVERSATION_STAGING_KEY];
+        var importId = String(message && message.importId || "");
+        if (!staging || staging.importId !== importId) {
+          sendResponse({ ok: false, error: "conversation-import-session-expired" });
+          return;
+        }
+        if (
+          staging.expectedCount &&
+          staging.conversations.length !== staging.expectedCount
+        ) {
+          sendResponse({
+            ok: false,
+            error: "conversation-import-count-mismatch",
+            importedCount: staging.conversations.length
+          });
+          return;
+        }
+        var previous = result[IMPORTED_CONVERSATION_INDEX_KEY] || {};
+        var index = Object.assign({}, staging, {
+          complete: true,
+          count: staging.conversations.length
+        });
+        importedStorageSet({ [IMPORTED_CONVERSATION_INDEX_KEY]: index }, function committed(saveError) {
+          if (saveError) {
+            sendResponse({ ok: false, error: String(saveError.message || saveError) });
+            return;
+          }
+          var obsolete = [IMPORTED_CONVERSATION_STAGING_KEY]
+            .concat(Array.isArray(previous.recordKeys) ? previous.recordKeys : []);
+          importedStorageRemove(obsolete, function cleaned(cleanError) {
+            sendResponse({
+              ok: true,
+              count: index.count,
+              importedAt: index.importedAt,
+              warning: cleanError ? String(cleanError.message || cleanError) : ""
+            });
+          });
+        });
+      }
+    );
+  }
+
+  function abortImportedConversationReplace(message, sendResponse) {
+    importedStorageGet([IMPORTED_CONVERSATION_STAGING_KEY], function withStaging(error, result) {
+      if (error) {
+        sendResponse({ ok: false, error: String(error.message || error) });
+        return;
+      }
+      var staging = result[IMPORTED_CONVERSATION_STAGING_KEY];
+      if (
+        !staging ||
+        (message && message.importId && staging.importId !== String(message.importId))
+      ) {
+        sendResponse({ ok: true, removed: false });
+        return;
+      }
+      importedStorageRemove(
+        [IMPORTED_CONVERSATION_STAGING_KEY].concat(
+          Array.isArray(staging.recordKeys) ? staging.recordKeys : []
+        ),
+        function aborted(removeError) {
+          sendResponse(removeError
+            ? { ok: false, error: String(removeError.message || removeError) }
+            : { ok: true, removed: true });
+        }
+      );
+    });
+  }
+
+  function listImportedConversations(sendResponse) {
+    importedStorageGet([IMPORTED_CONVERSATION_INDEX_KEY], function withIndex(error, result) {
+      if (error) {
+        sendResponse({ ok: false, error: String(error.message || error) });
+        return;
+      }
+      var index = result[IMPORTED_CONVERSATION_INDEX_KEY] || {};
+      sendResponse({
+        ok: true,
+        conversations: Array.isArray(index.conversations) ? index.conversations : [],
+        count: Number(index.count) || 0,
+        sourceName: String(index.sourceName || ""),
+        importedAt: String(index.importedAt || ""),
+        complete: Boolean(index.complete)
+      });
+    });
+  }
+
+  function collectImportedConversations(message, sendResponse) {
+    importedStorageGet([IMPORTED_CONVERSATION_INDEX_KEY], function withIndex(error, result) {
+      if (error) {
+        sendResponse({ ok: false, error: String(error.message || error) });
+        return;
+      }
+      var index = result[IMPORTED_CONVERSATION_INDEX_KEY] || {};
+      var importId = String(index.importId || "");
+      var metadata = Array.isArray(index.conversations) ? index.conversations : [];
+      var requested = [];
+      var seen = {};
+      (Array.isArray(message && message.ids) ? message.ids : []).forEach(function unique(idValue) {
+        var id = importedConversationId(idValue);
+        if (id && !seen[id]) {
+          seen[id] = true;
+          requested.push(id);
+        }
+      });
+      var available = {};
+      metadata.forEach(function remember(item) {
+        if (item && item.id) {
+          available[item.id] = true;
+        }
+      });
+      var keys = requested.filter(function known(id) {
+        return available[id];
+      }).map(function recordKey(id) {
+        return importedConversationRecordKey(importId, id);
+      });
+      importedStorageGet(keys, function withRecords(readError, records) {
+        if (readError) {
+          sendResponse({ ok: false, error: String(readError.message || readError) });
+          return;
+        }
+        var conversations = [];
+        var failures = [];
+        requested.forEach(function ordered(id) {
+          var conversation = records[importedConversationRecordKey(importId, id)];
+          if (conversation) {
+            conversations.push(conversation);
+          } else {
+            failures.push({ id: id, error: "conversation-not-in-imported-export" });
+          }
+        });
+        sendResponse({
+          ok: true,
+          conversations: conversations,
+          failures: failures,
+          warnings: [],
+          requestedCount: requested.length,
+          complete: failures.length === 0,
+          source: "official-data-export"
+        });
+      });
+    });
+  }
+
   function handleMessage(message, sender, sendResponse) {
     if (!message || typeof message.type !== "string") {
       return false;
@@ -6879,12 +8055,46 @@
       return acquireAccountRequestPermit(sender, sendResponse);
     }
 
+    if (message.type === "account.request.started") {
+      return markAccountRequestPermitStarted(message, sender, sendResponse);
+    }
+
     if (message.type === "account.request.complete") {
       return completeAccountRequestPermit(message, sender, sendResponse);
     }
 
     if (message.type === "conversation.projectDirectories.get") {
       return readRenderedProjectDirectories(sender, sendResponse);
+    }
+
+    if (message.type === "conversation.import.start") {
+      beginImportedConversationReplace(message, sendResponse);
+      return true;
+    }
+
+    if (message.type === "conversation.import.chunk") {
+      appendImportedConversationChunk(message, sendResponse);
+      return true;
+    }
+
+    if (message.type === "conversation.import.finish") {
+      finishImportedConversationReplace(message, sendResponse);
+      return true;
+    }
+
+    if (message.type === "conversation.import.abort") {
+      abortImportedConversationReplace(message, sendResponse);
+      return true;
+    }
+
+    if (message.type === "conversation.import.list") {
+      listImportedConversations(sendResponse);
+      return true;
+    }
+
+    if (message.type === "conversation.import.collect") {
+      collectImportedConversations(message, sendResponse);
+      return true;
     }
 
     if (message.type === "usage.get") {
@@ -6958,8 +8168,15 @@
     }
 
     if (message.type === "usage.catalog.get") {
-      sessionCatalogGet(function respondCatalog(catalog) {
+      sessionCatalogGet(message && message.accountKey, function respondCatalog(catalog) {
         sendResponse({ ok: true, catalog: catalog || null });
+      });
+      return true;
+    }
+
+    if (message.type === "usage.catalog.binding.salt") {
+      catalogBindingSalt(function respondBindingSalt(salt) {
+        sendResponse({ ok: true, salt: String(salt || "") });
       });
       return true;
     }
@@ -7009,6 +8226,11 @@
       return true;
     }
 
+    if (message.type === "usage.download.cancel") {
+      cancelDownloadViaApi(message, sendResponse);
+      return true;
+    }
+
     if (message.type === "badge.setFilter") {
       setBadgeFilter(message.filter);
       if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
@@ -7026,9 +8248,119 @@
     return false;
   }
 
-  // 旧环境的单文件下载回退：内容脚本把 data: URL 交给后台 chrome.downloads。
-  // 当前弹窗通常直接使用 Blob URL；多对话导出只下载一个 ZIP。
+  function finalDownloadState(download) {
+    var state = String(download && download.state || "");
+    if (state === "complete") {
+      return { ok: true, state: "complete", error: "" };
+    }
+    if (state === "interrupted") {
+      return {
+        ok: false,
+        state: "interrupted",
+        error: String(download && download.error || "download-interrupted")
+      };
+    }
+    return null;
+  }
+
+  function waitForDownloadFinalState(downloads, downloadId, callback) {
+    var settled = false;
+    var timer = null;
+    var onChanged = null;
+
+    function finish(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer && typeof clearTimeout === "function") {
+        clearTimeout(timer);
+      }
+      if (
+        onChanged &&
+        downloads.onChanged &&
+        typeof downloads.onChanged.removeListener === "function"
+      ) {
+        try { downloads.onChanged.removeListener(onChanged); } catch (_) {}
+      }
+      callback(Object.assign({ downloadId: downloadId }, result));
+    }
+
+    onChanged = function downloadChanged(delta) {
+      if (!delta || Number(delta.id) !== Number(downloadId)) {
+        return;
+      }
+      var state = String(delta.state && delta.state.current || "");
+      if (state === "complete") {
+        finish({ ok: true, state: "complete", error: "" });
+      } else if (state === "interrupted") {
+        finish({
+          ok: false,
+          state: "interrupted",
+          error: String(delta.error && delta.error.current || "download-interrupted")
+        });
+      }
+    };
+
+    if (
+      !downloads.onChanged ||
+      typeof downloads.onChanged.addListener !== "function" ||
+      typeof downloads.search !== "function"
+    ) {
+      finish({
+        ok: false,
+        state: "unavailable",
+        error: "download-final-state-unavailable"
+      });
+      return;
+    }
+
+    downloads.onChanged.addListener(onChanged);
+    timer = setTimeout(function downloadTimedOut() {
+      finish({
+        ok: false,
+        state: "timeout",
+        error: "download-final-state-timeout"
+      });
+    }, DOWNLOAD_FINAL_TIMEOUT_MS);
+
+    try {
+      downloads.search({ id: downloadId }, function inspectCurrentDownload(items) {
+        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError) {
+          finish({
+            ok: false,
+            state: "missing",
+            error: String(chrome.runtime.lastError.message || chrome.runtime.lastError)
+          });
+          return;
+        }
+        var item = Array.isArray(items) ? items[0] : null;
+        if (!item) {
+          finish({
+            ok: false,
+            state: "missing",
+            error: "download-not-found"
+          });
+          return;
+        }
+        var finalState = finalDownloadState(item);
+        if (finalState) {
+          finish(finalState);
+        }
+      });
+    } catch (error) {
+      finish({
+        ok: false,
+        state: "missing",
+        error: String((error && error.message) || error || "download-status-failed")
+      });
+    }
+  }
+
+  // A numeric id only proves that Chrome accepted the download request.
+  // Keep the message channel open until Chrome reports complete/interrupted.
   function downloadViaApi(message, sendResponse) {
+    var operationId = String(message && message.operationId || "").slice(0, 120);
     try {
       if (typeof chrome === "undefined" || !chrome.downloads || typeof chrome.downloads.download !== "function") {
         sendResponse({ ok: false, error: "no-downloads-api" });
@@ -7041,9 +8373,74 @@
             sendResponse({ ok: false, error: chrome.runtime.lastError.message });
             return;
           }
-          sendResponse({ ok: typeof downloadId === "number", downloadId: downloadId });
+          if (typeof downloadId !== "number") {
+            sendResponse({
+              ok: false,
+              state: "missing",
+              error: "download-did-not-start"
+            });
+            return;
+          }
+          if (operationId) {
+            activeDownloadsByOperationId[operationId] = downloadId;
+          }
+          if (operationId && cancelledDownloadOperationIds[operationId]) {
+            delete cancelledDownloadOperationIds[operationId];
+            try {
+              chrome.downloads.cancel(downloadId, function cancelledBeforeWait() {
+                if (chrome.runtime && chrome.runtime.lastError) {
+                  // Final-state monitoring below reports the actual outcome.
+                }
+              });
+            } catch (_) {}
+          }
+          waitForDownloadFinalState(chrome.downloads, downloadId, function finished(result) {
+            if (operationId) {
+              delete activeDownloadsByOperationId[operationId];
+              delete cancelledDownloadOperationIds[operationId];
+            }
+            sendResponse(Object.assign({ downloadId: downloadId }, result || {}));
+          });
         }
       );
+    } catch (error) {
+      sendResponse({ ok: false, error: String((error && error.message) || error) });
+    }
+  }
+
+  function cancelDownloadViaApi(message, sendResponse) {
+    var operationId = String(message && message.operationId || "").slice(0, 120);
+    var explicitId = Number(message && message.downloadId);
+    var downloadId = Number.isFinite(explicitId) && explicitId >= 0
+      ? explicitId
+      : activeDownloadsByOperationId[operationId];
+    if (
+      typeof chrome === "undefined" ||
+      !chrome.downloads ||
+      typeof chrome.downloads.cancel !== "function"
+    ) {
+      sendResponse({ ok: false, error: "no-download-cancel-api" });
+      return;
+    }
+    if (typeof downloadId !== "number") {
+      if (operationId) {
+        cancelledDownloadOperationIds[operationId] = true;
+      }
+      sendResponse({ ok: true, pending: true });
+      return;
+    }
+    try {
+      chrome.downloads.cancel(downloadId, function cancelled() {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          sendResponse({
+            ok: false,
+            downloadId: downloadId,
+            error: String(chrome.runtime.lastError.message || chrome.runtime.lastError)
+          });
+          return;
+        }
+        sendResponse({ ok: true, downloadId: downloadId, cancelled: true });
+      });
     } catch (error) {
       sendResponse({ ok: false, error: String((error && error.message) || error) });
     }
@@ -7097,6 +8494,9 @@
   root.ChatGPTUsageBackground = {
     SETTINGS_KEY: SETTINGS_KEY,
     STORAGE_KEY: STORAGE_KEY,
+    IMPORTED_CONVERSATION_INDEX_KEY: IMPORTED_CONVERSATION_INDEX_KEY,
+    IMPORTED_CONVERSATION_STAGING_KEY: IMPORTED_CONVERSATION_STAGING_KEY,
+    IMPORTED_CONVERSATION_RECORD_PREFIX: IMPORTED_CONVERSATION_RECORD_PREFIX,
     STATUS_ALARM_NAME: STATUS_ALARM_NAME,
     STATUS_ALARM_PERIOD_MINUTES: STATUS_ALARM_PERIOD_MINUTES,
     STATUS_KEY: STATUS_KEY,
@@ -7142,14 +8542,20 @@
     sanitizeModelName: sanitizeModelName,
     mergeOpenAIStatusPayloads: mergeOpenAIStatusPayloads,
     sanitizeOpenAIStatusPayload: sanitizeOpenAIStatusPayload,
+    catalogForAccountKey: catalogForAccountKey,
     extractRenderedProjectDirectoriesFromMainWorld: extractRenderedProjectDirectoriesFromMainWorld,
     sanitizeRenderedProjectDirectories: sanitizeRenderedProjectDirectories,
     statusBadgeColor: statusBadgeColor,
     statusBadgeText: statusBadgeText,
+    finalDownloadState: finalDownloadState,
+    waitForDownloadFinalState: waitForDownloadFinalState,
     sanitizeVariantStats: sanitizeVariantStats,
+    sanitizeImportedConversation: sanitizeImportedConversation,
+    importedConversationRecordKey: importedConversationRecordKey,
     usageEventsForConversation: usageEventsForConversation,
     _testAccountRequests: {
       acquire: acquireAccountRequestPermit,
+      started: markAccountRequestPermitStarted,
       complete: completeAccountRequestPermit,
       reset: resetAccountRequestCoordinatorForTest,
       snapshot: accountRequestCoordinatorSnapshot

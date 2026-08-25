@@ -78,12 +78,12 @@ def draw_chart(draw, box, scale=1):
         y = y1 + (y2 - y1) * index / 3
         draw.line((x1, y, x2, y), fill=grid, width=scale)
     series = [
-        ((39, 214, 176), [0.18, 0.28, 0.24, 0.52, 0.68, 0.78]),
-        ((91, 157, 255), [0.10, 0.22, 0.42, 0.33, 0.52, 0.56]),
-        ((245, 173, 40), [0.04, 0.08, 0.14, 0.09, 0.16, 0.20]),
-        ((224, 103, 194), [0.02, 0.04, 0.03, 0.08, 0.07, 0.11]),
+        ("gpt-5-6-thinking", (39, 214, 176), [0.18, 0.28, 0.24, 0.52, 0.68, 0.78]),
+        ("gpt-5-6-pro", (91, 157, 255), [0.10, 0.22, 0.42, 0.33, 0.52, 0.56]),
+        ("gpt-5-6", (245, 173, 40), [0.04, 0.08, 0.14, 0.09, 0.16, 0.20]),
+        ("gpt-5-5", (224, 103, 194), [0.02, 0.04, 0.03, 0.08, 0.07, 0.11]),
     ]
-    for color, values in series:
+    for label, color, values in series:
         points = []
         for index, value in enumerate(values):
             x = x1 + (x2 - x1) * index / (len(values) - 1)
@@ -92,6 +92,7 @@ def draw_chart(draw, box, scale=1):
         draw.line(points, fill=color, width=3 * scale, joint="curve")
         px, py = points[-1]
         draw.ellipse((px - 4 * scale, py - 4 * scale, px + 4 * scale, py + 4 * scale), fill=color)
+        text(draw, (px + 10 * scale, py), label, 8 * scale, color, "semibold", "lm")
 
 
 def draw_icon_button(draw, center, kind, scale=1):
@@ -238,7 +239,7 @@ def marquee():
     paste_app_icon(image, (626 * scale, 112 * scale, 696 * scale, 182 * scale))
 
     text(draw, (90 * scale, 326 * scale), "Basic public models or Advanced internal routes.", 20 * scale, (168, 190, 215))
-    text(draw, (90 * scale, 358 * scale), "Line, donut and text views with one shared legend.", 20 * scale, (168, 190, 215))
+    text(draw, (90 * scale, 358 * scale), "Line, donut and text views with direct in-chart labels.", 20 * scale, (168, 190, 215))
 
     draw_check(draw, 90 * scale, 414 * scale, "Chat + Work · request route · actual response model", scale)
     draw_check(draw, 90 * scale, 458 * scale, "Thinking → Thinking · Pro → Pro · exact evidence", scale)
@@ -247,8 +248,8 @@ def marquee():
     card = (742 * scale, 72 * scale, 1360 * scale, 524 * scale)
     rounded(draw, card, 24 * scale, (18, 38, 62), (48, 75, 105), scale)
     text(draw, (780 * scale, 108 * scale), "Model usage", 23 * scale, (239, 246, 255), "bold")
-    for index, kind in enumerate(("refresh", "settings", "close")):
-        draw_icon_button(draw, ((1260 + index * 34) * scale, 108 * scale), kind, scale)
+    for index, kind in enumerate(("refresh", "settings")):
+        draw_icon_button(draw, ((1290 + index * 34) * scale, 108 * scale), kind, scale)
 
     rounded(draw, (780 * scale, 136 * scale, 1050 * scale, 168 * scale), 8 * scale, (11, 29, 48))
     for index, label in enumerate(("Usage", "Status", "Export")):
@@ -271,14 +272,7 @@ def marquee():
     text(draw, (1320 * scale, 153 * scale), "Advanced", 11 * scale, (132, 156, 183), "semibold", "rm")
 
     text(draw, (780 * scale, 193 * scale), "Model usage trend", 14 * scale, (230, 239, 249), "bold")
-    legend_items = [
-        ("gpt-5-6-thinking", 11, (39, 214, 176)),
-        ("gpt-5-6-pro", 6, (91, 157, 255)),
-        ("gpt-5-6", 4, (245, 173, 40)),
-        ("gpt-5-5", 2, (224, 103, 194)),
-    ]
-    draw_chart_legend(draw, 780 * scale, 211 * scale, legend_items, scale, columns=2, column_width=270)
-    draw_chart(draw, (780 * scale, 258 * scale, 1320 * scale, 330 * scale), scale)
+    draw_chart(draw, (780 * scale, 218 * scale, 1165 * scale, 330 * scale), scale)
 
     draw.line((780 * scale, 348 * scale, 1320 * scale, 348 * scale), fill=(48, 75, 105), width=scale)
     text(draw, (780 * scale, 374 * scale), "Exact model relations", 13 * scale, (230, 239, 249), "bold")
@@ -324,14 +318,14 @@ def small():
     paste_app_icon(image, (374 * scale, 20 * scale, 420 * scale, 66 * scale))
 
     text(draw, (28 * scale, 203 * scale), "Line · donut · text statistics", 14 * scale, (202, 216, 231), "semibold")
-    text(draw, (28 * scale, 228 * scale), "Shared legend · exact routes", 12 * scale, (151, 176, 203))
+    text(draw, (28 * scale, 228 * scale), "Direct labels · exact routes", 12 * scale, (151, 176, 203))
     text(draw, (28 * scale, 253 * scale), "Projects · 5 formats · backup", 12 * scale, (151, 176, 203))
 
     card = (258 * scale, 72 * scale, 426 * scale, 254 * scale)
     rounded(draw, card, 16 * scale, (17, 38, 62), (48, 75, 105), scale)
     text(draw, (274 * scale, 92 * scale), "Model usage", 13 * scale, (239, 246, 255), "bold")
-    for index, kind in enumerate(("refresh", "settings", "close")):
-        draw_icon_button(draw, ((368 + index * 22) * scale, 91 * scale), kind, 0.65 * scale)
+    for index, kind in enumerate(("refresh", "settings")):
+        draw_icon_button(draw, ((382 + index * 24) * scale, 91 * scale), kind, 0.65 * scale)
     text(draw, (274 * scale, 119 * scale), "gpt-5-6-thinking   11", 8 * scale, (39, 214, 176), "semibold")
     text(draw, (274 * scale, 137 * scale), "gpt-5-6-pro          6", 8 * scale, (91, 157, 255), "semibold")
     draw_donut(
@@ -346,6 +340,119 @@ def small():
     text(draw, (274 * scale, 236 * scale), "Line · donut · text", 9 * scale, (199, 216, 233), "semibold")
 
     image.resize((440, 280), Image.Resampling.LANCZOS).save(OUT / "small-promo-440x280.png", optimize=True)
+
+
+def export_selection():
+    scale = 2
+    width, height = 1280 * scale, 800 * scale
+    image = gradient(width, height)
+    draw = ImageDraw.Draw(image)
+
+    draw.ellipse((1880, -420, 2980, 680), fill=(18, 72, 99))
+    draw.ellipse((-620, 980, 460, 2060), fill=(6, 64, 68))
+
+    rounded(
+        draw,
+        (74 * scale, 98 * scale, 318 * scale, 136 * scale),
+        19 * scale,
+        (7, 39, 52),
+        (18, 132, 139),
+        scale,
+    )
+    text(draw, (90 * scale, 117 * scale), "READABLE CHAT EXPORTS", 13 * scale, (84, 238, 222), "semibold", "lm")
+    text(draw, (74 * scale, 170 * scale), "Choose chats or project", 47 * scale, (245, 249, 255), "bold")
+    text(draw, (74 * scale, 222 * scale), "folders.", 47 * scale, (245, 249, 255), "bold")
+    text(draw, (74 * scale, 282 * scale), "Current chat first. Import official history, then select", 18 * scale, (210, 224, 239))
+    text(draw, (74 * scale, 314 * scale), "one, many, or a whole project and choose a format.", 18 * scale, (210, 224, 239))
+
+    draw_check(draw, 74 * scale, 370 * scale, "Current chat is first and initially selected", scale)
+    draw_check(draw, 74 * scale, 414 * scale, "Official ZIP / conversations.json imports locally", scale)
+    draw_check(draw, 74 * scale, 458 * scale, "Per-chat and per-project selection", scale)
+    draw_check(draw, 74 * scale, 502 * scale, "JSON · Markdown · PDF · DOCX · PNG", scale)
+    draw_check(draw, 74 * scale, 546 * scale, "One chat = one file · multiple chats = one ZIP", scale)
+
+    text(draw, (74 * scale, 718 * scale), "ChatGPT Model Usage Counter", 14 * scale, (142, 171, 194))
+    text(draw, (297 * scale, 718 * scale), f"v{VERSION}", 14 * scale, (84, 238, 222), "bold")
+
+    panel = (785 * scale, 104 * scale, 1216 * scale, 706 * scale)
+    rounded(draw, panel, 12 * scale, (42, 43, 51), (203, 213, 224), scale)
+    text(draw, (796 * scale, 124 * scale), "Export", 16 * scale, (245, 247, 250), "bold")
+    draw_icon_button(draw, (1144 * scale, 127 * scale), "refresh", 0.72 * scale)
+    draw_icon_button(draw, (1178 * scale, 127 * scale), "settings", 0.72 * scale)
+
+    rounded(draw, (796 * scale, 151 * scale, 1191 * scale, 176 * scale), 7 * scale, (30, 30, 34), (76, 77, 86), scale)
+    for index, label in enumerate(("Usage", "Status", "Export")):
+        tab_x = (798 + index * 131) * scale
+        if label == "Export":
+            rounded(draw, (tab_x, 154 * scale, tab_x + 127 * scale, 173 * scale), 6 * scale, (50, 51, 61))
+        text(
+            draw,
+            (tab_x + 63 * scale, 164 * scale),
+            label,
+            11 * scale,
+            (249, 250, 251) if label == "Export" else (216, 224, 234),
+            "semibold",
+            "mm",
+        )
+
+    rounded(draw, (798 * scale, 190 * scale, 939 * scale, 220 * scale), 7 * scale, (25, 111, 96), (61, 203, 176), scale)
+    text(draw, (868 * scale, 205 * scale), "Import official export", 10 * scale, (239, 255, 251), "semibold", "mm")
+    text(draw, (950 * scale, 205 * scale), "Local only · cached in this browser", 9 * scale, (176, 184, 196), "regular", "lm")
+
+    rounded(draw, (798 * scale, 232 * scale, 983 * scale, 261 * scale), 7 * scale, (47, 48, 56), (82, 84, 95), scale)
+    text(draw, (808 * scale, 246 * scale), "Search chats or project folders", 9 * scale, (142, 148, 161), "regular", "lm")
+    rounded(draw, (989 * scale, 232 * scale, 1059 * scale, 261 * scale), 7 * scale, (48, 49, 58), (82, 84, 95), scale)
+    rounded(draw, (1065 * scale, 232 * scale, 1132 * scale, 261 * scale), 7 * scale, (48, 49, 58), (82, 84, 95), scale)
+    text(draw, (1024 * scale, 246 * scale), "Select all", 9 * scale, (224, 228, 235), "semibold", "mm")
+    text(draw, (1098 * scale, 246 * scale), "Clear", 9 * scale, (224, 228, 235), "semibold", "mm")
+    text(draw, (1191 * scale, 246 * scale), "2 selected", 9 * scale, (162, 167, 179), "regular", "rm")
+
+    list_box = (798 * scale, 273 * scale, 1191 * scale, 518 * scale)
+    rounded(draw, list_box, 7 * scale, (43, 44, 52), (76, 77, 87), scale)
+
+    # Current chat first.
+    draw.rounded_rectangle((812 * scale, 288 * scale, 824 * scale, 300 * scale), radius=2 * scale, fill=(91, 157, 255))
+    draw.line((815 * scale, 294 * scale, 818 * scale, 297 * scale, 822 * scale, 291 * scale), fill=(242, 247, 255), width=2 * scale)
+    text(draw, (836 * scale, 290 * scale), "Quarterly review · GPT-5.6 Sol", 11 * scale, (240, 243, 248), "semibold")
+    rounded(draw, (1103 * scale, 286 * scale, 1177 * scale, 305 * scale), 9 * scale, (32, 72, 76), (46, 137, 126), scale)
+    text(draw, (1140 * scale, 295 * scale), "Current chat", 8 * scale, (119, 234, 214), "semibold", "mm")
+    text(draw, (836 * scale, 309 * scale), "Updated 08-25 08:05", 8 * scale, (143, 148, 160))
+    draw.line((812 * scale, 326 * scale, 1178 * scale, 326 * scale), fill=(65, 66, 76), width=scale)
+
+    # Project group checkbox and two member chats.
+    draw.polygon(
+        ((811 * scale, 343 * scale), (817 * scale, 343 * scale), (814 * scale, 348 * scale)),
+        fill=(157, 164, 178),
+    )
+    rounded(draw, (825 * scale, 340 * scale, 839 * scale, 352 * scale), 2 * scale, (21, 164, 133))
+    draw.line((829 * scale, 346 * scale, 835 * scale, 346 * scale), fill=(235, 255, 249), width=2 * scale)
+    text(draw, (847 * scale, 346 * scale), "Product launch", 12 * scale, (240, 243, 248), "bold", "lm")
+    text(draw, (1178 * scale, 346 * scale), "2", 9 * scale, (176, 182, 193), "semibold", "rm")
+
+    for row, (checked, title_value, updated) in enumerate(
+        (
+            (True, "Product research", "Updated 08-21 08:05"),
+            (False, "Code review notes", "Updated 08-20 08:05"),
+        )
+    ):
+        y = (371 + row * 55) * scale
+        draw.rounded_rectangle((833 * scale, y, 845 * scale, y + 12 * scale), radius=2 * scale, outline=(106, 110, 123), width=scale)
+        if checked:
+            draw.rounded_rectangle((833 * scale, y, 845 * scale, y + 12 * scale), radius=2 * scale, fill=(91, 157, 255))
+            draw.line((836 * scale, y + 6 * scale, 839 * scale, y + 9 * scale, 843 * scale, y + 3 * scale), fill=(245, 248, 255), width=2 * scale)
+        text(draw, (857 * scale, y - 1 * scale), title_value, 10 * scale, (236, 239, 245), "semibold")
+        text(draw, (857 * scale, y + 17 * scale), updated, 8 * scale, (143, 148, 160))
+
+    text(draw, (798 * scale, 540 * scale), "One selection downloads one file. Multiple selections download one ZIP", 9 * scale, (191, 195, 204))
+    text(draw, (798 * scale, 556 * scale), "with one independent file per selected chat.", 9 * scale, (191, 195, 204))
+    rounded(draw, (798 * scale, 574 * scale, 1191 * scale, 612 * scale), 7 * scale, (30, 30, 34), (76, 77, 86), scale)
+    for index, label in enumerate(("JSON", "Markdown", "PDF", "PNG", "DOCX")):
+        text(draw, ((837 + index * 76) * scale, 593 * scale), label, 10 * scale, (241, 243, 247), "semibold", "mm")
+
+    image.resize((1280, 800), Image.Resampling.LANCZOS).save(
+        SCREENSHOTS / "02-select-chats-formats-1280x800.png",
+        optimize=True,
+    )
 
 
 def preview_card(canvas, draw, image, box, label, scale=1):
@@ -393,7 +500,7 @@ def demo_export_preview(kind):
     draw.line((34, 93, 426, 93), fill=light, width=2)
 
     text(draw, (34, 119), "Quarterly product research", 24, ink, "bold")
-    text(draw, (34, 154), "Exported 2026-08-24 · 4 messages", 13, muted)
+    text(draw, (34, 154), "Exported 2026-08-25 · 4 messages", 13, muted)
 
     blocks = [
         ("USER", "Compare the launch options and keep the decision criteria clear."),
@@ -503,4 +610,5 @@ def readable_exports():
 if __name__ == "__main__":
     marquee()
     small()
+    export_selection()
     readable_exports()

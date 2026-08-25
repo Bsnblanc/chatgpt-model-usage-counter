@@ -457,13 +457,13 @@
     })[0] || null;
   }
 
-  function runtimeVersionBySlug(catalog, slug) {
+  function runtimeVersionsBySlug(catalog, slug) {
     var clean = normalizeSlug(slug);
     return (catalog && catalog.versions || []).filter(function matches(version) {
       return version.slugs.indexOf(clean) >= 0 || version.intelligencePresets.some(function presetMatches(preset) {
         return preset.modelSlug === clean;
       });
-    })[0] || null;
+    });
   }
 
   function runtimeCategoryBySlug(catalog, slug) {
@@ -475,7 +475,7 @@
 
   function runtimeBaseSlug(catalog, requestSlug) {
     var clean = normalizeSlug(requestSlug);
-    if (runtimeModelBySlug(catalog, clean) || runtimeVersionBySlug(catalog, clean)) {
+    if (runtimeModelBySlug(catalog, clean) || runtimeVersionsBySlug(catalog, clean).length) {
       return clean;
     }
     var candidate = clean;
@@ -485,11 +485,90 @@
         break;
       }
       candidate = candidate.slice(0, candidate.length - match[0].length);
-      if (runtimeModelBySlug(catalog, candidate) || runtimeVersionBySlug(catalog, candidate)) {
+      if (runtimeModelBySlug(catalog, candidate) || runtimeVersionsBySlug(catalog, candidate).length) {
         return candidate;
       }
     }
     return clean;
+  }
+
+  function runtimeVersionPublicLabels(version) {
+    var labels = [];
+    var seen = {};
+    [
+      version && version.displayTextForIntelligence,
+      version && version.shortDisplayTextForIntelligence
+    ].forEach(function add(value) {
+      var label = sanitizePublicModelLabel(value);
+      var key = normalizeKey(label);
+      if (label && key && !seen[key]) {
+        seen[key] = true;
+        labels.push(label);
+      }
+    });
+    return labels;
+  }
+
+  function runtimeVersionMatchesPublicModel(version, selectedPublicModel) {
+    var selectedKey = normalizeKey(selectedPublicModel);
+    return Boolean(selectedKey && runtimeVersionPublicLabels(version).some(function matches(label) {
+      return normalizeKey(label) === selectedKey;
+    }));
+  }
+
+  function runtimeVersionMatchesPublicMode(version, requestSlug, baseSlug, selectedPublicMode) {
+    var selectedMode = normalizePublicMode(selectedPublicMode);
+    return Boolean(selectedMode && versionPresetCandidates(version, requestSlug, baseSlug).some(function matches(preset) {
+      return presetMode(preset) === selectedMode;
+    }));
+  }
+
+  function resolveRuntimeVersionCandidate(versions, requestSlug, baseSlug, selectedPublicModel, selectedPublicMode) {
+    var candidates = Array.isArray(versions) ? versions.slice(0) : [];
+    if (candidates.length <= 1) {
+      return {
+        version: candidates[0] || null,
+        ambiguous: false
+      };
+    }
+
+    // A runtime slug can be shared by multiple public models. Catalog order is
+    // not evidence: narrow the full candidate set with the selector snapshot
+    // captured for this submission, and accept a version only when one remains.
+    if (selectedPublicModel) {
+      var publicModelMatches = candidates.filter(function matchesPublicModel(version) {
+        return runtimeVersionMatchesPublicModel(version, selectedPublicModel);
+      });
+      if (publicModelMatches.length === 1) {
+        return {
+          version: publicModelMatches[0],
+          ambiguous: false
+        };
+      }
+      if (publicModelMatches.length > 1) {
+        candidates = publicModelMatches;
+      }
+    }
+
+    if (selectedPublicMode) {
+      var publicModeMatches = candidates.filter(function matchesPublicMode(version) {
+        return runtimeVersionMatchesPublicMode(version, requestSlug, baseSlug, selectedPublicMode);
+      });
+      if (publicModeMatches.length === 1) {
+        return {
+          version: publicModeMatches[0],
+          ambiguous: false
+        };
+      }
+      if (publicModeMatches.length > 1) {
+        candidates = publicModeMatches;
+      }
+    }
+
+    return {
+      version: candidates.length === 1 ? candidates[0] : null,
+      ambiguous: candidates.length !== 1
+    };
   }
 
   function publicLabelsForRuntimeSlug(catalog, slug) {
@@ -504,13 +583,13 @@
       }
     }
     var model = runtimeModelBySlug(catalog, slug);
-    var version = runtimeVersionBySlug(catalog, slug);
+    var versions = runtimeVersionsBySlug(catalog, slug);
     var category = runtimeCategoryBySlug(catalog, slug);
     if (model) add(model.title);
-    if (version) {
+    versions.forEach(function addVersion(version) {
       add(version.displayTextForIntelligence);
       add(version.shortDisplayTextForIntelligence);
-    }
+    });
     if (category) {
       add(category.humanCategoryName);
       add(category.humanCategoryShortName);
@@ -570,11 +649,19 @@
       selectedPublicModelFromText(settings.selectedText, catalog);
     var baseSlug = catalog ? runtimeBaseSlug(catalog, requestSlug) : requestSlug;
     var model = catalog ? runtimeModelBySlug(catalog, baseSlug) : null;
-    var version = catalog ? runtimeVersionBySlug(catalog, baseSlug) : null;
     var requestMode = inferMode(requestSlug);
     var explicitPublicMode = normalizePublicMode(settings.selectedPublicMode);
     var explicitPublicModeLabel = sanitizePublicModelLabel(settings.selectedPublicModeLabel);
     var selectedTextMode = normalizePublicMode(settings.selectedText);
+    var versionCandidates = catalog ? runtimeVersionsBySlug(catalog, baseSlug) : [];
+    var versionResolution = resolveRuntimeVersionCandidate(
+      versionCandidates,
+      requestSlug,
+      baseSlug,
+      selected,
+      explicitPublicMode || selectedTextMode || requestMode
+    );
+    var version = versionResolution.version;
     // Submit-time selector evidence describes what the user chose. It must
     // outrank the later request/response slug when resolving the public mode.
     var modeHint = explicitPublicMode || selectedTextMode || requestMode;
@@ -626,7 +713,7 @@
       source = usesIntelligenceModel(mode)
         ? "account-catalog:version-intelligence"
         : "account-catalog:version-preset";
-    } else if (model && model.title) {
+    } else if (!versionResolution.ambiguous && model && model.title) {
       expectedLabel = model.title;
       label = expectedLabel;
       source = "account-catalog:model-title";

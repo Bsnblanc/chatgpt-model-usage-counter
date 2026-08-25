@@ -1,11 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
   <title id="title">ChatGPT Model Usage Counter</title>
-  <desc id="desc">A restrained black bsnblanc monogram containing three blue model-usage columns.</desc>
+  <desc id="desc">A black tile with three warm-paper orbital segments and three cobalt usage checkpoints.</desc>
   <rect x="4" y="4" width="120" height="120" rx="26" fill="#121214"/>
   <rect x="6" y="6" width="116" height="116" rx="24" fill="none" stroke="#37373C" stroke-width="1.5"/>
-  <rect x="28" y="20" width="13" height="88" rx="6.5" fill="#F7F4EC"/>
-  <circle cx="71" cy="71" r="37" fill="none" stroke="#F7F4EC" stroke-width="11"/>
-  <rect x="53" y="72" width="9" height="19" rx="4.5" fill="#1818FF"/>
-  <rect x="68" y="59" width="9" height="32" rx="4.5" fill="#1818FF"/>
-  <rect x="83" y="44" width="9" height="47" rx="4.5" fill="#1818FF"/>
+  <path d="M79.05 28.68A37 37 0 0 1 99.18 75.43" fill="none" stroke="#F7F4EC" stroke-width="12" stroke-linecap="round"/>
+  <path d="M99.18 75.43A37 37 0 0 1 36.44 88.75" fill="none" stroke="#F7F4EC" stroke-width="12" stroke-linecap="round"/>
+  <path d="M36.44 88.75A37 37 0 0 1 79.05 28.68" fill="none" stroke="#F7F4EC" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="99.18" cy="75.43" r="6" fill="#1818FF"/>
+  <circle cx="36.44" cy="88.75" r="6" fill="#1818FF"/>
+  <circle cx="79.05" cy="28.68" r="6" fill="#1818FF"/>
 </svg>

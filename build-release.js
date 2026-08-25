@@ -40,12 +40,12 @@ const RELEASE_FILES = Object.freeze([
   "icons/icon48.png",
   "src/background.js",
   "src/content.js",
+  "src/conversation-importer.js",
   "src/conversation-source.js",
   "src/dashboard.js",
   "src/detector.js",
   "src/exporter.js",
   "src/model-catalog.js",
-  "src/page-model-hook.js",
   "src/popup.css",
   "src/popup.html",
   "src/popup.js"

@@ -735,7 +735,7 @@ test("readable exports label every unavailable model dimension and reasoning eff
         { id: "a1", role: "assistant", text: "Answer" }
       ]
     }
-  ]);
+  ], { language: "zh" });
 
   assert.match(
     markdown,
@@ -867,7 +867,7 @@ test("exports keep model parameters separate from attachment metadata", () => {
 test("text exports preserve readable Chinese content and normalized parameters", () => {
   const json = exporter.exportJson(chineseConversations, { exportedAt: "2026-05-31T00:00:00.000Z" });
   const payload = JSON.parse(json);
-  const markdown = exporter.exportMarkdown(chineseConversations, { title: "中文归档" });
+  const markdown = exporter.exportMarkdown(chineseConversations, { title: "中文归档", language: "zh" });
 
   assertPublicJsonShape(payload);
   assert.equal(payload.conversations[0].title, "中文标题：导出检查");
@@ -939,7 +939,7 @@ test("exports show feature usage and model parameters without internal fields", 
 });
 
 test("exportMarkdown renders conversations and messages", () => {
-  const markdown = exporter.exportMarkdown(conversations, { title: "Archive" });
+  const markdown = exporter.exportMarkdown(conversations, { title: "Archive", language: "zh" });
 
   assert.match(markdown, /^# Archive/);
   assert.match(markdown, /导出于 .* · 2 段对话 · 4 条消息/);
@@ -1134,6 +1134,42 @@ test("PDF export keeps Chinese readable in metadata and UTF-16 text stream", asy
   assert.match(streamText, /结论：中文内容应在 JSON、Markdown、PDF、DOCX、PNG 中保持可读。/);
   assert.doesNotMatch(streamText, /\?{2,}/);
   assertNoInternalExportFields(streamText);
+});
+
+test("PDF replaces supplementary emoji without corrupting following Chinese text", () => {
+  const artifact = exporter.exportArtifact([
+    {
+      id: "emoji-before-cjk",
+      title: "Emoji CJK",
+      messages: [
+        { id: "emoji-user", role: "user", text: "😀 后续中文必须完整" },
+        { id: "emoji-assistant", role: "assistant", text: "结果仍然可读" }
+      ]
+    }
+  ], "pdf", { filenameBase: "emoji-cjk", language: "zh" });
+  const streamText = pdfUtf16Text(Buffer.from(artifact.content));
+
+  assert.match(streamText, /\[U\+1F600\] 后续中文必须完整/);
+  assert.match(streamText, /结果仍然可读/);
+  assert.doesNotMatch(streamText, /\uFFFD|\?{2,}/);
+});
+
+test("readable exports use English by default and Chinese only when selected", () => {
+  const sample = [{
+    id: "localized-readable-export",
+    title: "Localized export",
+    messages: [
+      { id: "localized-user", role: "user", text: "Question" },
+      { id: "localized-assistant", role: "assistant", text: "Answer" }
+    ]
+  }];
+  const english = exporter.exportMarkdown(sample);
+  const chinese = exporter.exportMarkdown(sample, { language: "zh" });
+
+  assert.match(english, /\*\*You\*\*/);
+  assert.match(english, /Request model: Unknown · Actual response model: Unknown · Reasoning effort: Unknown/);
+  assert.match(chinese, /\*\*你\*\*/);
+  assert.match(chinese, /请求型号：未知 · 实际回复型号：未知 · 思考强度：未知/);
 });
 
 test("PNG export stores Chinese source text in UTF-8 iTXt metadata", async () => {
@@ -1434,13 +1470,13 @@ test("createExport docx returns an Office docx ZIP with selected content", async
   assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="Heading2"/);
   assert.match(entries["word/styles.xml"].toString("utf8"), /w:styleId="ContentLabel"/);
   assert.match(documentXml, /ChatGPT Conversation Export/);
-  assert.match(documentXml, /· 4 条消息/);
+  assert.match(documentXml, /· 4 messages/);
   assert.match(documentXml, /Escaping &lt;check&gt;/);
   assert.match(documentXml, /Created: 2024-03-09T16:00:00.000Z/);
   assert.doesNotMatch(documentXml, /createTime=/);
   assert.doesNotMatch(documentXml, /updateTime=/);
   // 说话人标签(你 / ChatGPT)而非 "Message N - Role" 字段;模型/功能作为附注,参数不展开
-  assert.match(documentXml, /你/);
+  assert.match(documentXml, /You/);
   assert.doesNotMatch(documentXml, /Message \d+ - /);
   assert.doesNotMatch(documentXml, /Role: (?:user|assistant)/);
   assert.match(documentXml, /future-family-2026-thinking/);

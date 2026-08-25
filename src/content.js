@@ -55,6 +55,7 @@
   var CATALOG_SESSION_KEY = "chatgptModelUsageCatalog.session.v1";
   var RUNTIME_MODEL_CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
   var RUNTIME_MODEL_CATALOG_REFRESH_ATTEMPT_TTL_MS = 5 * 60 * 1000;
+  var RUNTIME_MODEL_CATALOG_ACCOUNT_RECHECK_TTL_MS = 5 * 60 * 1000;
   var lastSubmission = null;
   var lastDirectSubmission = null;
   var lastComposerSnapshot = null;
@@ -63,6 +64,16 @@
   var runtimeModelCatalogPromise = null;
   var runtimeModelCatalogSessionLoaded = false;
   var runtimeModelCatalogRefreshAttempts = {};
+  var runtimeModelCatalogAccountKey = "";
+  var runtimeModelCatalogAccountKeyPromise = null;
+  var runtimeModelCatalogAccountKeyAttemptedAt = 0;
+  var runtimeModelCatalogAccountVerifiedAt = 0;
+  var runtimeModelCatalogAccountSurfaceMarker = "";
+  var runtimeModelCatalogBindingSaltPromise = null;
+  var runtimeModelCatalogBindingSalt = "";
+  var runtimeModelCatalogBindingGeneration = 0;
+  var runtimeModelCatalogContextKey = createRuntimeModelCatalogContextKey();
+  var runtimeModelCatalogPublishedFingerprint = "";
   var pendingUnknownRuntimeModelSlugs = {};
   var pendingSubmissions = [];
   var pendingSubmissionTimer = null;
@@ -81,10 +92,6 @@
   var ACCOUNT_REQUEST_MAX_INTERACTIVE_WAIT_MS = 60 * 1000;
   var ACCOUNT_REQUEST_DEFAULT_429_WAIT_MS = 30 * 1000;
   var ACCOUNT_REQUEST_FETCH_TIMEOUT_MS = 45 * 1000;
-  var ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION = 60;
-  var ACCOUNT_HISTORY_MAX_OPERATION_MS = 90 * 1000;
-  var ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION = 50;
-  var ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE = 6;
   var accountRequestQueue = [];
   var accountRequestActiveCount = 0;
   var accountRequestNextStartAt = 0;
@@ -193,7 +200,7 @@
     return error;
   }
 
-  function accountFetchWithTimeout(fetchImpl, url, init) {
+  function accountFetchWithTimeout(fetchImpl, url, init, onStarted) {
     if (typeof fetchImpl !== "function") {
       return Promise.reject(new Error("ChatGPT account request transport is unavailable."));
     }
@@ -249,7 +256,43 @@
         callback(value);
       };
       Promise.resolve().then(function startFetch() {
-        return fetchImpl(url, options);
+        // Calling fetch starts the real network request. Report that exact
+        // boundary to the cross-tab coordinator before this wrapper can
+        // resolve, rather than reporting when the earlier permit was issued.
+        var fetchOutcome = Promise.resolve(fetchImpl(url, options)).then(
+          function fetchSucceeded(response) {
+            return { ok: true, response: response };
+          },
+          function fetchFailed(error) {
+            return { ok: false, error: error };
+          }
+        );
+        var startOutcome = Promise.resolve(
+          typeof onStarted === "function" ? onStarted() : null
+        ).then(
+          function startReported() {
+            return { ok: true };
+          },
+          function startReportFailed(error) {
+            try { controller.abort(); } catch (_) {}
+            return { ok: false, error: error };
+          }
+        );
+        return Promise.all([fetchOutcome, startOutcome]).then(function settleStartedFetch(results) {
+          var fetched = results[0];
+          var started = results[1];
+          if (!started.ok) {
+            // The request has already started, so a failed coordination
+            // message must abort it and keep the permit held until fetch has
+            // physically settled. Releasing immediately could let another
+            // tab start inside the one-second safety gap.
+            throw started.error;
+          }
+          if (!fetched.ok) {
+            throw fetched.error;
+          }
+          return fetched.response;
+        });
       }).then(function fetched(response) {
         if (timedOut) {
           finish(reject, accountRequestTimeoutError());
@@ -320,6 +363,23 @@
     });
   }
 
+  function markGlobalAccountRequestStarted(permitId) {
+    if (!permitId) {
+      return Promise.resolve(null);
+    }
+    return runtimeMessage({
+      type: "account.request.started",
+      permitId: permitId
+    }).then(function started(response) {
+      if (!response || response.ok === false || response.started === false) {
+        throw globalAccountRequestBlockedError({
+          error: "ChatGPT account request start coordination is unavailable."
+        });
+      }
+      return response;
+    });
+  }
+
   function noteAccountRequestResponse(response) {
     if (!response || Number(response.status) !== 429) {
       return;
@@ -375,7 +435,28 @@
         // Authorization and background-permit waits happen before this point,
         // so they cannot make two actual request starts collapse together.
         accountRequestNextStartAt = Date.now() + ACCOUNT_REQUEST_MIN_GAP_MS;
-        return item.task();
+        var realStartReported = false;
+        var reportRealStart = function reportRealStart() {
+          if (realStartReported) {
+            return Promise.resolve(null);
+          }
+          realStartReported = true;
+          return markGlobalAccountRequestStarted(globalPermitId);
+        };
+        var requestResult;
+        try {
+          requestResult = Promise.resolve(item.task(reportRealStart));
+        } catch (error) {
+          requestResult = Promise.reject(error);
+        }
+        return requestResult.then(function requireRealStart(response) {
+          if (globalPermitId && !realStartReported) {
+            throw globalAccountRequestBlockedError({
+              error: "ChatGPT account request did not report its real network start."
+            });
+          }
+          return response;
+        });
       })
       .then(function accountRequestSucceeded(response) {
         return completeGlobalAccountRequestPermit(globalPermitId, response, null).then(function released() {
@@ -414,6 +495,227 @@
     return modelCatalog.sanitizeRuntimeModelCatalog(value);
   }
 
+  function catalogAccountKey(accountId, salt) {
+    var cleanAccountId = String(accountId || "");
+    var cleanSalt = String(salt || "");
+    if (!cleanAccountId || !cleanSalt) {
+      return "";
+    }
+    var first = hashText(cleanSalt + "\u0000" + cleanAccountId);
+    var second = hashText(
+      cleanAccountId.split("").reverse().join("") + "\u0000" + cleanSalt
+    );
+    return "acct-" + first.padStart(8, "0") + second.padStart(8, "0");
+  }
+
+  function createRuntimeModelCatalogContextKey() {
+    var seed = [
+      Date.now(),
+      Math.random(),
+      String(location && location.href || ""),
+      Math.random()
+    ].join("\u0000");
+    var first = hashText(seed);
+    var second = hashText(seed.split("").reverse().join(""));
+    return "ctx-" + first.padStart(8, "0") + second.padStart(8, "0");
+  }
+
+  function currentAccountSurfaceMarker(salt) {
+    try {
+      var storage = window && window.localStorage;
+      var account = storage && typeof storage.getItem === "function"
+        ? String(storage.getItem("_account") || "")
+        : "";
+      if (!account) {
+        return "";
+      }
+      return catalogAccountKey(account, "surface\u0000" + String(salt || ""));
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function invalidateRuntimeModelCatalogBinding(surfaceMarker) {
+    runtimeModelCatalogBindingGeneration += 1;
+    runtimeModelCatalog = null;
+    runtimeModelCatalogPromise = null;
+    runtimeModelCatalogSessionLoaded = false;
+    runtimeModelCatalogRefreshAttempts = {};
+    runtimeModelCatalogAccountKey = "";
+    runtimeModelCatalogAccountKeyAttemptedAt = 0;
+    runtimeModelCatalogAccountVerifiedAt = 0;
+    runtimeModelCatalogAccountSurfaceMarker = String(surfaceMarker || "");
+    runtimeModelCatalogContextKey = createRuntimeModelCatalogContextKey();
+    runtimeModelCatalogPublishedFingerprint = "";
+  }
+
+  function loadRuntimeModelCatalogBindingSalt() {
+    if (runtimeModelCatalogBindingSaltPromise) {
+      return runtimeModelCatalogBindingSaltPromise;
+    }
+    runtimeModelCatalogBindingSaltPromise = runtimeMessage({
+      type: "usage.catalog.binding.salt"
+    }).then(function bindingSaltLoaded(response) {
+      runtimeModelCatalogBindingSalt =
+        String(response && response.salt || "").slice(0, 96);
+      return runtimeModelCatalogBindingSalt;
+    });
+    return runtimeModelCatalogBindingSaltPromise;
+  }
+
+  function loadRuntimeModelCatalogAccountKey(options) {
+    var settings = options && typeof options === "object" ? options : {};
+    var verifyCurrentAccount = settings.verifyCurrentAccount === true;
+    if (runtimeModelCatalogAccountKey && !verifyCurrentAccount) {
+      return Promise.resolve(runtimeModelCatalogAccountKey);
+    }
+    if (runtimeModelCatalogAccountKeyPromise) {
+      return runtimeModelCatalogAccountKeyPromise;
+    }
+    if (typeof fetch !== "function") {
+      return Promise.resolve("");
+    }
+    runtimeModelCatalogAccountKeyPromise = loadRuntimeModelCatalogBindingSalt()
+      .then(function decideAccountIdentityRead(salt) {
+        if (!salt) {
+          throw new Error("model-catalog-account-binding-unavailable");
+        }
+        var surfaceMarker = currentAccountSurfaceMarker(salt);
+        var now = Date.now();
+        if (runtimeModelCatalogAccountKey) {
+          if (
+            verifyCurrentAccount &&
+            surfaceMarker &&
+            runtimeModelCatalogAccountSurfaceMarker &&
+            surfaceMarker === runtimeModelCatalogAccountSurfaceMarker
+          ) {
+            runtimeModelCatalogAccountVerifiedAt = now;
+            return {
+              key: runtimeModelCatalogAccountKey,
+              surfaceMarker: surfaceMarker,
+              skipFetch: true
+            };
+          }
+          if (
+            verifyCurrentAccount &&
+            !surfaceMarker &&
+            runtimeModelCatalogAccountVerifiedAt &&
+            now - runtimeModelCatalogAccountVerifiedAt <
+              RUNTIME_MODEL_CATALOG_ACCOUNT_RECHECK_TTL_MS
+          ) {
+            return {
+              key: runtimeModelCatalogAccountKey,
+              surfaceMarker: "",
+              skipFetch: true
+            };
+          }
+          if (
+            verifyCurrentAccount &&
+            (
+              (
+                surfaceMarker &&
+                surfaceMarker !== runtimeModelCatalogAccountSurfaceMarker
+              ) ||
+              (
+                !surfaceMarker &&
+                runtimeModelCatalogAccountVerifiedAt &&
+                now - runtimeModelCatalogAccountVerifiedAt >=
+                  RUNTIME_MODEL_CATALOG_ACCOUNT_RECHECK_TTL_MS
+              )
+            )
+          ) {
+            invalidateRuntimeModelCatalogBinding(surfaceMarker);
+          }
+        }
+        if (
+          runtimeModelCatalogAccountKeyAttemptedAt &&
+          now - runtimeModelCatalogAccountKeyAttemptedAt <
+            RUNTIME_MODEL_CATALOG_REFRESH_ATTEMPT_TTL_MS
+        ) {
+          return {
+            key: "",
+            surfaceMarker: surfaceMarker,
+            skipFetch: true
+          };
+        }
+        runtimeModelCatalogAccountKeyAttemptedAt = now;
+        return {
+          key: "",
+          surfaceMarker: surfaceMarker,
+          skipFetch: false
+        };
+      })
+      .then(function readCurrentAccount(decision) {
+        if (decision.skipFetch) {
+          return decision;
+        }
+        return scheduleAccountRequest(function startAccountIdentityFetch(reportRealStart) {
+          return accountFetchWithTimeout(fetch, "/api/auth/session", {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { accept: "application/json" }
+          }, reportRealStart);
+        }).then(function parseAccountIdentity(response) {
+          if (!response || !response.ok || typeof response.json !== "function") {
+            var status = Number(response && response.status) || 0;
+            var error = new Error("model-catalog-account-http-" + status);
+            error.status = status;
+            throw error;
+          }
+          return response.json();
+        }).then(function bindCurrentAccount(session) {
+          var accountId = String(
+            session && session.account && session.account.id ||
+            session && (session.accountId || session.account_id) ||
+            ""
+          );
+          return loadRuntimeModelCatalogBindingSalt().then(function bindWithSalt(salt) {
+            var key = catalogAccountKey(accountId, salt);
+            if (!key) {
+              throw new Error("model-catalog-account-unavailable");
+            }
+            return {
+              key: key,
+              surfaceMarker: decision.surfaceMarker,
+              skipFetch: false
+            };
+          });
+        });
+      })
+      .then(function rememberCurrentAccount(decision) {
+          var key = String(decision && decision.key || "");
+          if (!key) {
+            return "";
+          }
+          if (
+            runtimeModelCatalogAccountKey &&
+            runtimeModelCatalogAccountKey !== key
+          ) {
+            invalidateRuntimeModelCatalogBinding(
+              decision && decision.surfaceMarker
+            );
+          }
+          runtimeModelCatalogAccountKey = key;
+          runtimeModelCatalogAccountSurfaceMarker = String(
+            decision && decision.surfaceMarker || ""
+          );
+          runtimeModelCatalogAccountVerifiedAt = Date.now();
+          runtimeModelCatalogAccountKeyAttemptedAt = 0;
+          return key;
+      }).catch(function accountBindingFailed(error) {
+        setDiagnostic(
+          "model-catalog-account-status",
+          "error:" + String((error && error.message) || error || "unknown").slice(0, 80)
+        );
+        return "";
+      }).then(function accountBindingFinished(key) {
+        runtimeModelCatalogAccountKeyPromise = null;
+        return key;
+      });
+    return runtimeModelCatalogAccountKeyPromise;
+  }
+
   function runtimeCatalogSnapshot(payload) {
     var source = payload && typeof payload === "object" ? payload : {};
     return sanitizeRuntimeModelCatalog({
@@ -424,13 +726,34 @@
     });
   }
 
-  function publishRuntimeModelCatalog(catalog) {
+  function publishRuntimeModelCatalog(catalog, accountKey) {
     var runtime = typeof chrome !== "undefined" && chrome && chrome.runtime ? chrome.runtime : null;
-    if (!catalog || !runtime || typeof runtime.sendMessage !== "function" || extensionContextLost) {
+    var cleanAccountKey = String(accountKey || runtimeModelCatalogAccountKey || "");
+    var contextKey = String(runtimeModelCatalogContextKey || "");
+    var fingerprint = [
+      cleanAccountKey,
+      contextKey,
+      String(catalog && catalog.observedAt || "")
+    ].join("\u0001");
+    if (
+      !catalog ||
+      !cleanAccountKey ||
+      !contextKey ||
+      fingerprint === runtimeModelCatalogPublishedFingerprint ||
+      !runtime ||
+      typeof runtime.sendMessage !== "function" ||
+      extensionContextLost
+    ) {
       return;
     }
+    runtimeModelCatalogPublishedFingerprint = fingerprint;
     try {
-      runtime.sendMessage({ type: "usage.catalog", catalog: catalog }, function ignoreCatalogResponse() {
+      runtime.sendMessage({
+        type: "usage.catalog",
+        catalog: catalog,
+        accountKey: cleanAccountKey,
+        contextKey: contextKey
+      }, function ignoreCatalogResponse() {
         void runtime.lastError;
       });
     } catch (error) {
@@ -467,20 +790,37 @@
     });
   }
 
-  function loadRuntimeModelCatalogFromSession(force) {
+  function loadRuntimeModelCatalogFromSession(force, accountKey) {
     if (force) {
       runtimeModelCatalogSessionLoaded = false;
+      runtimeModelCatalog = null;
     }
     if (!force && (runtimeModelCatalog || runtimeModelCatalogSessionLoaded)) {
       return Promise.resolve(runtimeModelCatalog);
     }
     runtimeModelCatalogSessionLoaded = true;
-    return runtimeMessage({ type: "usage.catalog.get", key: CATALOG_SESSION_KEY }).then(function remember(response) {
+    return runtimeMessage({
+      type: "usage.catalog.get",
+      key: CATALOG_SESSION_KEY,
+      accountKey: String(accountKey || "")
+    }).then(function remember(response) {
       var catalog = sanitizeRuntimeModelCatalog(response && response.catalog);
-      if (catalog) {
-        runtimeModelCatalog = catalog;
-      }
+      runtimeModelCatalog = catalog || null;
       return runtimeModelCatalog;
+    });
+  }
+
+  function waitForRuntimeModelCatalogFromSession(accountKey, attempts) {
+    var remaining = Math.max(1, Math.floor(Number(attempts) || 1));
+    return loadRuntimeModelCatalogFromSession(true, accountKey).then(function loaded(catalog) {
+      if (catalog || remaining <= 1) {
+        return catalog;
+      }
+      return new Promise(function wait(resolve) {
+        setTimeout(resolve, 150);
+      }).then(function retrySessionCatalog() {
+        return waitForRuntimeModelCatalogFromSession(accountKey, remaining - 1);
+      });
     });
   }
 
@@ -522,7 +862,7 @@
     return "";
   }
 
-  function refreshRuntimeModelCatalog(reason, unknownSlug) {
+  function refreshRuntimeModelCatalog(reason, unknownSlug, accountKey) {
     if (runtimeModelCatalogPromise) {
       return runtimeModelCatalogPromise;
     }
@@ -535,18 +875,38 @@
       return Promise.resolve(runtimeModelCatalog);
     }
     runtimeModelCatalogRefreshAttempts[refreshKey] = Date.now();
-    runtimeModelCatalogPromise = runtimeMessage({
+    var bindingGeneration = runtimeModelCatalogBindingGeneration;
+    var contextKey = runtimeModelCatalogContextKey;
+    var request;
+    request = runtimeMessage({
       type: "usage.catalog.refresh.claim",
       reason: String(reason || "panel-open").slice(0, 32),
-      unknownSlug: canonicalRequestModelSlug(unknownSlug || "")
+      unknownSlug: canonicalRequestModelSlug(unknownSlug || ""),
+      accountKey: String(accountKey || "")
     }).then(function refreshClaimed(response) {
       if (!response || response.claimed !== true) {
-        return loadRuntimeModelCatalogFromSession(true);
+        // Another ChatGPT tab owns this account-specific refresh. Wait only on
+        // extension session storage for its published result; never issue a
+        // duplicate account request and never load an unbound/other-account
+        // catalog.
+        return waitForRuntimeModelCatalogFromSession(accountKey, 135).then(function publishSharedCatalog(catalog) {
+          if (
+            bindingGeneration !== runtimeModelCatalogBindingGeneration ||
+            accountKey !== runtimeModelCatalogAccountKey ||
+            contextKey !== runtimeModelCatalogContextKey
+          ) {
+            throw new Error("model-catalog-account-binding-changed");
+          }
+          if (catalog) {
+            publishRuntimeModelCatalog(catalog, accountKey);
+          }
+          return catalog;
+        });
       }
       var source = window.ChatGPTConversationSource;
       var scheduledFetch = function scheduledCatalogFetch(url, options) {
-        return scheduleAccountRequest(function startCatalogFetch() {
-          return accountFetchWithTimeout(fetch, url, options);
+        return scheduleAccountRequest(function startCatalogFetch(reportRealStart) {
+          return accountFetchWithTimeout(fetch, url, options, reportRealStart);
         });
       };
       var catalogRequest = source && typeof source.requestJson === "function"
@@ -570,6 +930,13 @@
             return catalogResponse.json();
           });
       return catalogRequest.then(function rememberCatalog(payload) {
+        if (
+          bindingGeneration !== runtimeModelCatalogBindingGeneration ||
+          accountKey !== runtimeModelCatalogAccountKey ||
+          contextKey !== runtimeModelCatalogContextKey
+        ) {
+          throw new Error("model-catalog-account-binding-changed");
+        }
         var catalog = runtimeCatalogSnapshot(payload);
         if (!catalog) {
           throw new Error("model-catalog-empty");
@@ -582,7 +949,7 @@
         });
         setDiagnostic("model-catalog-status", "ok");
         setDiagnostic("model-catalog-observed-at", catalog.observedAt || "");
-        publishRuntimeModelCatalog(catalog);
+        publishRuntimeModelCatalog(catalog, accountKey);
         return catalog;
       });
     }).catch(function catalogFailed(error) {
@@ -591,19 +958,30 @@
       setDiagnostic("model-catalog-status", "error:" + String((error && error.message) || error || "unknown").slice(0, 80));
       return null;
     }).then(function allowFutureRefresh(result) {
-      runtimeModelCatalogPromise = null;
+      if (runtimeModelCatalogPromise === request) {
+        runtimeModelCatalogPromise = null;
+      }
       return result;
     });
-    return runtimeModelCatalogPromise;
+    runtimeModelCatalogPromise = request;
+    return request;
   }
 
   function ensureRuntimeModelCatalog(reason, unknownSlug) {
-    return loadRuntimeModelCatalogFromSession(!runtimeModelCatalog).then(function loaded(catalog) {
-      var needsUnknownSlugRefresh = Boolean(unknownSlug && !runtimeModelIsMapped(unknownSlug));
-      if (catalog && !needsUnknownSlugRefresh && runtimeModelCatalogIsFresh(catalog)) {
-        return catalog;
+    return loadRuntimeModelCatalogAccountKey({
+      verifyCurrentAccount: true
+    }).then(function withAccountKey(accountKey) {
+      if (!accountKey) {
+        return null;
       }
-      return refreshRuntimeModelCatalog(reason, unknownSlug);
+      return loadRuntimeModelCatalogFromSession(!runtimeModelCatalog, accountKey).then(function loaded(catalog) {
+        var needsUnknownSlugRefresh = Boolean(unknownSlug && !runtimeModelIsMapped(unknownSlug));
+        if (catalog && !needsUnknownSlugRefresh && runtimeModelCatalogIsFresh(catalog)) {
+          publishRuntimeModelCatalog(catalog, accountKey);
+          return catalog;
+        }
+        return refreshRuntimeModelCatalog(reason, unknownSlug, accountKey);
+      });
     });
   }
 
@@ -1591,6 +1969,8 @@
           responseModel: candidate.model || "",
           usageFeatures: candidate.usageFeatures || [],
           runtimeModelCatalog: runtimeModelCatalog,
+          runtimeModelCatalogAccountKey: runtimeModelCatalogAccountKey,
+          runtimeModelCatalogContextKey: runtimeModelCatalogContextKey,
           pageUrl: candidate.pageUrl || pending.pageUrl,
           pageTitle: candidate.pageTitle || document.title,
           responseMessageId: candidate.responseMessageId,
@@ -1858,6 +2238,8 @@
           modelMode: modelMode,
           modelParameters: modelParameters,
           runtimeModelCatalog: runtimeModelCatalog,
+          runtimeModelCatalogAccountKey: runtimeModelCatalogAccountKey,
+          runtimeModelCatalogContextKey: runtimeModelCatalogContextKey,
           usageFeatures: usageFeatures,
           modelObservedSource: observedSource,
           submissionId: submissionId,
@@ -2114,6 +2496,15 @@
     }
 
     var now = Date.now();
+    if (runtimeModelCatalogBindingSalt && runtimeModelCatalogAccountSurfaceMarker) {
+      var currentSurfaceMarker = currentAccountSurfaceMarker(runtimeModelCatalogBindingSalt);
+      if (
+        currentSurfaceMarker &&
+        currentSurfaceMarker !== runtimeModelCatalogAccountSurfaceMarker
+      ) {
+        invalidateRuntimeModelCatalogBinding(currentSurfaceMarker);
+      }
+    }
     queueSubmission(
       source,
       promptText,
@@ -2127,6 +2518,15 @@
 
   function recordRegeneration(source) {
     var now = Date.now();
+    if (runtimeModelCatalogBindingSalt && runtimeModelCatalogAccountSurfaceMarker) {
+      var currentSurfaceMarker = currentAccountSurfaceMarker(runtimeModelCatalogBindingSalt);
+      if (
+        currentSurfaceMarker &&
+        currentSurfaceMarker !== runtimeModelCatalogAccountSurfaceMarker
+      ) {
+        invalidateRuntimeModelCatalogBinding(currentSurfaceMarker);
+      }
+    }
     var messages = collectUserMessages();
     var requestMessageId = "";
     for (var index = messages.length - 1; index >= 0; index -= 1) {
@@ -2594,6 +2994,8 @@
         requestMessageId: sanitizeMessageId(candidate.requestMessageId),
         responseModel: canonicalRequestModelSlug(candidate.model),
         runtimeModelCatalog: runtimeModelCatalog,
+        runtimeModelCatalogAccountKey: runtimeModelCatalogAccountKey,
+        runtimeModelCatalogContextKey: runtimeModelCatalogContextKey,
         pageUrl: String(location && location.href || ""),
         pageTitle: String(document && document.title || ""),
         responseMessageId: sanitizeMessageId(candidate.messageId),
@@ -2755,6 +3157,9 @@
     var currentStatusRecord = null;
     var lastMountedLocation = "";
     var panelCloseTimer = null;
+    var panelInteractionMode = "";
+    var panelCatalogActivationPending = false;
+    var panelCatalogAppliedFingerprint = "";
 
     function hasDarkClass(element) {
       return Boolean(element && /(^|\s)dark(\s|$)/i.test(String(element.className || "")));
@@ -3322,28 +3727,65 @@
       }
     }
 
-    function openPanel() {
+    function activateUsageModelCatalog() {
+      // A page-entry hover is only a visual preview. Keep signed-in account
+      // reads behind an explicit click.
+      if (panelInteractionMode !== "click") {
+        return;
+      }
+      var unknownSlug = nextUnknownRuntimeModelSlug();
+      if (panelCatalogActivationPending) {
+        return;
+      }
+      panelCatalogActivationPending = true;
+      ensureRuntimeModelCatalog("panel-usage", unknownSlug).then(function refreshMappedStats(catalog) {
+        panelCatalogActivationPending = false;
+        if (!catalog) {
+          return;
+        }
+        var appliedFingerprint = [
+          runtimeModelCatalogAccountKey,
+          runtimeModelCatalogContextKey,
+          String(catalog.observedAt || "")
+        ].join("\u0001");
+        var catalogChanged = appliedFingerprint !== panelCatalogAppliedFingerprint;
+        panelCatalogAppliedFingerprint = appliedFingerprint;
+        if (
+          (catalogChanged || unknownSlug) &&
+          dashboard &&
+          typeof dashboard.reload === "function"
+        ) {
+          dashboard.reload({ skipExportList: true });
+        }
+      }, function catalogUnavailable() {
+        panelCatalogActivationPending = false;
+      });
+    }
+
+    function openPanel(interactionMode) {
       if (panelCloseTimer) {
         clearTimeout(panelCloseTimer);
         panelCloseTimer = null;
       }
+      if (interactionMode) {
+        panelInteractionMode = interactionMode;
+      }
       panel.hidden = false;
       toggleButton.setAttribute("aria-expanded", "true");
       reconcileStoredPendingResponses(true);
-      // The account model catalog is optional account data. Load it only after
-      // the user opens the statistics panel, and reuse the session snapshot.
-      ensureRuntimeModelCatalog("panel-open", nextUnknownRuntimeModelSlug()).then(function refreshMappedStats() {
-        if (dashboard && typeof dashboard.reload === "function") {
-          // The model catalog can finish after the user has already opened
-          // Export. Refresh only the stored statistics here: starting a second
-          // account-index read would supersede the first operation and could
-          // leave the visible list replaced by the sidebar fallback.
-          dashboard.reload({ skipExportList: true });
-        }
-      });
       if (!dashboard) {
-        dashboard = window.ChatGPTUsageDashboard.init(body, { surface: "page", onClose: closePanel, onLanguageChange: applyPanelLanguage });
+        dashboard = window.ChatGPTUsageDashboard.init(body, {
+          surface: "page",
+          onLanguageChange: applyPanelLanguage,
+          onUsageViewActivate: activateUsageModelCatalog
+        });
       } else {
+        if (
+          panelInteractionMode === "hover" &&
+          typeof dashboard.resetInteractionMode === "function"
+        ) {
+          dashboard.resetInteractionMode();
+        }
         dashboard.reload({ restoreActiveView: true });
       }
     }
@@ -3353,11 +3795,24 @@
         clearTimeout(panelCloseTimer);
         panelCloseTimer = null;
       }
+      if (
+        dashboard &&
+        typeof dashboard.cancelPendingExportConversationList === "function"
+      ) {
+        dashboard.cancelPendingExportConversationList();
+      }
       panel.hidden = true;
       toggleButton.setAttribute("aria-expanded", "false");
+      panelInteractionMode = "";
+      if (dashboard && typeof dashboard.resetInteractionMode === "function") {
+        dashboard.resetInteractionMode();
+      }
     }
 
     function schedulePanelClose(event) {
+      if (panelInteractionMode === "click") {
+        return;
+      }
       var nextTarget = event && event.relatedTarget;
       if (
         nextTarget &&
@@ -3390,8 +3845,13 @@
         clearTimeout(panelCloseTimer);
         panelCloseTimer = null;
       }
+      if (panelInteractionMode === "click") {
+        return;
+      }
       if (panel.hidden && !extensionContextLost && !extensionContextSeemsLost()) {
-        openPanel();
+        openPanel("hover");
+      } else if (!panel.hidden) {
+        panelInteractionMode = "hover";
       }
     }
 
@@ -3415,7 +3875,20 @@
         return;
       }
       if (panel.hidden) {
-        openPanel();
+        openPanel("click");
+        return;
+      }
+      if (panelInteractionMode === "hover") {
+        panelInteractionMode = "click";
+        if (
+          dashboard &&
+          (
+            !dashboard.state ||
+            dashboard.state.activeView === "chart"
+          )
+        ) {
+          activateUsageModelCatalog();
+        }
         return;
       }
       closePanel();
@@ -3577,1403 +4050,172 @@
     installUsagePanel();
   }
 
-  // 导出对话的内容脚本接口。优先使用当前 ChatGPT 页面的同源账号历史请求；
-  // 用户主动触发后才从同源会话接口临时取得账号令牌并仅保存在运行内存中。
-  // 接口不可用时才通过侧边栏 SPA 导航读取已渲染 DOM。
+  // Conversation export is deliberately local-only. The current rendered
+  // conversation is read from the existing DOM; full-history selection comes
+  // from a user-imported official ChatGPT data export stored by the extension.
+  // No session token, account id, internal conversation index, or conversation
+  // detail endpoint is read by this interface.
   if (chrome.runtime.onMessage && typeof chrome.runtime.onMessage.addListener === "function") {
-    var waitMs = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
-
-    var cleanSidebarText = function (value, limit) {
-      return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit || 200);
-    };
-    var safeProjectId = function (value) {
-      var match = cleanSidebarText(value, 500).match(/\bg-p-[0-9a-f]{32}\b/i);
-      return match ? String(match[0]).toLowerCase() : "";
-    };
-    var projectRouteSlugFromValue = function (value) {
-      var raw = cleanSidebarText(value, 500);
-      var idMatch = raw.match(/\bg-p-[0-9a-f]{32}\b/i);
-      if (!idMatch) {
-        return "";
-      }
-      var suffix = raw.slice(Number(idMatch.index || 0) + idMatch[0].length);
-      if (suffix.charAt(0) !== "-") {
-        return "";
-      }
-      suffix = suffix.slice(1).split(/[/?\s]/, 1)[0] || "";
-      try {
-        suffix = decodeURIComponent(suffix);
-      } catch (_) {}
-      return cleanSidebarText(suffix, 160);
-    };
-    var projectSlugKey = function (value) {
-      var slug = cleanSidebarText(value, 200);
-      try {
-        slug = decodeURIComponent(slug);
-      } catch (_) {}
-      return cleanSidebarText(slug, 200).toLowerCase().replace(/\s+/g, "-");
-    };
-    var cleanProjectDirectoryName = function (value) {
-      var name = cleanSidebarText(value, 200);
-      var optionsMatch = name.match(/^(?:open project options for|打开项目选项[:：]?)\s*(.+)$/i);
-      var openMatch = name.match(/^(?:open|打开)\s+(.+?)\s+(?:project|项目)$/i);
-      if (optionsMatch) {
-        name = cleanSidebarText(optionsMatch[1], 200);
-      } else if (openMatch) {
-        name = cleanSidebarText(openMatch[1], 200);
-      }
-      if (
-        !name ||
-        safeProjectId(name) ||
-        /^(?:unnamed project|未命名项目|project|项目)$/i.test(name) ||
-        /^(?:project|项目)\s+g-p-/i.test(name)
-      ) {
-        return "";
-      }
-      return name;
-    };
-    var emptyProjectDirectories = function () {
-      return { names: {}, orders: {}, entries: [], rows: [] };
-    };
-    var normalizeProjectDirectories = function (response) {
-      var source = response && typeof response === "object" ? response : {};
-      var rawEntries = Array.isArray(source.entries)
-        ? source.entries
-        : Array.isArray(source.projects) ? source.projects : [];
-      var entriesById = {};
-      var insertionOrder = [];
-
-      rawEntries.slice(0, 500).forEach(function rememberEntry(entry) {
-        var item = entry && typeof entry === "object" ? entry : {};
-        var projectId = safeProjectId(item.gizmoId || item.projectId);
-        var projectName = cleanProjectDirectoryName(item.projectName || item.name);
-        if (!projectId || !projectName || entriesById[projectId]) {
-          return;
-        }
-        entriesById[projectId] = {
-          gizmoId: projectId,
-          projectName: projectName
-        };
-        insertionOrder.push(projectId);
-      });
-
-      var objectNames = source.projectNames && typeof source.projectNames === "object"
-        ? source.projectNames
-        : (!Array.isArray(source.projects) && source.projects && typeof source.projects === "object"
-          ? source.projects
-          : null);
-      if (objectNames) {
-        Object.keys(objectNames).slice(0, 500).forEach(function rememberObjectEntry(id) {
-          var projectId = safeProjectId(id);
-          var projectName = cleanProjectDirectoryName(objectNames[id]);
-          if (!projectId || !projectName || entriesById[projectId]) {
-            return;
-          }
-          entriesById[projectId] = {
-            gizmoId: projectId,
-            projectName: projectName
-          };
-          insertionOrder.push(projectId);
-        });
-      }
-
-      var orderedIds = [];
-      var orderedSeen = {};
-      (Array.isArray(source.projectOrder) ? source.projectOrder : []).slice(0, 500)
-        .forEach(function rememberExplicitOrder(value) {
-          var projectId = safeProjectId(value);
-          if (projectId && entriesById[projectId] && !orderedSeen[projectId]) {
-            orderedSeen[projectId] = true;
-            orderedIds.push(projectId);
-          }
-        });
-      rawEntries.slice(0, 500)
-        .map(function entryWithDeclaredOrder(entry, index) {
-          var item = entry && typeof entry === "object" ? entry : {};
-          var declaredOrder = Number(item.projectOrder);
-          var hasDeclaredOrder = item.projectOrder !== null &&
-            item.projectOrder !== "" &&
-            Number.isFinite(declaredOrder) &&
-            declaredOrder >= 0;
-          return {
-            projectId: safeProjectId(item.gizmoId || item.projectId),
-            projectOrder: hasDeclaredOrder ? declaredOrder : index,
-            index: index
-          };
-        })
-        .sort(function declaredOrder(left, right) {
-          return left.projectOrder - right.projectOrder || left.index - right.index;
-        })
-        .forEach(function rememberDeclaredOrder(item) {
-          if (item.projectId && entriesById[item.projectId] && !orderedSeen[item.projectId]) {
-            orderedSeen[item.projectId] = true;
-            orderedIds.push(item.projectId);
-          }
-        });
-      insertionOrder.forEach(function rememberInsertionOrder(projectId) {
-        if (!orderedSeen[projectId]) {
-          orderedSeen[projectId] = true;
-          orderedIds.push(projectId);
-        }
-      });
-
-      var normalized = emptyProjectDirectories();
-      orderedIds.forEach(function finalizeEntry(projectId, index) {
-        var entry = entriesById[projectId];
-        normalized.names[projectId] = entry.projectName;
-        normalized.orders[projectId] = index;
-        normalized.entries.push({
-          gizmoId: projectId,
-          projectName: entry.projectName,
-          projectOrder: index
-        });
-      });
-      return normalized;
-    };
-    var requestMainWorldProjectDirectories = function () {
-      return runtimeMessage({ type: "conversation.projectDirectories.get" })
-        .then(function normalizeResponse(response) {
-          return response && response.ok
-            ? normalizeProjectDirectories(response)
-            : emptyProjectDirectories();
-        }, function ignoreUnavailableMapping() {
-          return emptyProjectDirectories();
-        });
-    };
-    var projectIdFromConversationHref = function (href) {
-      var match = String(href || "").match(/\/g\/([^/?#]+)\/c\/[0-9a-zA-Z-]{6,}/i);
-      return safeProjectId(match && match[1]);
-    };
-    var projectRouteSlugFromConversationHref = function (href) {
-      var match = String(href || "").match(/\/g\/([^/?#]+)\/c\/[0-9a-zA-Z-]{6,}/i);
-      return projectRouteSlugFromValue(match && match[1]);
-    };
-    var projectNameFromSidebarRow = function (row) {
-      if (!row) {
-        return "";
-      }
-      var nameNode = null;
-      try {
-        nameNode = typeof row.querySelector === "function"
-          ? row.querySelector("[data-marquee-text]")
-          : null;
-      } catch (_) {}
-      var name = cleanProjectDirectoryName(
-        nameNode && (nameNode.innerText || nameNode.textContent)
-      );
-      if (name) {
-        return name;
-      }
-      var optionButton = null;
-      try {
-        optionButton = typeof row.querySelector === "function"
-          ? row.querySelector('[aria-label^="Open project options for"],[aria-label^="打开项目选项"]')
-          : null;
-      } catch (_) {}
-      name = cleanProjectDirectoryName(
-        optionButton && optionButton.getAttribute && optionButton.getAttribute("aria-label")
-      );
-      if (name) {
-        return name;
-      }
-      return cleanProjectDirectoryName(row.innerText || row.textContent);
-    };
-    var sidebarProjectDirectories = function () {
-      var conversationProjectIds = {};
-      Array.prototype.forEach.call(document.querySelectorAll('a[href*="/c/"]'), function rememberConversationProject(link) {
-        var projectId = projectIdFromConversationHref(link.getAttribute("href") || "");
-        if (projectId) {
-          conversationProjectIds[projectId] = true;
-        }
-      });
-      var knownIds = Object.keys(conversationProjectIds).sort(function longestFirst(left, right) {
-        return right.length - left.length;
-      });
-      var names = {};
-      var orders = {};
-      var entries = [];
-      var entryIndexById = {};
-      var rows = [];
-      Array.prototype.forEach.call(
-        document.querySelectorAll("[class~='group/project-unfurl-row']"),
-        function rememberRenderedProjectRow(row, rowIndex) {
-          var projectName = projectNameFromSidebarRow(row);
-          if (!projectName) {
-            return;
-          }
-          var projectHref = "";
-          try {
-            var projectLink = typeof row.querySelector === "function"
-              ? row.querySelector('a[href*="/g/"]')
-              : null;
-            projectHref = projectLink && projectLink.getAttribute
-              ? String(projectLink.getAttribute("href") || "")
-              : "";
-          } catch (_) {}
-          var projectId = safeProjectId(projectHref);
-          if (!projectId) {
-            rows.push({
-              projectName: projectName,
-              projectOrder: rowIndex
-            });
-            return;
-          }
-          names[projectId] = projectName;
-          orders[projectId] = rowIndex;
-          if (!Object.prototype.hasOwnProperty.call(entryIndexById, projectId)) {
-            entryIndexById[projectId] = entries.length;
-            entries.push({
-              gizmoId: projectId,
-              projectName: projectName,
-              projectOrder: rowIndex
-            });
-          }
-        }
-      );
-      Array.prototype.forEach.call(document.querySelectorAll('a[href*="/g/"][href*="/project"]'), function rememberProject(link) {
-        var href = String(link.getAttribute("href") || "");
-        var segment = decodeURIComponent((href.match(/\/g\/([^/?#]+)\/project(?:[/?#]|$)/i) || [])[1] || "");
-        var projectId = knownIds.filter(function matchesKnown(id) {
-          return segment === id || segment.indexOf(id + "-") === 0;
-        })[0] || safeProjectId((segment.match(/^(g-p-[0-9a-f]{32})(?:-|$)/i) || [])[1]);
-        if (!projectId) {
-          return;
-        }
-        if (!Object.prototype.hasOwnProperty.call(entryIndexById, projectId)) {
-          orders[projectId] = entries.length + rows.length;
-          entryIndexById[projectId] = entries.length;
-          entries.push({
-            gizmoId: projectId,
-            projectName: "",
-            projectOrder: orders[projectId]
-          });
-        }
-        var name = cleanProjectDirectoryName(link.innerText || link.textContent);
-        if (!name) {
-          name = cleanProjectDirectoryName(link.getAttribute("aria-label"));
-        }
-        if (name) {
-          names[projectId] = name;
-          entries[entryIndexById[projectId]].projectName = name;
-        }
-      });
-      return {
-        names: names,
-        orders: orders,
-        entries: entries,
-        rows: rows
-      };
-    };
-    var listSidebarConversations = function (sidebarDirectories) {
-      var seen = {};
-      var out = [];
-      var projectDirectories = sidebarDirectories || sidebarProjectDirectories();
-      var projectNames = projectDirectories.names || {};
-      var projectOrders = projectDirectories.orders || {};
-      var titleKey = function (value) {
-        return cleanSidebarText(value, 200).toLowerCase();
-      };
-      Array.prototype.forEach.call(document.querySelectorAll('a[href*="/c/"]'), function (a) {
-        var href = a.getAttribute("href") || "";
-        var m = href.match(/\/c\/([0-9a-zA-Z-]{6,})/);
-        if (!m || seen[m[1]]) {
-          return;
-        }
-        seen[m[1]] = true;
-        var projectId = projectIdFromConversationHref(href);
-        var projectRouteSlug = projectRouteSlugFromConversationHref(href);
-        var aria = cleanSidebarText(a.getAttribute("aria-label"), 240);
-        var ariaProject = cleanSidebarText(
-          (aria.match(/(?:chat in project|项目中的对话)\s+(.+)$/i) || [])[1],
-          200
-        );
-        var projectName = projectId ? (projectNames[projectId] || ariaProject) : "";
-        var explicitTitleNode = typeof a.querySelector === "function"
-          ? a.querySelector('[data-conversation-title],[data-testid*="conversation-title" i]')
-          : null;
-        var titleCandidates = [
-          a.getAttribute("title"),
-          explicitTitleNode && (explicitTitleNode.innerText || explicitTitleNode.textContent)
-        ].concat(
-          String(a.innerText || a.textContent || "").split(/\r?\n/)
-        ).map(function cleanTitleCandidate(value) {
-          return cleanSidebarText(value, 200);
-        }).filter(function usableTitleCandidate(value) {
-          var key = titleKey(value);
-          return Boolean(
-            key &&
-            key !== titleKey(projectName) &&
-            key !== titleKey(ariaProject) &&
-            !/^(?:open|打开|more|更多|options|选项)$/.test(key)
-          );
-        });
-        var title = titleCandidates[0] || "";
-        out.push({
-          id: m[1],
-          title: title || ("对话 " + m[1].slice(0, 6)),
-          projectId: projectId,
-          projectRouteSlug: projectRouteSlug,
-          projectName: projectName,
-          projectOrder: projectId && Object.prototype.hasOwnProperty.call(projectOrders, projectId)
-            ? projectOrders[projectId]
-            : null,
-          groupType: projectId ? "project" : ""
-        });
-      });
-      return out;
-    };
-
-    var listAllDomConversations = function (mainWorldDirectories) {
-      // Reading the export index must not mutate the user's ChatGPT sidebar.
-      // The complete account index supplies project chats even when their
-      // sidebar directory is collapsed; DOM fallback uses only already loaded
-      // links instead of clicking folders open.
-      return Promise.resolve(
-        enrichConversationProjectDirectories(
-          listSidebarConversations(),
-          mainWorldDirectories
-        )
-      );
-    };
-
-    var conversationIdFromPath = function () {
+    function exportConversationIdFromPath() {
       return (String(location.pathname || "").match(/\/c\/([^/?#]+)/) || [])[1] || "";
-    };
-    var findConversationLink = function (id) {
-      return document.querySelector('a[href$="/c/' + id + '"]') || document.querySelector('a[href*="/c/' + id + '"]');
-    };
-    var currentConversationIndexItem = function () {
-      var id = conversationIdFromPath();
+    }
+
+    function exportProjectIdFromPath() {
+      var match = String(location.pathname || "").match(/\/g\/(g-p-[0-9a-f]{32})(?:-[^/?#]+)?\/c\//i);
+      return match ? String(match[1]).toLowerCase() : "";
+    }
+
+    function currentConversationForExport() {
+      var id = exportConversationIdFromPath();
       if (!id) {
-        return null;
+        return {
+          conversation: null,
+          currentConversationId: "",
+          complete: false,
+          source: "current-dom"
+        };
       }
-      var link = findConversationLink(id);
-      var linkHref = link && (link.getAttribute("href") || "");
-      var linkProjectId = projectIdFromConversationHref(linkHref);
-      var linkDirectories = sidebarProjectDirectories();
-      var linkProjectName = cleanProjectDirectoryName(
-        linkProjectId && linkDirectories.names && linkDirectories.names[linkProjectId]
-      );
+      var link = null;
+      try {
+        link = document.querySelector('a[href$="/c/' + id + '"]') ||
+          document.querySelector('a[href*="/c/' + id + '"]');
+      } catch (_) {}
       var explicitTitleNode = link && typeof link.querySelector === "function"
         ? link.querySelector('[data-conversation-title],[data-testid*="conversation-title" i]')
         : null;
       var pageTitle = String(document.title || "").replace(/\s*[-|]\s*ChatGPT\s*$/i, "");
-      var projectNameKey = normalizePromptText(linkProjectName).toLowerCase();
       var title = [
         explicitTitleNode && (explicitTitleNode.innerText || explicitTitleNode.textContent),
+        link && (link.getAttribute("title") || link.innerText || link.textContent),
         pageTitle
-      ].concat(
-        String(link && (link.innerText || link.textContent) || "").split(/\r?\n/)
-      ).map(normalizePromptText).filter(function usableCurrentTitle(candidate) {
-        var key = candidate.toLowerCase();
-        return Boolean(
-          candidate &&
-          !/^chatgpt$/i.test(candidate) &&
-          (!projectNameKey || key !== projectNameKey) &&
-          !/^(?:open|打开|more|更多|options|选项)$/.test(key)
-        );
+      ].map(normalizePromptText).filter(function usableTitle(value) {
+        return Boolean(value && !/^chatgpt$/i.test(value));
       })[0] || ("Conversation " + id.slice(0, 8));
+      var projectId = exportProjectIdFromPath();
       return {
-        id: id,
-        title: title.slice(0, 200),
-        createTime: "",
-        updateTime: "",
-        archived: false,
-        current: true
-      };
-    };
-    var prioritizeCurrentConversation = function (conversations) {
-      var current = currentConversationIndexItem();
-      var byId = {};
-      (Array.isArray(conversations) ? conversations : []).forEach(function remember(item) {
-        if (item && item.id && !byId[item.id]) {
-          byId[item.id] = Object.assign({}, item, { current: Boolean(current && item.id === current.id) });
-        }
-      });
-      if (current) {
-        var existing = byId[current.id] || {};
-        var existingTitle = normalizePromptText(existing.title);
-        var currentTitle = normalizePromptText(current.title);
-        var genericTitle = function (value) {
-          return /^(?:conversation|对话)\s+[0-9a-z-]{4,}$/i.test(String(value || ""));
-        };
-        var projectTitle = normalizePromptText(existing.projectName || existing.folderName);
-        var projectTitleKey = projectTitle.toLowerCase();
-        var usableTitle = function (value) {
-          var clean = normalizePromptText(value);
-          return Boolean(
-            clean &&
-            !genericTitle(clean) &&
-            (!projectTitleKey || clean.toLowerCase() !== projectTitleKey)
-          );
-        };
-        var title = usableTitle(existingTitle)
-          ? existingTitle
-          : usableTitle(currentTitle)
-            ? currentTitle
-            : ("Conversation " + current.id.slice(0, 8));
-        byId[current.id] = Object.assign({}, current, existing, {
-          title: title,
-          current: true
-        });
-      }
-      var ordered = Object.keys(byId).map(function toItem(id) { return byId[id]; });
-      ordered.sort(function currentFirst(left, right) {
-        if (Boolean(left.current) !== Boolean(right.current)) {
-          return left.current ? -1 : 1;
-        }
-        var byTime = String(right.updateTime || right.createTime || "").localeCompare(
-          String(left.updateTime || left.createTime || "")
-        );
-        return byTime || String(left.title || "").localeCompare(String(right.title || "")) || left.id.localeCompare(right.id);
-      });
-      return {
-        conversations: ordered,
-        currentConversationId: current ? current.id : ""
-      };
-    };
-    var resolveRenderedProjectDirectories = function (
-      conversations,
-      mainWorldDirectories,
-      sidebarDirectories,
-      sidebarItems
-    ) {
-      var names = {};
-      var sources = {};
-      var orders = {};
-      var metadataById = {};
-      var usedRows = {};
-      var rows = (Array.isArray(sidebarDirectories && sidebarDirectories.rows)
-        ? sidebarDirectories.rows
-        : []).map(function normalizeRow(row, index) {
-        var item = row && typeof row === "object" ? row : {};
-        var declaredOrder = Number(item.projectOrder);
-        return {
-          projectName: cleanProjectDirectoryName(item.projectName || item.name),
-          projectOrder: Number.isFinite(declaredOrder) && declaredOrder >= 0 ? declaredOrder : index,
-          index: index
-        };
-      }).filter(function validRow(row) {
-        return Boolean(row.projectName);
-      });
-
-      var rememberResolved = function (projectId, projectName, projectOrder, source) {
-        var id = safeProjectId(projectId);
-        var name = cleanProjectDirectoryName(projectName);
-        if (!id || !name || names[id]) {
-          return;
-        }
-        names[id] = name;
-        sources[id] = source;
-        if (Number.isFinite(Number(projectOrder)) && Number(projectOrder) >= 0) {
-          orders[id] = Number(projectOrder);
-        }
-      };
-      var rememberDirectoryEntries = function (directories, source) {
-        var sourceDirectories = directories && typeof directories === "object" ? directories : {};
-        var sourceNames = sourceDirectories.names && typeof sourceDirectories.names === "object"
-          ? sourceDirectories.names
-          : {};
-        var sourceOrders = sourceDirectories.orders && typeof sourceDirectories.orders === "object"
-          ? sourceDirectories.orders
-          : {};
-        Object.keys(sourceNames).forEach(function rememberName(projectId) {
-          rememberResolved(projectId, sourceNames[projectId], sourceOrders[projectId], source);
-        });
-      };
-      rememberDirectoryEntries(mainWorldDirectories, "main-world-react");
-      rememberDirectoryEntries(sidebarDirectories, "sidebar-project");
-
-      var rememberMetadata = function (item) {
-        var source = item && typeof item === "object" ? item : {};
-        var projectId = [
-          source.projectId,
-          source.gizmoId,
-          source.gizmo_id
-        ].map(safeProjectId).filter(Boolean)[0] || "";
-        if (!projectId) {
-          return;
-        }
-        if (!metadataById[projectId]) {
-          metadataById[projectId] = { routeKeys: Object.create(null) };
-        }
-        [
-          source.projectRouteSlug,
-          projectRouteSlugFromValue(source.projectId),
-          projectRouteSlugFromValue(source.gizmoId),
-          projectRouteSlugFromValue(source.gizmo_id)
-        ].forEach(function rememberRouteSlug(value) {
-          var key = projectSlugKey(value);
-          if (key) {
-            metadataById[projectId].routeKeys[key] = true;
-          }
-        });
-      };
-      (Array.isArray(conversations) ? conversations : []).forEach(rememberMetadata);
-      (Array.isArray(sidebarItems) ? sidebarItems : []).forEach(rememberMetadata);
-
-      Object.keys(names).forEach(function reserveNamedRow(projectId) {
-        var nameKey = projectSlugKey(names[projectId]);
-        var matches = rows.filter(function sameName(row) {
-          return !usedRows[row.index] && projectSlugKey(row.projectName) === nameKey;
-        });
-        if (nameKey && matches.length === 1) {
-          usedRows[matches[0].index] = true;
-          if (!Object.prototype.hasOwnProperty.call(orders, projectId)) {
-            orders[projectId] = matches[0].projectOrder;
-          }
-        }
-      });
-
-      Object.keys(metadataById).forEach(function matchRouteSlug(projectId) {
-        if (names[projectId]) {
-          return;
-        }
-        var routeKeys = metadataById[projectId].routeKeys;
-        var matches = rows.filter(function matchesRoute(row) {
-          return !usedRows[row.index] &&
-            Object.prototype.hasOwnProperty.call(routeKeys, projectSlugKey(row.projectName));
-        });
-        if (matches.length === 1) {
-          usedRows[matches[0].index] = true;
-          rememberResolved(
-            projectId,
-            matches[0].projectName,
-            matches[0].projectOrder,
-            "sidebar-project-row"
-          );
-        }
-      });
-
-      return {
-        names: names,
-        sources: sources,
-        orders: orders
-      };
-    };
-    var enrichConversationProjectDirectories = function (conversations, mainWorldDirectories) {
-      var mainWorld = mainWorldDirectories && typeof mainWorldDirectories === "object"
-        ? mainWorldDirectories
-        : emptyProjectDirectories();
-      var sidebarDirectories = sidebarProjectDirectories();
-      var sidebarItems = listSidebarConversations(sidebarDirectories);
-      var sidebarById = {};
-      sidebarItems.forEach(function rememberSidebarItem(item) {
-        if (item && item.id) {
-          sidebarById[item.id] = item;
-        }
-      });
-      var resolvedDirectories = resolveRenderedProjectDirectories(
-        conversations,
-        mainWorld,
-        sidebarDirectories,
-        sidebarItems
-      );
-      var projectNames = resolvedDirectories.names || {};
-      var projectNameSources = resolvedDirectories.sources || {};
-      var projectOrders = resolvedDirectories.orders || {};
-      var knownOrders = Object.keys(projectOrders).map(function projectOrder(id) {
-        return Number(projectOrders[id]);
-      }).filter(function validOrder(value) {
-        return Number.isFinite(value) && value >= 0;
-      });
-      var nextFallbackOrder = knownOrders.length ? Math.max.apply(Math, knownOrders) + 1 : 0;
-      var fallbackOrders = {};
-      return (Array.isArray(conversations) ? conversations : []).map(function enrich(item) {
-        var source = item && typeof item === "object" ? item : {};
-        var sidebar = sidebarById[source.id] || {};
-        var projectId = [
-          source.projectId,
-          source.gizmoId,
-          source.gizmo_id,
-          sidebar.projectId
-        ].map(safeProjectId).filter(Boolean)[0] || "";
-        var projectName = "";
-        var projectNameSource = "unknown";
-        if (projectId && cleanProjectDirectoryName(projectNames[projectId])) {
-          projectName = cleanProjectDirectoryName(projectNames[projectId]);
-          projectNameSource = projectNameSources[projectId] || "sidebar-project";
-        } else if (projectId && cleanProjectDirectoryName(source.projectName)) {
-          projectName = cleanProjectDirectoryName(source.projectName);
-          projectNameSource = "account-index";
-        } else if (projectId && cleanProjectDirectoryName(sidebar.projectName)) {
-          projectName = cleanProjectDirectoryName(sidebar.projectName);
-          projectNameSource = "sidebar-conversation";
-        }
-        var projectOrder = null;
-        if (projectId && Object.prototype.hasOwnProperty.call(projectOrders, projectId)) {
-          projectOrder = Number(projectOrders[projectId]);
-        } else if (
-          projectId &&
-          source.projectOrder !== null &&
-          source.projectOrder !== "" &&
-          Number.isFinite(Number(source.projectOrder)) &&
-          Number(source.projectOrder) >= 0
-        ) {
-          projectOrder = Number(source.projectOrder);
-        } else if (projectId) {
-          if (!Object.prototype.hasOwnProperty.call(fallbackOrders, projectId)) {
-            fallbackOrders[projectId] = nextFallbackOrder;
-            nextFallbackOrder += 1;
-          }
-          projectOrder = fallbackOrders[projectId];
-        }
-        var projectNameKey = normalizePromptText(projectName).toLowerCase();
-        var title = [
-          source.title,
-          sidebar.title
-        ].map(normalizePromptText).filter(function usableConversationTitle(candidate) {
-          return Boolean(
-            candidate &&
-            (!projectNameKey || candidate.toLowerCase() !== projectNameKey)
-          );
-        })[0] || ("Conversation " + String(source.id || "").slice(0, 8));
-        return Object.assign({}, source, {
-          title: title,
+        conversation: {
+          id: id,
+          title: title.slice(0, 200),
+          createTime: "",
+          updateTime: "",
+          archived: false,
+          current: true,
           projectId: projectId,
-          projectName: projectName,
-          projectNameSource: projectNameSource,
-          projectRouteSlug: cleanSidebarText(
-            source.projectRouteSlug || sidebar.projectRouteSlug,
-            160
-          ),
-          projectOrder: projectOrder,
-          groupType: projectId ? "project" : ""
-        });
-      });
-    };
-    var accountHistoryAuthPromise = null;
-    var accountHistoryAuthGeneration = -1;
-    var accountHistoryAuthClearTimer = null;
-    var accountHistoryCancelled = false;
-    var accountHistoryOperationGeneration = 0;
-    var accountHistoryOperationBudget = null;
-    var ACCOUNT_HISTORY_AUTH_IDLE_MS = 30 * 1000;
-
-    function clearAccountHistoryAuth(expectedGeneration) {
-      if (
-        expectedGeneration != null &&
-        accountHistoryAuthGeneration !== expectedGeneration
-      ) {
-        return;
-      }
-      accountHistoryAuthPromise = null;
-      accountHistoryAuthGeneration = -1;
-      if (accountHistoryAuthClearTimer && typeof clearTimeout === "function") {
-        clearTimeout(accountHistoryAuthClearTimer);
-      }
-      accountHistoryAuthClearTimer = null;
-    }
-
-    function scheduleAccountHistoryAuthClear(generation) {
-      if (accountHistoryAuthClearTimer && typeof clearTimeout === "function") {
-        clearTimeout(accountHistoryAuthClearTimer);
-      }
-      accountHistoryAuthClearTimer = typeof setTimeout === "function"
-        ? setTimeout(function clearIdleAccountHistoryAuth() {
-            clearAccountHistoryAuth(generation);
-          }, ACCOUNT_HISTORY_AUTH_IDLE_MS)
-          : null;
-    }
-
-    function accountHistoryCancelledError() {
-      var error = new Error("ChatGPT account read was cancelled.");
-      error.stopOperation = true;
-      error.cancelled = true;
-      return error;
-    }
-
-    function accountHistoryLimitError(code, message, generation) {
-      var error = new Error(message);
-      error.code = String(code || "account-operation-limit");
-      error.stopOperation = true;
-      error.incomplete = true;
-      if (
-        accountHistoryOperationBudget &&
-        Number(accountHistoryOperationBudget.generation) === Number(generation)
-      ) {
-        accountHistoryOperationBudget.stopError = error;
-      }
-      accountHistoryCancelled = true;
-      clearAccountHistoryAuth(generation);
-      return error;
-    }
-
-    function accountHistoryOperationError(generation) {
-      if (
-        accountHistoryOperationBudget &&
-        Number(accountHistoryOperationBudget.generation) === Number(generation) &&
-        accountHistoryOperationBudget.stopError
-      ) {
-        return accountHistoryOperationBudget.stopError;
-      }
-      return accountHistoryCancelledError();
-    }
-
-    function ensureAccountHistoryBudget(generation) {
-      if (
-        Number(generation) !== accountHistoryOperationGeneration ||
-        accountHistoryCancelled
-      ) {
-        throw accountHistoryOperationError(generation);
-      }
-      if (
-        !accountHistoryOperationBudget ||
-        Number(accountHistoryOperationBudget.generation) !== Number(generation)
-      ) {
-        accountHistoryOperationBudget = {
-          generation: Number(generation),
-          startedAt: Date.now(),
-          requestCount: 0,
-          conversationIds: Object.create(null),
-          conversationCount: 0,
-          stopError: null
-        };
-      }
-      if (accountHistoryOperationBudget.stopError) {
-        throw accountHistoryOperationBudget.stopError;
-      }
-      if (Date.now() - accountHistoryOperationBudget.startedAt >= ACCOUNT_HISTORY_MAX_OPERATION_MS) {
-        throw accountHistoryLimitError(
-          "account-operation-time-limit",
-          "ChatGPT account reading stopped after 90 seconds; remaining account data was not read.",
-          generation
-        );
-      }
-      return accountHistoryOperationBudget;
-    }
-
-    function reserveAccountHistoryRequest(generation) {
-      var budget = ensureAccountHistoryBudget(generation);
-      if (budget.requestCount >= ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION) {
-        throw accountHistoryLimitError(
-          "account-request-limit",
-          "ChatGPT account reading stopped after " +
-            ACCOUNT_HISTORY_MAX_REQUESTS_PER_OPERATION +
-            " requests; remaining account data was not read.",
-          generation
-        );
-      }
-      budget.requestCount += 1;
-      return budget.requestCount;
-    }
-
-    function reserveAccountHistoryConversations(ids, generation) {
-      var budget = ensureAccountHistoryBudget(generation);
-      var accepted = [];
-      var rejected = [];
-      uniqueIds(ids).forEach(function reserve(id) {
-        if (budget.conversationIds[id]) {
-          accepted.push(id);
-          return;
-        }
-        if (budget.conversationCount >= ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION) {
-          rejected.push(id);
-          return;
-        }
-        budget.conversationIds[id] = true;
-        budget.conversationCount += 1;
-        accepted.push(id);
-      });
-      return {
-        accepted: accepted,
-        rejected: rejected,
-        limit: ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION
+          projectName: "",
+          groupType: projectId ? "project" : "",
+          source: "current-dom"
+        },
+        currentConversationId: id,
+        complete: true,
+        source: "current-dom"
       };
     }
 
-    function beginAccountHistoryOperation() {
-      accountHistoryOperationGeneration += 1;
-      accountHistoryCancelled = false;
-      clearAccountHistoryAuth();
-      accountHistoryOperationBudget = {
-        generation: accountHistoryOperationGeneration,
-        startedAt: Date.now(),
-        requestCount: 0,
-        conversationIds: Object.create(null),
-        conversationCount: 0,
-        stopError: null
-      };
-      return true;
-    }
-
-    function cancelAccountHistoryOperation() {
-      accountHistoryOperationGeneration += 1;
-      accountHistoryCancelled = true;
-      clearAccountHistoryAuth();
-      accountHistoryOperationBudget = null;
-      return true;
-    }
-
-    function releaseAccountHistoryAuth() {
-      // Advancing the generation invalidates any delayed retry or reserved
-      // request slot from the operation that just finished. A later explicit
-      // operation can start normally without letting stale callbacks send.
-      accountHistoryOperationGeneration += 1;
-      accountHistoryCancelled = false;
-      clearAccountHistoryAuth();
-      accountHistoryOperationBudget = null;
-      return true;
-    }
-
-    function accountHistoryOperationIsActive(generation) {
-      return !accountHistoryCancelled &&
-        Number(generation) === accountHistoryOperationGeneration;
-    }
-
-    function loadAccountHistoryAuth(generation) {
-      if (!accountHistoryOperationIsActive(generation)) {
-        return Promise.reject(accountHistoryOperationError(generation));
-      }
+    function currentConversationForExportWithProjectDirectory() {
+      var result = currentConversationForExport();
+      var conversation = result && result.conversation;
       if (
-        accountHistoryAuthPromise &&
-        accountHistoryAuthGeneration === generation
+        !conversation ||
+        !conversation.projectId ||
+        !chrome.runtime ||
+        typeof chrome.runtime.sendMessage !== "function"
       ) {
-        return accountHistoryAuthPromise;
+        return Promise.resolve(result);
       }
-      accountHistoryAuthGeneration = generation;
-      var source = window.ChatGPTConversationSource;
-      var scheduledSessionFetch = function scheduledSessionFetch(url, options) {
-        return scheduleAccountRequest(function startSessionFetch() {
-          if (!accountHistoryOperationIsActive(generation)) {
-            throw accountHistoryOperationError(generation);
-          }
-          reserveAccountHistoryRequest(generation);
-          return accountFetchWithTimeout(window.fetch, url, options);
-        });
-      };
-      var sessionRequest = source && typeof source.requestJson === "function"
-        ? source.requestJson(
-            scheduledSessionFetch,
-            "/api/auth/session",
-            { maxAttempts: 2, requestGapMs: 0 }
-          )
-        : scheduledSessionFetch("/api/auth/session", {
-            method: "GET",
-            credentials: "include",
-            cache: "no-store",
-            headers: { accept: "application/json" }
-          }).then(function parseFallbackSession(response) {
-            if (!response || !response.ok || typeof response.json !== "function") {
-              var status = Number(response && response.status) || 0;
-              var error = new Error("ChatGPT account session is unavailable" + (status ? " (" + status + ")" : "") + ".");
-              error.status = status;
-              if (status === 429 || status === 401 || status === 403) {
-                error.stopOperation = true;
-                error.incomplete = true;
-                error.retryAfterMs = status === 429 ? retryAfterDelayMs(response) : 0;
-              }
-              throw error;
-            }
-            return response.json();
-          });
-      accountHistoryAuthPromise = sessionRequest.then(function validateSession(session) {
-        var token = String(session && (session.accessToken || session.access_token) || "");
-        var accountId = String(
-          session && session.account && session.account.id ||
-          session && (session.accountId || session.account_id) ||
-          ""
-        );
-        if (!token || !accountId) {
-          throw new Error("ChatGPT account authorization is unavailable.");
-        }
-        // Authentication values remain only in this content-script memory.
-        // They are never persisted, logged, exported, or sent off ChatGPT.
-        return { token: token, accountId: accountId };
-      }).catch(function allowFutureAuthRetry(error) {
-        clearAccountHistoryAuth(generation);
-        throw error;
-      });
-      return accountHistoryAuthPromise;
-    }
-
-    function accountHistoryFetch(url, init) {
-      var operationGeneration = accountHistoryOperationGeneration;
-      if (!accountHistoryOperationIsActive(operationGeneration)) {
-        return Promise.reject(accountHistoryOperationError(operationGeneration));
-      }
-      var parsedUrl;
-      try {
-        if (typeof URL === "function") {
-          parsedUrl = new URL(String(url || ""), location.origin);
-        } else {
-          var rawUrl = String(url || "");
-          var fallbackHref = rawUrl.charAt(0) === "/"
-            ? String(location.origin || "") + rawUrl
-            : rawUrl;
-          parsedUrl = {
-            href: fallbackHref,
-            origin: fallbackHref.indexOf(String(location.origin || "")) === 0
-              ? String(location.origin || "")
-              : ""
-          };
-        }
-      } catch (_) {
-        return Promise.reject(new Error("ChatGPT account history URL is invalid."));
-      }
-      if (parsedUrl.origin !== location.origin) {
-        return Promise.reject(new Error("ChatGPT account history requests must remain same-origin."));
-      }
-      var requestedMethod = String((init && init.method) || "GET").toUpperCase();
-      if (requestedMethod !== "GET") {
-        return Promise.reject(new Error("ChatGPT account history access is read-only."));
-      }
-      return loadAccountHistoryAuth(operationGeneration).then(function authorizedFetch(auth) {
-        if (!accountHistoryOperationIsActive(operationGeneration)) {
-          throw accountHistoryOperationError(operationGeneration);
-        }
-        return scheduleAccountRequest(function startAuthorizedFetch() {
-          if (!accountHistoryOperationIsActive(operationGeneration)) {
-            throw accountHistoryOperationError(operationGeneration);
-          }
-          reserveAccountHistoryRequest(operationGeneration);
-          scheduleAccountHistoryAuthClear(operationGeneration);
-          var options = Object.assign({}, init || {});
-          var headers;
-          if (typeof Headers === "function") {
-            headers = new Headers(options.headers || {});
-            headers.set("accept", "application/json");
-            headers.set("authorization", "Bearer " + auth.token);
-            headers.set("chatgpt-account-id", auth.accountId);
-          } else {
-            headers = Object.assign({}, options.headers || {}, {
-              accept: "application/json",
-              authorization: "Bearer " + auth.token,
-              "chatgpt-account-id": auth.accountId
-            });
-          }
-          options.headers = headers;
-          options.method = "GET";
-          options.credentials = "include";
-          options.cache = "no-store";
-          return accountFetchWithTimeout(window.fetch, parsedUrl.href, options);
-        });
-      }).then(function refreshExpiredSession(response) {
-        if (!accountHistoryOperationIsActive(operationGeneration)) {
-          throw accountHistoryOperationError(operationGeneration);
-        }
-        if (response && (response.status === 401 || response.status === 403)) {
-          clearAccountHistoryAuth(operationGeneration);
-        }
-        return response;
-      });
-    }
-
-    function accountSourceOptions() {
-      var source = window.ChatGPTConversationSource;
-      var exporter = window.ChatGPTUsageExporter;
-      if (!source || !exporter || typeof window.fetch !== "function") {
-        return null;
-      }
-      return {
-        source: source,
-        options: {
-          fetchImpl: accountHistoryFetch,
-          exporter: exporter,
-          origin: location.origin,
-          includeArchived: true,
-          pageSize: 100,
-          concurrency: 1,
-          maxIndexPagesPerScope: ACCOUNT_HISTORY_MAX_INDEX_PAGES_PER_SCOPE,
-          maxConversationsPerOperation: ACCOUNT_HISTORY_MAX_CONVERSATIONS_PER_OPERATION,
-          maxMessagePagesPerConversation: 50,
-          maxMessagesPerConversation: 10000,
-          // The shared content-script scheduler owns the actual network start
-          // gap and the cross-feature concurrency cap. The source keeps the
-          // same value as an additional conservative reservation.
-          requestGapMs: ACCOUNT_REQUEST_MIN_GAP_MS
-        }
-      };
-    }
-
-    function safeCollectionError(error) {
-      return String((error && error.message) || error || "conversation-unavailable").replace(/\s+/g, " ").trim().slice(0, 240);
-    }
-
-    function collectionFailureResponse(error) {
-      return {
-        ok: false,
-        error: safeCollectionError(error),
-        status: Number(error && error.status) || 0,
-        stopOperation: Boolean(error && error.stopOperation),
-        incomplete: Boolean(error && (error.incomplete || error.stopOperation)),
-        retryAfterMs: Math.max(0, Number(error && error.retryAfterMs) || 0),
-        code: String(error && error.code || "")
-      };
-    }
-
-    function uniqueIds(ids) {
-      var seen = {};
-      return (Array.isArray(ids) ? ids : []).reduce(function (out, value) {
-        var id = String(value || "").trim();
-        if (/^[0-9a-zA-Z-]{6,160}$/.test(id) && !seen[id]) {
-          seen[id] = true;
-          out.push(id);
-        }
-        return out;
-      }, []);
-    }
-
-    function mergeCollectionResults(ids, primary, fallbackConversations, fallbackUsed) {
-      var targets = uniqueIds(ids);
-      var byId = {};
-      var primaryFailures = {};
-      var warnings = Array.isArray(primary && primary.warnings) ? primary.warnings.slice() : [];
-      (primary && Array.isArray(primary.conversations) ? primary.conversations : []).forEach(function addPrimary(conversation) {
-        if (conversation && conversation.id) {
-          byId[conversation.id] = conversation;
-        }
-      });
-      (Array.isArray(fallbackConversations) ? fallbackConversations : []).forEach(function addFallback(conversation) {
-        if (conversation && conversation.id && !byId[conversation.id]) {
-          byId[conversation.id] = conversation;
-        }
-      });
-      (primary && Array.isArray(primary.failures) ? primary.failures : []).forEach(function rememberFailure(failure) {
-        if (failure && failure.id) {
-          primaryFailures[failure.id] = failure.error;
-        }
-      });
-      var failures = [];
-      var conversations = [];
-      targets.forEach(function orderResult(id) {
-        if (byId[id]) {
-          conversations.push(byId[id]);
-        } else {
-          failures.push({
-            id: id,
-            error: primaryFailures[id] || "Conversation was not available from account history or the loaded sidebar."
-          });
-        }
-      });
-      if (fallbackUsed) {
-        warnings.push({
-          scope: "rendered-page-fallback",
-          error: "One or more conversations were read from the rendered ChatGPT page because account-history detail access was unavailable."
-        });
-      }
-      return {
-        conversations: conversations,
-        failures: failures,
-        warnings: warnings,
-        requestedCount: targets.length,
-        complete: failures.length === 0 && warnings.length === 0 && (!primary || primary.complete !== false)
-      };
-    }
-
-    function collectWithDomFallback(ids, primaryPromise, perDelayMs) {
-      var targets = uniqueIds(ids);
-      return Promise.resolve(primaryPromise).catch(function accountFailed(error) {
-        if (error && (error.cancelled || error.stopOperation)) {
-          throw error;
-        }
-        return {
-          conversations: [],
-          failures: targets.map(function failure(id) { return { id: id, error: safeCollectionError(error) }; }),
-          warnings: [{ scope: "account-details", error: safeCollectionError(error) }],
-          requestedCount: targets.length,
-          complete: false
-        };
-      }).then(function fallbackMissing(primary) {
-        if (accountHistoryCancelled) {
-          throw accountHistoryCancelledError();
-        }
-        if (primary && primary.stopOperation) {
-          throw accountHistoryLimitError(
-            primary.code || "account-operation-limit",
-            safeCollectionError(primary.error || "ChatGPT account reading reached an operation limit; remaining conversations were not read.")
-          );
-        }
-        var completed = {};
-        (primary.conversations || []).forEach(function mark(conversation) {
-          if (conversation && conversation.id) { completed[conversation.id] = true; }
-        });
-        var missing = targets.filter(function missingId(id) { return !completed[id]; });
-        if (!missing.length) {
-          return mergeCollectionResults(targets, primary, [], false);
-        }
-        // If the missing target is already open, read it directly before trying
-        // sidebar navigation. Shared, temporary, or otherwise unlisted chats
-        // can be fully rendered even when no matching sidebar link exists.
-        var directFallback = [];
-        var currentId = conversationIdFromPath();
-        if (currentId && missing.indexOf(currentId) !== -1) {
-          var exporter = window.ChatGPTUsageExporter;
-          try {
-            var current = exporter && typeof exporter.collectConversationFromDom === "function"
-              ? exporter.collectConversationFromDom(document)
-              : null;
-            if (current && current.id === currentId && current.messages && current.messages.length) {
-              directFallback.push(current);
-              missing = missing.filter(function notCurrent(id) { return id !== currentId; });
-            }
-          } catch (_) {}
-        }
-        // Do not navigate to other conversations as an automatic fallback.
-        // Such navigation creates additional normal ChatGPT page loads. Only
-        // the conversation the user already has open may be read from the DOM;
-        // every other failure remains explicit in the export report.
-        return mergeCollectionResults(targets, primary, directFallback, directFallback.length > 0);
-      });
-    }
-
-    function listConversationsForExport() {
-      beginAccountHistoryOperation();
-      var account = accountSourceOptions();
-      var projectDirectoryPromise = requestMainWorldProjectDirectories();
-      var listPromise;
-      if (!account) {
-        listPromise = projectDirectoryPromise.then(function domDirectories(projectDirectories) {
-          return listAllDomConversations(projectDirectories).then(function domOnly(conversations) {
-            return {
-              conversations: conversations,
-              total: conversations.length,
-              complete: false,
-              source: "sidebar",
-              warnings: [{ scope: "account", error: "Account history access is unavailable; showing loaded sidebar chats only." }]
-            };
-          });
-        });
-      } else {
-        var accountListPromise;
+      return new Promise(function readRenderedProjectDirectory(resolve) {
         try {
-          accountListPromise = Promise.resolve(account.source.listAccountConversations(account.options));
-        } catch (accountListError) {
-          accountListPromise = Promise.reject(accountListError);
+          chrome.runtime.sendMessage(
+            { type: "conversation.projectDirectories.get" },
+            function projectDirectoriesReceived(response) {
+              if (chrome.runtime && chrome.runtime.lastError) {
+                resolve(result);
+                return;
+              }
+              var entries = response && response.ok && Array.isArray(response.entries)
+                ? response.entries
+                : [];
+              var match = entries.filter(function sameProject(entry) {
+                return String(entry && entry.gizmoId || "").toLowerCase() ===
+                  String(conversation.projectId || "").toLowerCase();
+              })[0];
+              if (match && match.projectName) {
+                conversation.projectName = String(match.projectName).slice(0, 200);
+                conversation.projectNameSource = "main-world-react";
+                conversation.projectOrder = Number(match.projectOrder) || 0;
+                var projectPrefix = conversation.projectName + " - ";
+                if (String(conversation.title || "").indexOf(projectPrefix) === 0) {
+                  conversation.title = String(conversation.title).slice(projectPrefix.length).trim();
+                }
+                if (conversation.title === conversation.projectName) {
+                  conversation.title = "Conversation " + String(conversation.id || "").slice(0, 8);
+                }
+              }
+              resolve(result);
+            }
+          );
+        } catch (_) {
+          resolve(result);
         }
-        listPromise = Promise.all([accountListPromise, projectDirectoryPromise])
-          .then(function accountList(results) {
-            var result = results[0] || {};
-            var projectDirectories = results[1];
-            var accountConversations = enrichConversationProjectDirectories(
-              result.conversations || [],
-              projectDirectories
-            );
-            if (!accountConversations.length && result.stopped) {
-              return {
-                conversations: [],
-                total: 0,
-                complete: false,
-                source: "account",
-                warnings: result.warnings || [],
-                stopped: true,
-                code: String(result.code || "account-operation-limit")
-              };
-            }
-            if (!accountConversations.length) {
-              return listAllDomConversations(projectDirectories)
-                .then(function useVisibleSidebarWhenAccountIndexIsEmpty(sidebarConversations) {
-                  if (!sidebarConversations.length) {
-                    return {
-                      conversations: [],
-                      total: 0,
-                      complete: Boolean(result.complete),
-                      source: "account",
-                      warnings: result.warnings || []
-                    };
-                  }
-                  return {
-                    conversations: sidebarConversations,
-                    total: sidebarConversations.length,
-                    complete: false,
-                    source: "sidebar",
-                    warnings: (result.warnings || []).concat([{
-                      scope: "account",
-                      error: "The account history endpoint returned an empty index; showing the loaded sidebar conversations instead."
-                    }])
-                  };
-                });
-            }
-            return {
-              conversations: accountConversations,
-              total: accountConversations.length,
-              complete: Boolean(result.complete),
-              source: "account",
-              warnings: result.warnings || [],
-              stopped: Boolean(result.stopped || result.stopOperation),
-              code: String(result.code || "")
-            };
-          })
-          .catch(function accountListFailed(error) {
-            if (error && (error.cancelled || error.stopOperation)) {
-              throw error;
-            }
-            return projectDirectoryPromise.then(function fallbackDirectories(projectDirectories) {
-              return listAllDomConversations(projectDirectories).then(function fallbackList(conversations) {
-                return {
-                  conversations: conversations,
-                  total: conversations.length,
-                  complete: false,
-                  source: "sidebar",
-                  warnings: [{ scope: "account", error: safeCollectionError(error) }]
-                };
-              });
-            });
-          });
-      }
-      return listPromise.then(function putCurrentFirst(result) {
-        var prioritized = prioritizeCurrentConversation(result && result.conversations);
-        return Object.assign({}, result || {}, {
-          conversations: prioritized.conversations,
-          total: prioritized.conversations.length,
-          currentConversationId: prioritized.currentConversationId
-        });
-      }).then(function releaseAfterList(result) {
-        releaseAccountHistoryAuth();
-        return result;
-      }, function releaseAfterListFailure(error) {
-        releaseAccountHistoryAuth();
-        throw error;
       });
     }
 
-    function collectSelectedConversations(ids, perDelayMs) {
-      var targets = uniqueIds(ids);
-      var generation = accountHistoryOperationGeneration;
-      var reservation = reserveAccountHistoryConversations(targets, generation);
-      var accepted = reservation.accepted;
-      var rejected = reservation.rejected;
-      var account = accountSourceOptions();
-      var primary;
-      if (!accepted.length) {
-        primary = Promise.resolve({
-          conversations: [],
-          failures: [],
-          warnings: [],
-          requestedCount: 0,
-          attemptedCount: 0,
-          complete: true
-        });
-      } else {
-        primary = account
-          ? account.source.collectConversations(accepted, account.options)
-          : Promise.reject(new Error("Account history access is unavailable."));
-      }
-      return collectWithDomFallback(accepted, primary, perDelayMs).then(function includeRejected(result) {
-        if (!rejected.length) {
-          return Object.assign({}, result, {
-            requestedCount: targets.length,
-            attemptedCount: accepted.length
-          });
-        }
-        var rejectionMessage = "Conversation was not requested because the account operation limit of " +
-          reservation.limit +
-          " conversations was reached.";
-        var conversationsById = Object.create(null);
-        var failuresById = Object.create(null);
-        (result.conversations || []).forEach(function rememberConversation(conversation) {
-          if (conversation && conversation.id) {
-            conversationsById[conversation.id] = conversation;
-          }
-        });
-        (result.failures || []).forEach(function rememberFailure(failure) {
-          if (failure && failure.id) {
-            failuresById[failure.id] = failure;
-          }
-        });
-        rejected.forEach(function rememberRejected(id) {
-          failuresById[id] = {
-            id: id,
-            code: "conversation-count-limit",
-            error: rejectionMessage
-          };
-        });
+    function currentConversationContentForExport() {
+      var exporter = window.ChatGPTUsageExporter;
+      var conversation = exporter && typeof exporter.collectConversationFromDom === "function"
+        ? exporter.collectConversationFromDom(document)
+        : null;
+      var id = exportConversationIdFromPath();
+      if (!conversation || !conversation.id || !conversation.messages || !conversation.messages.length) {
         return {
-          conversations: targets.reduce(function orderedConversations(out, id) {
-            if (conversationsById[id]) {
-              out.push(conversationsById[id]);
-            }
-            return out;
-          }, []),
-          failures: targets.reduce(function orderedFailures(out, id) {
-            if (failuresById[id]) {
-              out.push(failuresById[id]);
-            }
-            return out;
-          }, []),
-          warnings: (result.warnings || []).concat([{
-            scope: "account-details",
-            code: "conversation-count-limit",
-            error: "ChatGPT account reading was limited to " +
-              reservation.limit +
-              " selected conversations for this operation; " +
-              rejected.length +
-              " remaining conversation" +
-              (rejected.length === 1 ? " was" : "s were") +
-              " not requested."
-          }]),
-          requestedCount: targets.length,
-          attemptedCount: accepted.length,
+          conversations: [],
+          failures: [{ id: id, error: "current-conversation-dom-unavailable" }],
+          warnings: [],
+          requestedCount: id ? 1 : 0,
           complete: false,
-          incomplete: true,
-          code: "conversation-count-limit"
+          source: "current-dom"
         };
-      });
+      }
+      return {
+        conversations: [conversation],
+        failures: [],
+        warnings: [],
+        requestedCount: 1,
+        complete: true,
+        source: "current-dom"
+      };
     }
 
-    // 暴露给同一隔离世界里的页面内面板直接调用；弹窗面板走 chrome.tabs 消息。
-    window.__chatgptUsageListConversations = listConversationsForExport;
-    window.__chatgptUsageCollectMany = collectSelectedConversations;
-    window.__chatgptUsageBeginAccountOperation = beginAccountHistoryOperation;
-    window.__chatgptUsageCancelAccountOperation = cancelAccountHistoryOperation;
-    window.__chatgptUsageReleaseAccountAuth = releaseAccountHistoryAuth;
+    window.__chatgptUsageCurrentConversation = currentConversationForExportWithProjectDirectory;
+    window.__chatgptUsageCollectCurrentConversation = currentConversationContentForExport;
 
     chrome.runtime.onMessage.addListener(function handleConversationMessage(message, sender, sendResponse) {
       if (!message) {
         return undefined;
       }
-      var exporter = window.ChatGPTUsageExporter;
-      var exporterReady = exporter && typeof exporter.collectConversationFromDom === "function";
-      if (message.type === "conversation.operation.begin") {
-        sendResponse({ ok: beginAccountHistoryOperation() });
-        return false;
-      }
-      if (message.type === "conversation.operation.cancel") {
-        sendResponse({ ok: cancelAccountHistoryOperation() });
-        return false;
-      }
-      if (message.type === "conversation.operation.release") {
-        sendResponse({ ok: releaseAccountHistoryAuth() });
-        return false;
-      }
-      if (message.type === "conversation.list") {
-        listConversationsForExport()
-          .then(function (result) {
+      if (message.type === "usage.catalog.ensure") {
+        ensureRuntimeModelCatalog("popup-usage", nextUnknownRuntimeModelSlug())
+          .then(function catalogEnsured(catalog) {
             sendResponse({
-              ok: true,
-              conversations: result.conversations,
-              total: result.total,
-              complete: result.complete,
-              incomplete: Boolean(result.incomplete || result.complete === false),
-              source: result.source,
-              warnings: result.warnings,
-              stopped: Boolean(result.stopped),
-              code: String(result.code || ""),
-              currentConversationId: result.currentConversationId || ""
+              ok: Boolean(catalog),
+              catalogObservedAt: String(catalog && catalog.observedAt || "")
             });
-          })
-          .catch(function (e) { sendResponse(collectionFailureResponse(e)); });
+          }, function catalogEnsureFailed(error) {
+            sendResponse({
+              ok: false,
+              error: String((error && error.message) || error || "model-catalog-unavailable")
+            });
+          });
         return true;
       }
-      if (message.type === "conversation.collectMany") {
-        if (!exporterReady) { sendResponse({ ok: false, error: "exporter-unavailable" }); return true; }
-        collectSelectedConversations(message.ids, message.perDelayMs)
-          .then(function (result) {
-            sendResponse({
-              ok: true,
-              conversations: result.conversations,
-              failures: result.failures,
-              warnings: result.warnings || [],
-              requestedCount: result.requestedCount,
-              attemptedCount: result.attemptedCount,
-              complete: result.complete,
-              incomplete: Boolean(result.incomplete || result.complete === false),
-              stopped: Boolean(result.stopped || result.stopOperation),
-              code: String(result.code || "")
-            });
-          })
-          .catch(function (e) { sendResponse(collectionFailureResponse(e)); });
+      if (message.type === "conversation.current") {
+        currentConversationForExportWithProjectDirectory().then(function currentConversationReady(result) {
+          sendResponse(Object.assign({ ok: true }, result || {}));
+        });
         return true;
+      }
+      if (message.type === "conversation.current.content") {
+        sendResponse(Object.assign({ ok: true }, currentConversationContentForExport()));
+        return false;
       }
       return undefined;
     });

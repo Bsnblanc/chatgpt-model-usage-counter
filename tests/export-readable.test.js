@@ -267,7 +267,7 @@ test("visible structured content keeps line breaks and indentation", () => {
   const surfaces = exportSurfaces(structuredContentConversations, { title: "Structured Content Export" });
 
   assert.match(surfaces.JSON, /请保留配置格式：\\nproxies:\\n  - name: 香港-节点\\n    type: socks5/);
-  assert.match(surfaces.Markdown, /\*\*你\*\*\n\n请保留配置格式：\nproxies:\n  - name: 香港-节点\n    type: socks5\nrules:\n  - DOMAIN-SUFFIX,example\.com,DIRECT/);
+  assert.match(surfaces.Markdown, /\*\*You\*\*\n\n请保留配置格式：\nproxies:\n  - name: 香港-节点\n    type: socks5\nrules:\n  - DOMAIN-SUFFIX,example\.com,DIRECT/);
   assert.doesNotMatch(surfaces.Markdown, /```text\n请保留配置格式：/);
   assert.match(surfaces.PDF, /请保留配置格式：\nproxies:\n  - name: 香港-节点\n    type: socks5/);
   assert.match(surfaces.DOCX, /请保留配置格式：[\s\S]*proxies:[\s\S]*  - name: 香港-节点[\s\S]*    type: socks5/);
@@ -442,7 +442,10 @@ test("all human-readable formats describe equal, different, and missing request/
       ]
     }
   ];
-  const surfaces = exportSurfaces(conversations, { title: "Model Relationships Export" });
+  const surfaces = exportSurfaces(conversations, {
+    title: "Model Relationships Export",
+    language: "zh"
+  });
 
   for (const [format, text] of Object.entries(surfaces)) {
     if (format === "JSON") continue;
