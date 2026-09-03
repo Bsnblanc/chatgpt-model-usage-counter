@@ -15,7 +15,7 @@ The extension stores the following data in the current Chrome profile through `c
 - Shared interface settings: language, active main view, date range, Chat/Work filter, Basic/Advanced mode, theme, independent line/donut/text visibility, and separate visible-model selections for Basic and Advanced.
 - The filter used to keep the Chrome toolbar badge consistent with the panel.
 
-The default interface language is English. Changing the language or another shared setting updates the same local settings used by the in-page entry and toolbar popup.
+The default interface language mode is Auto. It reads the local ChatGPT page language and otherwise falls back to the browser language; no network request is made for language detection. Choosing English or Chinese, or changing another shared setting, updates the same local settings used by the in-page entry and toolbar popup.
 
 Usage statistics do not store raw prompts, raw answers, passwords, cookies, authorization headers, access tokens, account IDs, `safety_identifier`, or `prompt_cache_key`.
 
@@ -72,27 +72,31 @@ Backup export, CSV export, file reading, validation, and import are local operat
 Conversation export is initiated by the user:
 
 1. The currently rendered conversation is read from the page DOM and placed first in the selectable list.
-2. Complete history is added only when the user chooses a ChatGPT official data-export ZIP or `conversations.json` file.
-3. The imported index displays one checkbox per conversation and supports individual, multiple, select-all, clear, and project-level selection.
-4. Export reads only the currently selected local conversations after the user clicks JSON, Markdown, PDF, PNG, or DOCX.
+2. Opening Export or clicking Refresh can read the signed-in account conversation index through read-only same-origin ChatGPT requests. Reopening Export reuses the existing list; only Refresh forces a complete reread.
+3. The index displays one checkbox per conversation and supports individual, multiple, select-all, clear, and project-level selection.
+4. After the user clicks JSON, Markdown, PDF, PNG, or DOCX, the extension reads only the explicitly selected conversation bodies.
 5. A single selected conversation downloads as one file.
 6. Multiple selected conversations download as one ZIP containing one file per conversation and `_export-report.json`.
 
 Project names are associated only through explicit project-ID-to-name evidence. If a name cannot be verified, the project remains grouped by its stable ID and is displayed as Unknown project; names are not paired by remaining list order.
 
-Imported conversation titles, project relationships, timestamps, message roles, and message bodies are cached in `chrome.storage.local` so reopening Export can display the list immediately without rereading the file. Importing a replacement package atomically replaces the previous imported cache.
+The access token and account ID obtained from `/api/auth/session` remain only in content-script memory during the active account operation. They are not stored, logged, backed up, included in exported files, or sent outside ChatGPT.
 
-Conversation parsing, caching, selection, rendering, and file generation are local operations. Opening Export, searching, selecting, and exporting do not request ChatGPT conversation-history endpoints and do not use a ChatGPT access token, Cookie, Authorization header, or account ID.
+Conversation selection, rendering, and file generation are local operations. Search, checkbox changes, project selection, and format selection do not start extra index reads. The extension does not crawl account history in the background.
 
 ## Account-request safeguards
 
-The account model-catalog requests use one extension-wide scheduler shared by all ChatGPT tabs:
+Account model-catalog, conversation-index, and selected-conversation requests use one extension-wide scheduler shared by all ChatGPT tabs:
 
 - Maximum concurrency: 1.
 - Minimum gap between actual request starts: 1 second.
 - Model-catalog request: no automatic retry.
+- Conversation-history transient failure: at most one retry.
+- Every account fetch has a 45-second abort timeout before its global permit is released.
 - `401` or `403`: stop the catalog operation.
 - `429`: apply an extension-wide cooldown; final throttling or a `Retry-After` longer than 60 seconds stops the catalog operation.
+- One account-history operation stops after 800 requests or 10 minutes.
+- One conversation stops after 50 older-message pages or 10,000 messages and is reported incomplete.
 
 The extension does not bypass rate limits, start background conversation crawling, modify or replay account requests, or turn hover preview into an account read.
 
@@ -105,7 +109,7 @@ These requests contain no ChatGPT account token or conversation content. When on
 ## Permissions
 
 - `alarms`: periodically refresh public ChatGPT service status.
-- `storage` and `unlimitedStorage`: save local statistics, shared settings, badge filters, imported official conversation data, session-only model catalog data, and request-coordination timing.
+- `storage` and `unlimitedStorage`: save local statistics, shared settings, badge filters, session-only model catalog data, and request-coordination timing.
 - `downloads`: save user-initiated statistics and conversation export files.
 - `scripting`: show or restore the page panel and read rendered project ID/name evidence required for export grouping.
 - `webRequest`: observe ChatGPT request model, parameter, feature, source, and message-linkage metadata for local statistics.
@@ -137,7 +141,7 @@ ChatGPT Model Usage Counter 是一个 Chrome 扩展，用于本地 ChatGPT 使�
 - 共享界面设置：语言、当前主面板、日期范围、Chat/Work、Basic/Advanced、主题、折线图/环形图/文字统计的独立显示状态，以及 Basic 和 Advanced 各自的可见模型选择。
 - 使 Chrome 工具栏角标与面板保持同一口径的过滤条件。
 
-界面默认语言为英语。切换语言或其他共享设置时，页面入口和工具栏弹窗使用同一份本地设置。
+界面默认使用自动语言：读取本地 ChatGPT 网页语言，无法读取时回退到浏览器语言；语言检测不产生网络请求。固定选择英语或中文、或切换其他共享设置时，页面入口和工具栏弹窗使用同一份本地设置。
 
 使用统计不保存 prompt 原文、回答原文、密码、Cookie、Authorization header、访问令牌、账号 ID、`safety_identifier` 或 `prompt_cache_key`。
 
@@ -194,27 +198,31 @@ Chat 和 Work 共用同一条被动统计事件链。扩展只观察用户原本
 对话导出由用户主动触发：
 
 1. 当前已经渲染的对话从页面 DOM 读取，并排在可选列表首位。
-2. 只有用户主动选择 ChatGPT 官方数据导出 ZIP 或 `conversations.json`，才会加入完整历史。
-3. 导入索引为每段对话显示复选框，并支持单选、多选、全选、清空和项目全选。
-4. 用户点击 JSON、Markdown、PDF、PNG 或 DOCX 后，只处理当前明确选中的本地对话。
+2. 打开 Export 或点击刷新时，可通过 ChatGPT 同源只读请求读取当前登录账号的对话索引；再次打开复用现有列表，只有刷新才强制完整重读。
+3. 索引为每段对话显示复选框，并支持单选、多选、全选、清空和项目全选。
+4. 用户点击 JSON、Markdown、PDF、PNG 或 DOCX 后，只读取当前明确选中的对话正文。
 5. 单选下载一个文件。
 6. 多选下载一个 ZIP，其中每段对话一个文件并附 `_export-report.json`。
 
 项目名称只能通过明确的项目 ID → 名称证据关联。名称无法验证时，项目仍按稳定 ID 分组并显示“未知项目”；不会按列表剩余顺序猜配名称。
 
-导入的对话标题、项目关系、时间戳、消息角色和消息正文会缓存在 `chrome.storage.local`，因此再次打开 Export 时可立即显示列表，无需重新读取文件。导入替换包时会原子替换旧缓存。
+从 `/api/auth/session` 取得的访问令牌和账号 ID 只在当前账号操作期间存在于内容脚本内存中；不会写入存储、日志、备份或导出文件，也不会发送到 ChatGPT 之外。
 
-对话解析、缓存、选择、排版和文件生成全部在本地完成。打开 Export、搜索、选择和导出不会请求 ChatGPT 对话历史接口，也不会使用 ChatGPT 访问令牌、Cookie、Authorization header 或账号 ID。
+对话选择、排版和文件生成全部在本地完成。搜索、勾选、项目选择和格式选择不会额外重读索引；扩展不会在后台抓取账号历史。
 
 ## 账号请求安全限制
 
-账号模型目录请求由所有 ChatGPT 标签页共享同一个扩展级调度器：
+账号模型目录、对话索引和所选对话正文请求由所有 ChatGPT 标签页共享同一个扩展级调度器：
 
 - 最大并发：1。
 - 任意两次真实请求起始时间至少间隔 1 秒。
 - 模型目录：不自动重试。
+- 对话历史临时错误：最多重试一次。
+- 每次账号请求具有 45 秒真实中止超时，网络请求结束后才释放全局许可。
 - `401` 或 `403`：停止模型目录操作。
 - `429`：建立扩展级全局冷却；最终仍被限流或 `Retry-After` 超过 60 秒时停止模型目录操作。
+- 单次账号历史操作最多 800 个请求或 10 分钟。
+- 单段对话最多读取 50 个旧消息分页或保留 10,000 条消息；达到上限时明确标记不完整。
 
 扩展不会绕过限流，不会在后台批量抓取对话，不会修改或重放账号请求，也不会把悬浮预览转换成账号读取。
 
@@ -227,7 +235,7 @@ Chat 和 Work 共用同一条被动统计事件链。扩展只观察用户原本
 ## 权限用途
 
 - `alarms`：周期刷新公开 ChatGPT 服务状态。
-- `storage` 和 `unlimitedStorage`：保存本地统计、共享设置、角标过滤器、用户导入的官方对话数据、会话模型目录和请求协调时间。
+- `storage` 和 `unlimitedStorage`：保存本地统计、共享设置、角标过滤器、会话模型目录和请求协调时间。
 - `downloads`：保存用户主动导出的统计和对话文件。
 - `scripting`：显示或恢复页面面板，并读取对导出项目分组所需的已渲染项目 ID/名称证据。
 - `webRequest`：观察 ChatGPT 请求中的模型、参数、功能、来源和消息关联元数据，用于本地统计。
