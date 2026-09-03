@@ -32,8 +32,8 @@ ChatGPT Model Usage Counter gives you a local, auditable view of how ChatGPT is 
 **Explicit conversation export**
 
 - Export the current open chat directly from the content already rendered on the ChatGPT page.
-- For full history, explicitly import your ChatGPT official data export ZIP or `conversations.json`; imported data is cached and processed locally.
-- Select one imported chat, several chats, all chats, or an entire project folder.
+- Opening Export or clicking Refresh reads the signed-in account conversation index through read-only same-origin requests; reopening uses the existing list until Refresh is clicked.
+- Select one chat, several chats, all chats, or an entire project folder.
 - Search and clear the list without losing the current scroll position.
 - Export JSON, Markdown, PDF, DOCX, or PNG.
 - One selected chat downloads as one file.
@@ -49,9 +49,9 @@ ChatGPT Model Usage Counter gives you a local, auditable view of how ChatGPT is 
 
 - Statistics and files are generated locally; there is no publisher-operated server.
 - Model statistics passively observe requests the user already initiated.
-- The current chat is read only from the rendered page, and full history is read only from the official ZIP or JSON the user explicitly imports.
-- The extension does not send prompts, rewrite requests, replay requests, paginate through account history, or crawl conversations in the background.
-- Conversation export does not read ChatGPT session tokens, cookies, authorization headers, or access tokens.
+- The current chat is shown immediately from the rendered page; the complete selectable index and only the selected bodies are read after explicit Export actions.
+- The extension does not send prompts, rewrite requests, replay requests, or crawl conversations in the background.
+- Same-origin account reads use one-request concurrency, a one-second start gap, abort timeouts, and extension-wide Retry-After backoff. Access tokens and account IDs remain only in memory for the active operation.
 - Credentials, cookies, authorization headers, access tokens, account IDs, raw prompts, and raw answers are not stored in usage statistics.
 
 This extension is an independent local utility. It is not an official OpenAI billing, quota, rate-limit, or token counter.
@@ -64,9 +64,9 @@ This extension is an independent local utility. It is not an official OpenAI bil
 - Reasoning-effort colors and ordering are consistent across charts and text; selecting an effort now expands only its matching conversation index.
 - The title bar now uses aligned icon controls, and compact status layouts fit page and popup surfaces without clipped component rows.
 - Hover-open settings now remain usable after changing language, theme, source, mode, or visible sections, while Advanced response-model and reasoning-effort labels stay aligned.
-- The current open chat is exported from the rendered page; full-history, multi-chat, and project-folder export now use a user-imported official ChatGPT ZIP or `conversations.json`.
-- Imported conversations are cached locally and retain per-chat selection, project selection, single-file downloads, and multi-chat ZIP output across JSON, Markdown, PDF, DOCX, and PNG.
-- Toolbar icons now use width-matched badge-safe artwork for one-character, two-character, and `99+` badges, while exports keep the full brand icon and matching PNG watermark.
+- The current open chat appears immediately, while user-triggered signed-in account indexing restores complete per-chat, multi-chat, and project-folder selection without an extra import workflow.
+- Reopening Export reuses the conversation list; only Refresh forces a complete index reread. Single-file and multi-chat ZIP output remain available across JSON, Markdown, PDF, DOCX, and PNG.
+- The toolbar uses the letter-free Model Processor mark at its normal proportions. Chrome draws its native badge over the icon at a browser-controlled position; the extension does not claim to move that badge, and the processor body and three-core model window remain recognizable when lower-right pins are partially covered.
 - Export previews, searchable PDF output, project selection, statistics backup/CSV export, and JSON restore presentation were refined for release.
 
 ## 中文
@@ -101,8 +101,8 @@ ChatGPT 模型使用统计在当前 Chrome 配置中本地记录 ChatGPT 的使�
 **用户逐项选择的对话导出**
 
 - 当前打开对话直接从 ChatGPT 页面已经渲染的内容中读取并导出。
-- 完整历史由用户主动选择并导入 ChatGPT 官方数据导出 ZIP 或 `conversations.json`，导入内容只在本地缓存和处理。
-- 可逐项选择一个、多个、全部已导入对话或整个项目文件夹。
+- 打开 Export 或点击刷新后，以同源只读方式读取当前登录账号的对话索引；再次打开复用现有列表，只有刷新才强制完整重读。
+- 可逐项选择一个、多个、全部对话或整个项目文件夹。
 - 支持搜索、全选和清空。
 - 支持 JSON、Markdown、PDF、DOCX 和 PNG。
 - 单选直接下载一个文件。
@@ -118,9 +118,9 @@ ChatGPT 模型使用统计在当前 Chrome 配置中本地记录 ChatGPT 的使�
 
 - 统计和文件都在浏览器本地生成，没有发布者服务器。
 - 模型统计只被动观察用户已经发起的请求。
-- 当前对话只从已渲染页面读取，完整历史只从用户主动导入的官方 ZIP 或 JSON 读取。
-- 不自动发送 prompt，不改写或重放请求，不分页读取账号历史，也不在后台批量抓取对话。
-- 对话导出不读取 ChatGPT 会话令牌、Cookie、Authorization header 或访问令牌。
+- 当前对话先从已渲染页面显示；完整索引及明确选中的正文只在用户执行 Export 操作后读取。
+- 不自动发送 prompt，不改写或重放请求，也不在后台批量抓取对话。
+- 同源账号读取采用单并发、真实请求至少间隔一秒、真实中止超时和扩展级 Retry-After 退避；访问令牌和账号 ID 只在当前操作内存中存在。
 - 使用统计不保存凭据、Cookie、Authorization、访问令牌、账号 ID、prompt 原文或回答原文。
 
 本扩展是独立的本地工具，不代表 OpenAI 官方账单、额度、速率限制或 token 统计。
@@ -133,9 +133,9 @@ ChatGPT 模型使用统计在当前 Chrome 配置中本地记录 ChatGPT 的使�
 - 统一思考强度颜色和从低到高排序；点击强度只展开对应对话索引。
 - 标题栏改为水平一致的图标按钮；状态页在页面入口和弹窗紧凑高度下不裁切组件行。
 - 悬浮打开设置后，切换语言、主题、来源、口径或显示内容不会关闭当前菜单；高级统计中的实际回复型号与思考强度说明保持同行对齐。
-- 当前打开对话从已渲染页面直接导出；完整历史、多选和项目文件夹导出改为使用用户主动导入的 ChatGPT 官方 ZIP 或 `conversations.json`。
-- 导入对话仅在本地缓存，并保留逐项选择、项目全选、单选单文件以及 JSON、Markdown、PDF、DOCX、PNG 多选 ZIP 输出。
-- 工具栏会按一位、两位和 `99+` 角标切换对应避让图标；导出文件继续使用完整品牌图标和一致的 PNG 水印。
+- 当前打开对话立即显示；用户触发的登录账号索引直接提供完整历史、多选和项目文件夹选择。
+- 再次打开复用对话列表，只有刷新才强制完整重读；逐项选择、项目全选、单选单文件以及 JSON、Markdown、PDF、DOCX、PNG 多选 ZIP 输出保持可用。
+- 工具栏使用保持正常比例的无字母 Model Processor 标志。Chrome 原生角标由浏览器在固定位置覆盖绘制，插件不声称能够移动角标；下方右侧引脚被部分覆盖后，处理器主体和三核模型窗口仍可识别。
 - 进一步完善导出预览、可搜索 PDF、项目选择、统计备份 / CSV 导出和 JSON 恢复展示。
 
 ## Assets
