@@ -16,7 +16,7 @@ ChatGPT Model Usage Counter 在当前 Chrome 配置中本地统计 ChatGPT 网�
 
 默认设置：
 
-- 语言：English
+- 语言：Auto（默认跟随 ChatGPT 网页语言，无法读取时跟随浏览器语言）
 - 主面板：Usage
 - 来源：All
 - 视图模式：Basic
@@ -24,13 +24,13 @@ ChatGPT Model Usage Counter 在当前 Chrome 配置中本地统计 ChatGPT 网�
 - 主题：System
 - 趋势图和文字统计：显示
 
-可在标题栏的 **Settings** 中切换中文。扩展支持 `https://chatgpt.com/*`，并兼容 `https://chat.openai.com/*`。
+可在标题栏的 **Settings** 中选择 Auto、English 或中文。扩展支持 `https://chatgpt.com/*`，并兼容 `https://chat.openai.com/*`。
 
 ## 2. 两个入口共享同一状态
 
 页面右上角入口和 Chrome 工具栏弹窗读取同一份本地设置。以下选择会在两个入口之间同步并在下次打开时恢复：
 
-- English / 中文
+- Auto / English / 中文
 - Usage / Status / Export 主面板
 - 日期范围
 - All / Chat / Work 来源
@@ -251,7 +251,8 @@ Status 面板读取 `status.openai.com` 的公开摘要与完整组件列表，�
 - 对话历史临时错误最多重试一次；模型目录请求不自动重试。
 - `401` 或 `403` 立即停止当前账号操作。
 - `429` 会建立全局冷却；最终仍限流或 `Retry-After` 超过 60 秒时停止整个操作。
-- 单次账号历史操作最多读取 50 个对话、最多发起 60 个请求、最长 90 秒；任一上限先到即停止并标记不完整。
+- 单次账号历史操作最多发起 800 个请求、最长 10 分钟；任一上限先到即停止并标记不完整。
+- 每个真实账号请求具有 45 秒中止超时；超时会真实终止网络请求，再释放全局并发许可。
 - 单个对话最多读取 50 个旧消息分页、最多保留 10,000 条消息；达到上限时标记不完整并停止继续扩张。
 - 所需账号令牌只在当前内容脚本内存中临时存在，操作结束后释放，不写入本地存储、日志、备份或导出文件。
 - 扩展不读取 `document.cookie` 或密码，不把账号数据发送到 ChatGPT 之外。
