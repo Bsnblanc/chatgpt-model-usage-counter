@@ -16,8 +16,9 @@
   var MODEL_FIELD_CONTEXT_RE = /(?:^|[\s{[,(])(?:"|')?(?:model|model_slug|modelslug|model_id|modelid|selected_model|selectedmodel|api_model|apimodel|chatgpt_model|chatgptmodel)(?:"|')?\s*[:=]\s*(?:"|')?([a-z][a-z0-9._-]{1,95})/i;
   var MODEL_TEXT_CONTEXT_RE = /\b(?:current model|selected model|active model|model selector|model switcher|model-switcher|data-model|data-model-id)\b/i;
   var SLUG_TOKEN_RE = /\b[a-z][a-z0-9._-]{1,95}\b/gi;
-  var GENERIC_VERSIONED_SLUG_RE = /^(?=[a-z0-9._-]{2,96}$)(?=.*[a-z])(?=.*\d)(?=.*[-_.])[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+$/i;
   var EXECUTION_MODE_SUFFIX_RE = /[-_.](thinking|instant|fast|auto|pro)$/i;
+  var MAX_RUNTIME_CATALOG_INPUT_BYTES = 16 * 1024 * 1024;
+  var MAX_RUNTIME_CATALOG_CLEAN_BYTES = 8 * 1024 * 1024;
 
   function normalizeWhitespace(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -58,8 +59,8 @@
     }
     // "chat" by itself is too broad for visible page text: ordinary controls
     // such as "Chats" were previously accepted as a model slug. Keep the
-    // known ChatGPT route explicitly and let future versioned chat-* routes
-    // pass through hasExplicitVersionEvidence instead.
+    // known ChatGPT route explicit. Unknown exact-field slugs are handled by
+    // isRequestModelSlug rather than weakening visible-text detection.
     return /^(?:gpt|o\d+(?:-(?:mini|pro|high))?|chat-latest(?:$|[-_.])|text-|dall-e|tts|whisper|omni|codex|computer|babbage|davinci|moderation|gpt-image|audio|image-\d|image-[a-z0-9-]*\d)/i.test(slug);
   }
 
@@ -85,24 +86,34 @@
     return false;
   }
 
-  function genericVersionRootKey(slug) {
-    var parts = normalizeSlug(slug).split(/[-_.]+/);
-    var versionIndex = -1;
-    for (var i = 0; i < parts.length; i += 1) {
-      if (/\d/.test(parts[i])) {
-        versionIndex = i;
-        break;
-      }
-    }
-    return versionIndex > 0 ? parts.slice(0, versionIndex).join("") : "";
+  function isObviousFeatureOnlyExactSlug(slug) {
+    var clean = normalizeSlug(slug);
+    return /^(?:agent(?:-mode)?|deep-(?:research|search)|image(?:-generation(?:-options)?)?|web-search(?:-options)?|realtime|real-time|audio|voice|canvas(?:-mode|-options)?|file-upload|attachments?|uploads?|code-interpreter|data-analysis|python|connectors?|connected-apps?|gpts|gizmo(?:-id)?|gpt-id|custom-gpt|tasks?|scheduled-tasks?)$/i.test(clean);
   }
 
-  function hasExplicitVersionEvidence(slug) {
-    if (!GENERIC_VERSIONED_SLUG_RE.test(slug)) {
+  function isDeniedExactModelSlug(slug) {
+    var clean = normalizeSlug(slug);
+    if (!isDeniedModelSlug(clean)) {
       return false;
     }
-    var rootKey = genericVersionRootKey(slug);
-    return Boolean(rootKey && !isDeniedModelSlug(rootKey));
+    // The visible-text detector intentionally rejects every feature-prefixed
+    // token. Exact model fields may legitimately introduce a qualified family
+    // such as audio-v2, so only the bare/known feature controls remain denied.
+    return !isFeatureNamedSlug(clean) || isObviousFeatureOnlyExactSlug(clean);
+  }
+
+  function isObviouslyNonModelExactSlug(slug) {
+    var clean = normalizeSlug(slug);
+    return /^(?:model|message|conversation|session|request|response|event|turn|thread|metadata|parameter|setting|config|endpoint|transport|protocol|authorization|cookie|token|prompt|content|attachment|file)(?:[-_.]|$)/i.test(clean) ||
+      /^[a-f0-9]{24,96}$/i.test(clean) ||
+      /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(clean);
+  }
+
+  function hasExactModelFieldStructure(slug) {
+    var clean = normalizeSlug(slug);
+    return /^[a-z](?:[a-z0-9]|[-_.](?=[a-z0-9])){1,95}$/i.test(clean) &&
+      !isDeniedExactModelSlug(clean) &&
+      !isObviouslyNonModelExactSlug(clean);
   }
 
   function isModelSlug(value) {
@@ -116,12 +127,13 @@
 
   function isRequestModelSlug(value) {
     var clean = normalizeSlug(value);
-    // Exact model-bearing fields are stronger evidence than arbitrary page
-    // text. This accepts a future family such as "aurora-7" without turning
-    // ordinary unversioned UI labels into models.
-    return /^[a-z][a-z0-9._-]{1,95}$/i.test(clean) &&
-      !isDeniedModelSlug(clean) &&
-      (hasGenericModelSlugEvidence(clean) || hasExplicitVersionEvidence(clean));
+    // This function is reserved for exact model-bearing fields: request.model,
+    // final message metadata.model_slug, and the signed-in account catalog.
+    // Those fields are authoritative enough to retain a future unversioned
+    // family. Arbitrary visible text continues to use isModelSlug(), whose
+    // stricter known-family/version checks prevent titles and prose from being
+    // promoted into model identities.
+    return hasExactModelFieldStructure(clean);
   }
 
   function isChatGPTRouteSlug(value) {
@@ -371,9 +383,43 @@
     return clean;
   }
 
+  function jsonUtf8ByteLength(value) {
+    var serialized = "";
+    try {
+      serialized = JSON.stringify(value);
+    } catch (_) {
+      return Infinity;
+    }
+    if (typeof serialized !== "string") {
+      return Infinity;
+    }
+    if (typeof TextEncoder === "function") {
+      try {
+        return new TextEncoder().encode(serialized).byteLength;
+      } catch (_) {}
+    }
+    try {
+      return unescape(encodeURIComponent(serialized)).length;
+    } catch (_) {
+      return serialized.length * 3;
+    }
+  }
+
+  function runtimeCatalogInputWithinBoundary(source) {
+    return jsonUtf8ByteLength({
+      observedAt: source.observedAt || source.observed_at,
+      models: source.models,
+      versions: source.versions,
+      categories: source.categories
+    }) <= MAX_RUNTIME_CATALOG_INPUT_BYTES;
+  }
+
   function sanitizeRuntimeModelCatalog(catalog) {
     var source = catalog && typeof catalog === "object" ? catalog : {};
-    var models = (Array.isArray(source.models) ? source.models : []).slice(0, 200).map(function cleanModel(model) {
+    if (!runtimeCatalogInputWithinBoundary(source)) {
+      return null;
+    }
+    var models = (Array.isArray(source.models) ? source.models : []).map(function cleanModel(model) {
       var item = model && typeof model === "object" ? model : {};
       var slug = normalizeSlug(item.slug || item.id || item.model);
       if (!isChatGPTRouteSlug(slug)) {
@@ -385,14 +431,14 @@
         reasoningType: normalizeWhitespace(item.reasoningType || item.reasoning_type).toLowerCase().slice(0, 32)
       };
     }).filter(Boolean);
-    var versions = (Array.isArray(source.versions) ? source.versions : []).slice(0, 120).map(function cleanVersion(version) {
+    var versions = (Array.isArray(source.versions) ? source.versions : []).map(function cleanVersion(version) {
       var item = version && typeof version === "object" ? version : {};
-      var slugs = (Array.isArray(item.slugs) ? item.slugs : []).map(normalizeSlug).filter(isChatGPTRouteSlug).slice(0, 40);
+      var slugs = (Array.isArray(item.slugs) ? item.slugs : []).map(normalizeSlug).filter(isChatGPTRouteSlug);
       var presets = (Array.isArray(item.intelligencePresets)
         ? item.intelligencePresets
         : Array.isArray(item.intelligence_presets)
           ? item.intelligence_presets
-          : []).slice(0, 40).map(function cleanPreset(preset) {
+          : []).map(function cleanPreset(preset) {
             var value = preset && typeof preset === "object" ? preset : {};
             return {
               title: sanitizePublicModelLabel(value.title),
@@ -419,7 +465,7 @@
         intelligencePresets: presets
       };
     }).filter(Boolean);
-    var categories = (Array.isArray(source.categories) ? source.categories : []).slice(0, 120).map(function cleanCategory(category) {
+    var categories = (Array.isArray(source.categories) ? source.categories : []).map(function cleanCategory(category) {
       var item = category && typeof category === "object" ? category : {};
       var defaultModel = normalizeSlug(item.defaultModel || item.default_model);
       if (!isChatGPTRouteSlug(defaultModel)) {
@@ -427,8 +473,7 @@
       }
       var supportedModels = (Array.isArray(item.supportedModels) ? item.supportedModels : Array.isArray(item.supported_models) ? item.supported_models : [])
         .map(normalizeSlug)
-        .filter(isChatGPTRouteSlug)
-        .slice(0, 80);
+        .filter(isChatGPTRouteSlug);
       if (!defaultModel && !supportedModels.length) {
         return null;
       }
@@ -442,12 +487,18 @@
     if (!models.length && !versions.length && !categories.length) {
       return null;
     }
-    return {
+    var cleanCatalog = {
       observedAt: normalizeWhitespace(source.observedAt || source.observed_at).slice(0, 48),
       models: models,
       versions: versions,
       categories: categories
     };
+    // Reject the complete catalog when the sanitized representation exceeds
+    // the message/storage safety boundary. Never keep a prefix and silently
+    // omit valid entries from the end of any account-catalog array.
+    return jsonUtf8ByteLength(cleanCatalog) <= MAX_RUNTIME_CATALOG_CLEAN_BYTES
+      ? cleanCatalog
+      : null;
   }
 
   function runtimeModelBySlug(catalog, slug) {
