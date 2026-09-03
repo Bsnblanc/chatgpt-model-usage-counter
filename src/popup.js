@@ -48,6 +48,63 @@
     }
   }
 
+  function detectBrowserLanguage() {
+    var language = "";
+    try {
+      language =
+        window.navigator && (
+          Array.isArray(window.navigator.languages) &&
+            window.navigator.languages[0] ||
+          window.navigator.language
+        ) ||
+        document.documentElement.lang ||
+        "";
+    } catch (error) {
+      language = document.documentElement.lang || "";
+    }
+    return /^zh(?:[-_]|$)/i.test(String(language || "").trim())
+      ? "zh"
+      : "en";
+  }
+
+  function applyActivePageLanguage(dashboard) {
+    if (
+      !dashboard ||
+      typeof dashboard.setDetectedLanguage !== "function" ||
+      typeof chrome === "undefined" ||
+      !chrome.tabs ||
+      typeof chrome.tabs.query !== "function" ||
+      typeof chrome.tabs.sendMessage !== "function"
+    ) {
+      return;
+    }
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, function handleActiveTabs(tabs) {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          return;
+        }
+        var tab = tabs && tabs[0];
+        if (!isChatGPTTab(tab) || typeof tab.id !== "number") {
+          return;
+        }
+        try {
+          chrome.tabs.sendMessage(tab.id, { type: "usage.language.get" }, function languageReady(response) {
+            if (chrome.runtime && chrome.runtime.lastError) {
+              return;
+            }
+            if (response && response.ok && response.language) {
+              dashboard.setDetectedLanguage(response.language);
+            }
+          });
+        } catch (error) {
+          // Browser language remains the safe local fallback.
+        }
+      });
+    } catch (error) {
+      // Browser language remains the safe local fallback.
+    }
+  }
+
   var catalogEnsureStarted = false;
   function ensureUsageCatalogOnce() {
     if (catalogEnsureStarted) {
@@ -64,11 +121,13 @@
 
   var dashboard = window.ChatGPTUsageDashboard.init(root, {
     surface: "popup",
+    detectedLanguage: detectBrowserLanguage(),
     onLanguageChange: function syncPopupLanguage(language) {
       document.documentElement.lang = language === "en" ? "en" : "zh-CN";
     },
     onUsageViewActivate: ensureUsageCatalogOnce
   });
+  applyActivePageLanguage(dashboard);
   if (
     dashboard &&
     typeof dashboard.cancelPendingExportConversationList === "function" &&
