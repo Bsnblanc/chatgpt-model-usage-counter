@@ -55,6 +55,7 @@
         "src/model-catalog.js",
         "src/detector.js",
         "src/exporter.js",
+        "src/conversation-importer.js",
         "src/conversation-source.js",
         "src/dashboard.js",
         "src/content.js"
