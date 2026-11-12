@@ -3129,7 +3129,7 @@
     style.id = "chatgpt-model-usage-counter-panel-style";
     style.textContent = [
       "#chatgpt-model-usage-counter-panel-host,#chatgpt-model-usage-counter-panel{font:13px/1.35 system-ui,sans-serif;--usage-text-primary:#18201c;--usage-surface-panel:#fbfcfa;--usage-border-control:#ccd4ca;--usage-border-panel:#dde3dc;--usage-shadow-export:rgba(15,23,42,.14);--usage-panel-toggle-hover:rgba(0,0,0,.06)}",
-      "#chatgpt-model-usage-counter-panel-host{z-index:2147483647;color:inherit}",
+      "#chatgpt-model-usage-counter-panel-host{z-index:2147483647;color:inherit;pointer-events:auto}",
       "#chatgpt-model-usage-counter-panel-host[data-chatgpt-model-usage-theme=\"dark\"],#chatgpt-model-usage-counter-panel[data-chatgpt-model-usage-theme=\"dark\"]{--usage-text-primary:#ececf1;--usage-surface-panel:#2a2b32;--usage-border-control:#565869;--usage-border-panel:#3e3f4b;--usage-shadow-export:rgba(0,0,0,.3);--usage-panel-toggle-hover:rgba(255,255,255,.08)}",
       "#chatgpt-model-usage-counter-panel-host.is-embedded{position:relative;display:inline-flex;align-items:center;align-self:center;flex:0 0 auto;margin-left:4px}",
       "#chatgpt-model-usage-counter-panel-host.is-main-top{margin-left:auto;margin-right:8px}",

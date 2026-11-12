@@ -8,6 +8,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function dashboardFactory(root) {
   "use strict";
 
+  var usageDates = root.ChatGPTUsageDates || (typeof require === "function" ? require("./date-utils") : null);
+  if (!usageDates) throw new Error("date-utils-unavailable");
+
   var COLORS = [
     "var(--usage-chart-series-1,#047857)",
     "var(--usage-chart-series-2,#b45309)",
@@ -292,7 +295,8 @@
       themeSystem: "跟随系统",
       themeLight: "浅色",
       themeDark: "深色",
-      statisticsHistoryIncomplete: "当前口径仅覆盖已保留的最近事件，不能代表全部历史。",
+      statisticsHistoryIncomplete: "部分历史明细缺失或日期无法确定，此视图可能不完整。",
+      unrecognizedAggregates: "部分历史模型无法识别，原始统计已保留，但未在图中显示。",
       requestModelGroup: "请求型号",
       responseModelChild: "实际回复型号",
       statusDegraded: "性能下降",
@@ -387,7 +391,8 @@
       themeSystem: "System",
       themeLight: "Light",
       themeDark: "Dark",
-      statisticsHistoryIncomplete: "This view covers only the retained recent events and does not represent the full history.",
+      statisticsHistoryIncomplete: "Some historical details are missing or have an unknown date; this view may be incomplete.",
+      unrecognizedAggregates: "Some historical models are unrecognized. Their saved counts are retained but not shown in this view.",
       requestModelGroup: "Request model",
       responseModelChild: "Actual response model",
       statusDegraded: "Degraded performance",
@@ -531,6 +536,10 @@
     refresh: "刷新",
     selected: "已选择 {count} 个模型",
     startDate: "开始",
+    followToday: "自动更新到今天",
+    rollingToday: "今天",
+    rollingSeven: "最近7天",
+    rollingThirtyOne: "最近31天",
     statusDegraded: "性能下降",
     statusMaintenance: "维护中",
     statusMajor: "严重中断",
@@ -653,6 +662,10 @@
     sourceModeUnknown: "Unknown",
     responsePending: "Unknown",
     startDate: "Start",
+    followToday: "Keep start · follow today",
+    rollingToday: "Today",
+    rollingSeven: "Last 7 days",
+    rollingThirtyOne: "Last 31 days",
     todayOnly: "Today {today}",
     variants: "Response model"
   });
@@ -684,22 +697,31 @@
   }
 
   function todayKey(date) {
-    var value = date || new Date();
-    var year = value.getUTCFullYear();
-    var month = String(value.getUTCMonth() + 1).padStart(2, "0");
-    var day = String(value.getUTCDate()).padStart(2, "0");
-    return year + "-" + month + "-" + day;
+    return usageDates.localDateKey(date);
   }
 
-  function parseDateKey(key) {
-    var parts = String(key || "").split("-").map(Number);
-    return new Date(Date.UTC(parts[0] || 1970, (parts[1] || 1) - 1, parts[2] || 1));
+  function rollingRangeStart(days, date) {
+    return usageDates.addCalendarDays(todayKey(date), 1 - days);
   }
 
-  function addDays(date, days) {
-    var next = new Date(date);
-    next.setUTCDate(next.getUTCDate() + days);
-    return next;
+  function dateRangeMode(state) {
+    var days = Number(state && state.rollingDays);
+    if (days === 1) return "today";
+    if (days === 7) return "last7";
+    if (days === 31) return "last31";
+    return state && state.endDateAuto ? "throughToday" : "custom";
+  }
+
+  function settingsRangeState(settings) {
+    var source = settings || {};
+    var mode = String(source.dateRangeMode || "");
+    if (mode === "today") return { rollingDays: 1, endDateAuto: true };
+    if (mode === "last7") return { rollingDays: 7, endDateAuto: true };
+    if (mode === "last31") return { rollingDays: 31, endDateAuto: true };
+    if (mode === "throughToday") return { rollingDays: 0, endDateAuto: true };
+    if (mode === "custom") return { rollingDays: 0, endDateAuto: false };
+    var days = [1, 7, 31].indexOf(Number(source.rollingDays)) !== -1 ? Number(source.rollingDays) : 0;
+    return { rollingDays: days, endDateAuto: Boolean(days) || !dateNoLaterThanToday(source.endDate) };
   }
 
   function escapeHtml(value) {
@@ -838,11 +860,13 @@
     var source = stats && typeof stats === "object" ? stats : {};
     var clean = emptyStats();
     var sourceModels = source.models || {};
+    clean.aggregateHasUnrecognizedModels = source.aggregateHasUnrecognizedModels === true;
 
     Object.keys(source.totals || {}).forEach(function copyTotal(model) {
       var metadata = sourceModels[model];
       var count = Number(source.totals[model]) || 0;
       if (count <= 0 || !isDashboardModelValid(model, metadata, model)) {
+        if (count > 0) clean.aggregateHasUnrecognizedModels = true;
         return;
       }
       clean.totals[model] = count;
@@ -919,7 +943,10 @@
         (responseModel && isDashboardModelValid(responseModel, {}, responseModel));
     });
     clean.eventHistoryComplete = source.eventHistoryComplete !== false;
-    if (!Object.prototype.hasOwnProperty.call(source, "analyticsByDate")) {
+    var hasUnresolvedEventDay = clean.events.some(function unresolvedDay(event) {
+      return !eventDateKey(event);
+    });
+    if (!Object.prototype.hasOwnProperty.call(source, "analyticsByDate") || hasUnresolvedEventDay || source.analyticsDateBasisUncertain === true) {
       clean.analyticsByDate = {};
       clean.events.slice().reverse().forEach(function replayEvent(event) {
         var dateKey = eventDateKey(event);
@@ -942,7 +969,9 @@
       });
       clean.analyticsHistoryComplete = Boolean(
         clean.eventHistoryComplete &&
-        clean.events.length === countTotal(clean.totals)
+        clean.events.length === countTotal(clean.totals) &&
+        source.analyticsDateBasisUncertain !== true &&
+        clean.events.every(function hasProvenDay(event) { return Boolean(eventDateKey(event)); })
       );
     }
     clean.lastUpdated = source.lastUpdated || null;
@@ -1598,6 +1627,29 @@
   function modelFeatures(stats, model, state, limit) {
     stats = sanitizeDashboardStats(stats || {});
     var rowsById = {};
+    // An omitted date range means the text row shows all-time totals.
+    // Use the stored all-time feature aggregate as well, instead of silently
+    // limiting its feature labels to the chart's default recent date window.
+    // Source-filtered views still need their date/source-aware relation data.
+    if (!hasExplicitDateRange(state || {}) && normalizeSourceModeFilter(state && state.sourceModeFilter) === "all") {
+      var saved = stats.featuresByModel && stats.featuresByModel[model];
+      Object.keys(saved && saved.features || {}).forEach(function addAllTimeFeature(rawId) {
+        var feature = saved.features[rawId] || {};
+        var id = normalizeDashboardFeatureId(rawId);
+        var count = Math.max(0, Number(feature.count) || 0);
+        if (!id || !count) return;
+        var row = rowsById[id] || { id: id, label: featureLabel(state, id), count: 0, lastSubmittedAt: "" };
+        row.count += count;
+        if (String(feature.lastSubmittedAt || "") > row.lastSubmittedAt) row.lastSubmittedAt = String(feature.lastSubmittedAt);
+        rowsById[id] = row;
+      });
+      if (Object.keys(rowsById).length) {
+        return Object.keys(rowsById).map(function toAllTimeRow(id) { return rowsById[id]; })
+          .sort(function byCount(a, b) {
+            return b.count - a.count || String(b.lastSubmittedAt).localeCompare(String(a.lastSubmittedAt));
+          }).slice(0, limit || Object.keys(rowsById).length);
+      }
+    }
     var entries = aggregateRelationsInRange(stats, state, model);
     entries.forEach(function addRelationFeatures(entry) {
       var relation = entry && entry.relation || {};
@@ -1818,7 +1870,11 @@
       showTextStatistics: state.showTextStatistics !== false,
       statisticsSectionOrder: normalizeStatisticsSectionOrder(state.statisticsSectionOrder),
       startDate: dateNoLaterThanToday(state.startDate),
-      endDate: dateNoLaterThanToday(state.endDate) || defaultEndDate(),
+      // An empty persisted end date is the durable "through today" sentinel.
+      // Keep the rendered date in memory, but never freeze it on unrelated saves.
+      endDate: state.endDateAuto ? "" : (dateNoLaterThanToday(state.endDate) || defaultEndDate()),
+      rollingDays: [1, 7, 31].indexOf(Number(state.rollingDays)) !== -1 ? Number(state.rollingDays) : 0,
+      dateRangeMode: dateRangeMode(state),
       mappedVisibleModels: Object.keys(mappedSelection).filter(function visible(model) {
         return mappedSelection[model] === true;
       }),
@@ -1931,16 +1987,16 @@
   }
 
   function normalizeDateInput(value) {
-    return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : "";
+    return usageDates.isDateKey(value) ? String(value) : "";
   }
 
   function defaultStartDate(stats) {
     stats = sanitizeDashboardStats(stats || {});
     var keys = Object.keys(stats.byDate || {}).sort();
-    var end = parseDateKey(todayKey());
-    var earliest = keys.length ? parseDateKey(keys[0]) : end;
-    var last30 = addDays(end, -29);
-    return todayKey(earliest > last30 ? earliest : last30);
+    var end = todayKey();
+    var earliest = keys.length && usageDates.isDateKey(keys[0]) ? keys[0] : end;
+    var last30 = usageDates.addCalendarDays(end, -29);
+    return earliest > last30 ? earliest : last30;
   }
 
   function defaultEndDate() {
@@ -1964,19 +2020,15 @@
       startKey = endKey;
       endKey = swap;
     }
-    var start = parseDateKey(startKey);
-    var end = parseDateKey(endKey);
-
     var dates = [];
-    for (var date = start; date <= end; date = addDays(date, 1)) {
-      dates.push(todayKey(date));
+    for (var date = startKey; date && date <= endKey; date = usageDates.addCalendarDays(date, 1)) {
+      dates.push(date);
     }
     return dates;
   }
 
   function eventDateKey(event) {
-    var date = new Date(event && event.submittedAt);
-    return Number.isNaN(date.getTime()) ? "" : todayKey(date);
+    return usageDates.eventDateKey(event);
   }
 
   function dateRangeLookup(stats, state) {
@@ -4148,6 +4200,13 @@
         ' <input class="usage-end-date" type="date" min="' + escapeHtml(startValue) +
         '" max="' + escapeHtml(today) +
         '" value="' + escapeHtml(endValue) + '"></label>',
+      [1, 7, 31].map(function rollingButton(days) {
+        var active = state.rollingDays === days;
+        var label = days === 1 ? "rollingToday" : days === 7 ? "rollingSeven" : "rollingThirtyOne";
+        return '<button class="usage-follow-today' + (active ? ' active' : '') + '" data-rolling-days="' + days + '" type="button" aria-pressed="' + active + '">' + escapeHtml(text(state, label)) + '</button>';
+      }).join(""),
+      '<button class="usage-follow-today' + (state.endDateAuto && !state.rollingDays ? ' active' : '') + '" type="button" aria-pressed="' +
+        (state.endDateAuto && !state.rollingDays ? 'true' : 'false') + '">' + escapeHtml(text(state, "followToday")) + '</button>',
       "</div>",
       "</div>"
     ].join("");
@@ -4518,6 +4577,8 @@
   }
 
   function renderStatisticsCompletenessWarning(state) {
+    var warnings = [];
+    if (state && state.stats && state.stats.aggregateHasUnrecognizedModels === true) warnings.push(text(state, "unrecognizedAggregates"));
     var analyticsComplete = state && state.stats
       ? state.stats.analyticsHistoryComplete
       : true;
@@ -4529,12 +4590,12 @@
     ) {
       analyticsComplete = false;
     }
-    return statisticsUsesEventHistory(state) &&
+    if (statisticsUsesEventHistory(state) &&
       state &&
       state.stats &&
-      analyticsComplete === false
-      ? '<div class="usage-statistics-warning" role="status">' +
-        escapeHtml(text(state, "statisticsHistoryIncomplete")) + "</div>"
+      analyticsComplete === false) warnings.push(text(state, "statisticsHistoryIncomplete"));
+    return warnings.length
+      ? '<div class="usage-statistics-warning" role="status">' + escapeHtml(warnings.join(" ")) + "</div>"
       : "";
   }
 
@@ -5030,13 +5091,17 @@
   function pushBadgeFilter(state) {
     var runtime = (root && root.chrome && root.chrome.runtime) || (typeof chrome !== "undefined" && chrome ? chrome.runtime : null);
     if (!runtime || typeof runtime.sendMessage !== "function") { return; }
-    var models = selectedModels(state);
+    var models = Object.keys(state.selectedModels || {}).filter(function selected(model) { return state.selectedModels[model] === true; });
     var filter = {
       startDate: state.startDate || "",
       endDate: state.endDate || "",
+      rollingDays: state.rollingDays || 0,
+      followToday: Boolean(state.endDateAuto && !state.rollingDays),
       statisticsMode: normalizeStatisticsMode(state.statisticsMode),
       sourceModeFilter: normalizeSourceModeFilter(state.sourceModeFilter),
       models: models,
+      knownModels: Object.keys(state.knownModels || {}).filter(function known(model) { return state.knownModels[model] === true; }),
+      autoSelectNewModels: true,
       modelsSpecified: true
     };
     var key = JSON.stringify(filter);
@@ -5495,7 +5560,76 @@
     );
   }
 
+  function createDateRolloverScheduler(state, clock, onDateChange) {
+    var host = clock || {};
+    var now = host.now || function currentTime() { return new Date(); };
+    var set = host.setTimeout || setTimeout;
+    var clear = host.clearTimeout || clearTimeout;
+    var timer = null;
+    var stopped = false;
+    var update = typeof onDateChange === "function" ? onDateChange : function redraw() { render(state); };
+
+    function refresh() {
+      if (stopped || !state.endDateAuto) { sync(); return; }
+      var current = now();
+      var today = todayKey(current);
+      var start = state.rollingDays ? rollingRangeStart(state.rollingDays, current) : state.startDate;
+      if (state.endDate !== today || state.startDate !== start) {
+        state.startDate = start;
+        state.endDate = today;
+        update(state);
+      }
+      sync();
+    }
+
+    function sync() {
+      if (timer !== null) { clear(timer); timer = null; }
+      if (stopped || !state.endDateAuto) return;
+      var current = now();
+      var nextDay = new Date(current);
+      nextDay.setDate(nextDay.getDate() + 1);
+      nextDay.setHours(0, 0, 0, 25);
+      timer = set(refresh, Math.max(25, nextDay.getTime() - current.getTime()));
+    }
+
+    var resume = function refreshAfterResume() { refresh(); };
+    if (typeof host.addEventListener === "function") {
+      ["visibilitychange", "pageshow", "focus"].forEach(function listen(name) {
+        host.addEventListener(name, resume);
+      });
+    }
+    return {
+      sync: sync,
+      refresh: refresh,
+      stop: function stop() {
+        stopped = true;
+        if (timer !== null) clear(timer);
+        timer = null;
+      }
+    };
+  }
+
+  function setupDateRollover(state) {
+    var view = root && root.document && root.document.defaultView;
+    if (!view) return;
+    if (!state.dateRolloverController) {
+      var doc = root && root.document;
+      var host = {
+        now: function currentDate() { return new Date(); },
+        setTimeout: view && view.setTimeout ? view.setTimeout.bind(view) : setTimeout,
+        clearTimeout: view && view.clearTimeout ? view.clearTimeout.bind(view) : clearTimeout,
+        addEventListener: function addResumeListener(name, listener) {
+          if (doc && name === "visibilitychange") doc.addEventListener(name, listener);
+          if (view && name !== "visibilitychange") view.addEventListener(name, listener);
+        }
+      };
+      state.dateRolloverController = createDateRolloverScheduler(state, host);
+    }
+    state.dateRolloverController.sync();
+  }
+
   function bindEvents(state) {
+    setupDateRollover(state);
     var forceCloseSettingsMenu = function noSettingsMenu() {};
     if (
       state.viewPointerMonitor &&
@@ -5798,16 +5932,43 @@
     });
     var startDate = state.container.querySelector(".usage-start-date");
     var endDate = state.container.querySelector(".usage-end-date");
+    var followToday = state.container.querySelector(".usage-follow-today:not([data-rolling-days])");
+    if (followToday) {
+      followToday.addEventListener("click", function followCurrentDate() {
+        state.endDateAuto = true;
+        state.rollingDays = 0;
+        state.endDate = defaultEndDate();
+        render(state);
+        saveSettings(state, ["endDate", "rollingDays", "dateRangeMode"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    }
+    Array.prototype.forEach.call(state.container.querySelectorAll("[data-rolling-days]"), function bindRollingRange(button) {
+      button.addEventListener("click", function selectRollingRange() {
+        var days = Number(button.getAttribute("data-rolling-days"));
+        if ([1, 7, 31].indexOf(days) === -1) return;
+        state.rollingDays = days;
+        state.endDateAuto = true;
+        state.startDate = rollingRangeStart(days);
+        state.endDate = defaultEndDate();
+        render(state);
+        saveSettings(state, ["startDate", "endDate", "rollingDays", "dateRangeMode"]).catch(function failed(error) {
+          setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
+        });
+      });
+    });
     if (startDate) {
       startDate.addEventListener("change", function changeStart(event) {
         var nextStart = dateNoLaterThanToday(event.target.value) || state.startDate;
         var nextEnd = dateNoLaterThanToday(state.endDate) || defaultEndDate();
         state.startDate = nextStart;
+        state.rollingDays = 0;
         if (nextStart && (!nextEnd || nextStart > nextEnd)) {
           state.endDate = nextStart;
         }
         render(state);
-        saveSettings(state, ["startDate", "endDate"]).catch(function failed(error) {
+        saveSettings(state, ["startDate", "endDate", "rollingDays", "dateRangeMode"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
@@ -5817,11 +5978,13 @@
         var nextEnd = dateNoLaterThanToday(event.target.value) || state.endDate;
         var nextStart = dateNoLaterThanToday(state.startDate) || nextEnd;
         state.endDate = nextEnd;
+        state.endDateAuto = false;
+        state.rollingDays = 0;
         if (nextEnd && (!nextStart || nextEnd < nextStart)) {
           state.startDate = nextEnd;
         }
         render(state);
-        saveSettings(state, ["startDate", "endDate"]).catch(function failed(error) {
+        saveSettings(state, ["startDate", "endDate", "rollingDays", "dateRangeMode"]).catch(function failed(error) {
           setStatus(state, String((error && error.message) || error || text(state, "loadFailed")), true);
         });
       });
@@ -7910,11 +8073,16 @@
         settings.statisticsSectionOrder
       );
       state.startDate = dateNoLaterThanToday(settings.startDate) || state.startDate || "";
+      var savedRange = settingsRangeState(settings);
+      state.rollingDays = savedRange.rollingDays;
+      state.endDateAuto = savedRange.endDateAuto;
       // A new install defaults to today. Once the user chooses another valid
       // end date, both entry points restore the same persisted range.
-      state.endDate = dateNoLaterThanToday(settings.endDate) ||
-        dateNoLaterThanToday(state.endDate) ||
-        defaultEndDate();
+      state.endDate = state.endDateAuto ? defaultEndDate() : (dateNoLaterThanToday(settings.endDate) || defaultEndDate());
+      if (state.rollingDays) {
+        state.startDate = rollingRangeStart(state.rollingDays);
+        state.endDate = defaultEndDate();
+      }
       state.dateSettingsLoaded = true;
       state.loading = false;
       setStatus(state, "");
@@ -8020,8 +8188,11 @@
       var nextChartType = normalizeChartType(settings.chartType);
       var nextThemeMode = normalizeThemeMode(settings.themeMode);
       var nextSourceModeFilter = normalizeSourceModeFilter(settings.sourceModeFilter);
-      var nextStartDate = dateNoLaterThanToday(settings.startDate);
-      var nextEndDate = dateNoLaterThanToday(settings.endDate) || defaultEndDate();
+      var nextRange = settingsRangeState(settings);
+      var nextRollingDays = nextRange.rollingDays;
+      var nextStartDate = nextRollingDays ? rollingRangeStart(nextRollingDays) : dateNoLaterThanToday(settings.startDate);
+      var nextEndDate = nextRange.endDateAuto ? defaultEndDate() : (dateNoLaterThanToday(settings.endDate) || defaultEndDate());
+      var nextEndDateAuto = nextRange.endDateAuto;
       var nextShowLineChart = typeof settings.showLineChart === "boolean"
         ? settings.showLineChart
         : settings.showTrendChart !== false && nextChartType === "line";
@@ -8045,6 +8216,8 @@
         nextSourceModeFilter !== normalizeSourceModeFilter(state.sourceModeFilter) ||
         nextStartDate !== dateNoLaterThanToday(state.startDate) ||
         nextEndDate !== (dateNoLaterThanToday(state.endDate) || defaultEndDate()) ||
+        nextEndDateAuto !== Boolean(state.endDateAuto) ||
+        nextRollingDays !== (state.rollingDays || 0) ||
          nextShowLineChart !== (state.showLineChart !== false) ||
          nextShowDonutChart !== (state.showDonutChart === true) ||
          nextShowTrendChart !== (state.showTrendChart !== false) ||
@@ -8074,6 +8247,8 @@
       state.sourceModeFilter = nextSourceModeFilter;
       state.startDate = nextStartDate || state.startDate || "";
       state.endDate = nextEndDate;
+      state.endDateAuto = nextEndDateAuto;
+      state.rollingDays = nextRollingDays;
       state.showLineChart = nextShowLineChart;
       state.showDonutChart = nextShowDonutChart;
       state.showTrendChart = nextShowTrendChart;
@@ -8130,6 +8305,8 @@
       ".usage-date-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;width:100%}",
       ".usage-date-controls label{display:flex;align-items:center;gap:4px;min-width:0;white-space:nowrap}",
       ".usage-date-controls input{width:112px;min-width:0;height:28px;border:1px solid var(--usage-border-control);border-radius:5px;padding:0 1px 0 5px;background:var(--usage-surface-panel);color:var(--usage-text-primary);font-size:11px}",
+      ".usage-follow-today{min-height:28px;padding:0 8px;border:1px solid var(--usage-border-control);border-radius:5px;background:var(--usage-surface-panel);color:var(--usage-text-secondary);font-size:11px;cursor:pointer}",
+      ".usage-follow-today.active{border-color:var(--usage-accent-link);color:var(--usage-accent-link)}",
       ".usage-date-controls input::-webkit-datetime-edit,.usage-date-controls input::-webkit-datetime-edit-fields-wrapper{padding:0}",
       ".usage-date-controls input::-webkit-calendar-picker-indicator{width:14px;height:14px;margin:0;padding:0;cursor:pointer}",
       ".usage-settings-menu{position:relative;flex:0 0 auto}",
@@ -8544,6 +8721,8 @@
       focusedEffort: "",
       startDate: "",
       endDate: "",
+      endDateAuto: true,
+      rollingDays: 0,
       dateSettingsLoaded: false,
       selectedModels: {},
       knownModels: {},
@@ -8621,6 +8800,11 @@
     renderModelTextList: renderModelTextList,
     _test: {
       detectPageTheme: detectPageTheme,
+      saveSettings: saveSettings,
+      createDateRolloverScheduler: createDateRolloverScheduler,
+      pushBadgeFilter: pushBadgeFilter,
+      eventDateKey: eventDateKey,
+      settingsRangeState: settingsRangeState,
       render: render,
       bindEvents: bindEvents,
       ensureSelection: ensureSelection,

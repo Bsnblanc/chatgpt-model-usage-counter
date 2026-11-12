@@ -1,7 +1,31 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const dashboard = require("../src/dashboard");
+const backgroundDates = require("../src/background");
 const exporter = require("../src/exporter");
+
+test("persisted period modes restore presets and keep legacy fixed ranges fixed", () => {
+  const resolve = dashboard._test.settingsRangeState;
+  assert.deepEqual(resolve({ dateRangeMode: "today" }), { rollingDays: 1, endDateAuto: true });
+  assert.deepEqual(resolve({ dateRangeMode: "last7" }), { rollingDays: 7, endDateAuto: true });
+  assert.deepEqual(resolve({ dateRangeMode: "last31" }), { rollingDays: 31, endDateAuto: true });
+  assert.deepEqual(resolve({ dateRangeMode: "throughToday" }), { rollingDays: 0, endDateAuto: true });
+  assert.deepEqual(resolve({ dateRangeMode: "custom", endDate: "2024-01-01" }), { rollingDays: 0, endDateAuto: false });
+  assert.deepEqual(resolve({ startDate: "2024-01-01", endDate: "2024-01-05" }), { rollingDays: 0, endDateAuto: false });
+});
+
+test("dashboard and background agree on recorded, UTC, and unknown event dates", () => {
+  const stamp = "2026-11-10T15:01:00.000Z";
+  const events = [
+    [{ submittedAt: stamp }, ""],
+    [{ submittedAt: stamp, dateKeyBasis: "utc" }, "2026-11-10"],
+    [{ submittedAt: stamp, dateKeyBasis: "local", recordedDateKey: "2026-11-11", dateTimeZone: "Asia/Tokyo" }, "2026-11-11"]
+  ];
+  for (const [event, day] of events) {
+    assert.equal(backgroundDates.eventDateKey(event), day);
+    assert.equal(dashboard._test.eventDateKey(event), day);
+  }
+});
 
 function createStats() {
   return {
@@ -122,6 +146,7 @@ function createStats() {
         conversationId: "conversation-alpha",
         pageTitle: "Thinking conversation",
         pageUrl: "https://chatgpt.com/c/conversation-alpha",
+        dateKeyBasis: "utc",
         submittedAt: "2026-05-30T15:10:00.000Z"
       },
       {
@@ -138,6 +163,7 @@ function createStats() {
         conversationId: "conversation-alpha",
         pageTitle: "Thinking conversation",
         pageUrl: "https://chatgpt.com/c/conversation-alpha",
+        dateKeyBasis: "utc",
         submittedAt: "2026-05-30T15:00:00.000Z"
       },
       {
@@ -154,6 +180,7 @@ function createStats() {
         conversationId: "conversation-beta",
         pageTitle: "Instant conversation",
         pageUrl: "https://chatgpt.com/c/conversation-beta",
+        dateKeyBasis: "utc",
         submittedAt: "2026-05-30T14:00:00.000Z"
       }
     ]
@@ -175,6 +202,7 @@ function createStatisticsModeStats() {
     conversationId: `statistics-mode-${minute}`,
     pageTitle: `Statistics mode ${minute}`,
     pageUrl: `https://chatgpt.com/c/statistics-mode-${minute}`,
+    dateKeyBasis: "utc",
     submittedAt: `${date}T10:${minute}:00.000Z`
   });
 
@@ -317,10 +345,10 @@ function visibleUsageText(html) {
     .trim();
 }
 
-function utcDateKey(date = new Date()) {
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${month}-${day}`;
+function localDateKey(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 async function flushDashboardPromises(ticks = 12) {
@@ -422,6 +450,7 @@ function createDirtyStats() {
         apiModel: "gpt-5-thinking",
         chatgptModel: "gpt-5-5-preview",
         modelParameters: { model: "gpt-5-thinking" },
+        dateKeyBasis: "utc",
         submittedAt: "2026-05-30T14:00:00.000Z"
       },
       {
@@ -431,6 +460,7 @@ function createDirtyStats() {
         modelMode: "thinking",
         modelParameters: { model: "gpt-5-thinking", "reasoning.effort": "high" },
         usageFeatures: ["deep_research"],
+        dateKeyBasis: "utc",
         submittedAt: "2026-05-30T15:00:00.000Z"
       }
     ]
@@ -675,6 +705,7 @@ test("dashboard treats canvas and versioned feature slugs as features, not model
     modelParameters: { model: "future-family-2026-thinking" },
     usageFeatures: ["canvas"],
     sourceMode: "chat",
+    dateKeyBasis: "utc",
     submittedAt: "2026-05-30T15:20:00.000Z"
   });
 
@@ -755,12 +786,14 @@ test("dashboard does not infer range feature counts from all-time aggregates", (
       model,
       modelParameters: { model },
       usageFeatures: [],
+      dateKeyBasis: "utc",
       submittedAt: "2026-06-03T08:29:15.429Z"
     },
     {
       model,
       modelParameters: { model },
       usageFeatures: [],
+      dateKeyBasis: "utc",
       submittedAt: "2026-06-03T07:51:26.965Z"
     }
   ];
@@ -870,6 +903,7 @@ test("dashboard preserves an unlinked remainder without inflating a dated conver
       pageUrl: "https://chatgpt.com/c/capped",
       modelParameters: { model },
       usageFeatures: [],
+      dateKeyBasis: "utc",
       submittedAt: "2026-06-03T08:29:15.429Z"
     }
   ];
@@ -1756,6 +1790,7 @@ test("internal statistics order reasoning effort from low to high and keeps unit
     usageFeatures: index === 0 ? ["web_search"] : [],
     conversationId: "effort-order",
     pageTitle: "Effort order",
+    dateKeyBasis: "utc",
     submittedAt: `2026-08-23T10:${String(index).padStart(2, "0")}:00.000Z`
   }));
   const html = dashboard._test.renderModelCountRows({
@@ -2483,8 +2518,8 @@ test("chart path and points animate in trajectory order without shifting point p
   assert.doesNotMatch(source, /@keyframes usage-point-in\{[^}]*transform:/);
 });
 
-test("the default date range ends on the current UTC calendar day", () => {
-  const today = utcDateKey();
+test("the default date range ends on the current local calendar day", () => {
+  const today = localDateKey();
   const model = "future-family-current-day";
   const data = dashboard.chartSeries(
     {
@@ -2505,11 +2540,184 @@ test("the default date range ends on the current UTC calendar day", () => {
   assert.equal(data.series[0].values.at(-1), 1);
 });
 
-test("saved or entered future dates are clamped to the current UTC calendar day", () => {
-  const today = utcDateKey();
+test("saving unrelated settings preserves automatic end date and explicit ranges", async () => {
+  const originalHandler = globalThis.ChatGPTUsageDashboardMessageHandler;
+  const messages = [];
+  globalThis.ChatGPTUsageDashboardMessageHandler = (message) => {
+    messages.push(message);
+    return { ok: true };
+  };
+  const state = {
+    language: "en",
+    activeView: "chart",
+    statisticsMode: "mapped",
+    chartType: "line",
+    themeMode: "system",
+    sourceModeFilter: "all",
+    startDate: "",
+    endDate: localDateKey(),
+    endDateAuto: true,
+  };
+  try {
+    await dashboard._test.saveSettings(state, ["endDate"]);
+    assert.equal(messages.at(-1).settings.endDate, "");
+
+    state.endDateAuto = false;
+    state.endDate = "2026-05-30";
+    await dashboard._test.saveSettings(state, ["endDate"]);
+    assert.equal(messages.at(-1).settings.endDate, "2026-05-30");
+  } finally {
+    if (originalHandler === undefined) {
+      delete globalThis.ChatGPTUsageDashboardMessageHandler;
+    } else {
+      globalThis.ChatGPTUsageDashboardMessageHandler = originalHandler;
+    }
+  }
+});
+
+test("local midnight timer redraws the date range and badge, and resume catches up after sleep", () => {
+  let now = new Date(2026, 2, 7, 23, 59, 30);
+  let timerId = 0;
+  const timers = new Map();
+  const listeners = {};
+  const badgeFilters = [];
+  const priorChrome = globalThis.chrome;
+  globalThis.chrome = { runtime: { sendMessage(message) { badgeFilters.push(message.filter); } } };
+  const state = {
+    endDateAuto: true,
+    endDate: localDateKey(now),
+    startDate: "2026-03-01",
+    statisticsMode: "mapped",
+    sourceModeFilter: "all",
+    selectedModels: {},
+    stats: { totals: {}, byDate: {}, models: {}, sessionsByModel: {}, variantsByModel: {}, parametersByModel: {}, events: [] },
+  };
+  let renderedThrough = "";
+  const clock = {
+    now: () => new Date(now),
+    setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, delay }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    addEventListener(name, fn) { (listeners[name] ||= []).push(fn); },
+  };
+  const scheduler = dashboard._test.createDateRolloverScheduler(state, clock, (nextState) => {
+    renderedThrough = dashboard.chartSeries(nextState.stats, [], nextState.startDate, nextState.endDate).dates.at(-1);
+    dashboard._test.pushBadgeFilter(nextState);
+  });
+  try {
+    scheduler.sync();
+    const midnightTask = [...timers.values()][0];
+    assert.equal(midnightTask.delay, 30_025);
+    now = new Date(now.getTime() + 60_000);
+    midnightTask.fn();
+    assert.equal(state.endDate, localDateKey(now));
+    assert.equal(renderedThrough, localDateKey(now));
+    assert.equal(badgeFilters.at(-1).endDate, localDateKey(now));
+
+    const beforeSleep = state.endDate;
+    now = new Date(now.getTime() + 30 * 60 * 60 * 1000);
+    listeners.visibilitychange.forEach((listener) => listener());
+    assert.notEqual(state.endDate, beforeSleep);
+    assert.equal(renderedThrough, localDateKey(now));
+    assert.equal(badgeFilters.at(-1).endDate, localDateKey(now));
+  } finally {
+    scheduler.stop();
+    if (priorChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = priorChrome;
+  }
+});
+
+test("local date keys honor timezone offsets and daylight saving calendar boundaries", () => {
+  const priorTZ = process.env.TZ;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    const beforeTokyoMidnight = new Date("2026-03-08T14:59:00.000Z");
+    const afterTokyoMidnight = new Date("2026-03-08T15:01:00.000Z");
+    assert.notEqual(localDateKey(beforeTokyoMidnight), localDateKey(afterTokyoMidnight));
+
+    process.env.TZ = "America/Los_Angeles";
+    const beforeLaDstJump = new Date("2026-03-08T09:59:00.000Z");
+    const afterLaDstJump = new Date("2026-03-08T10:01:00.000Z");
+    assert.equal(localDateKey(beforeLaDstJump), localDateKey(afterLaDstJump));
+    assert.equal(
+      dashboard._test.eventDateKey({ dateKeyBasis: "utc", submittedAt: "2026-03-08T10:01:00.000Z" }),
+      localDateKey(afterLaDstJump),
+    );
+  } finally {
+    if (priorTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = priorTZ;
+  }
+});
+
+test("date controls offer a one-click switch from a legacy fixed end date", () => {
+  const fixed = dashboard.renderDateControls({
+    language: "en",
+    startDate: "2026-05-01",
+    endDate: "2026-05-30",
+    endDateAuto: false,
+  });
+  const automatic = dashboard.renderDateControls({
+    language: "en",
+    startDate: "2026-05-01",
+    endDate: localDateKey(),
+    endDateAuto: true,
+  });
+  assert.match(fixed, /class="usage-follow-today"[^>]*aria-pressed="false"/);
+  assert.match(automatic, /class="usage-follow-today active"[^>]*aria-pressed="true"/);
+  assert.match(fixed, /Keep start · follow today/);
+  assert.match(fixed, /data-rolling-days="1"/);
+  assert.match(fixed, /data-rolling-days="7"/);
+  assert.match(fixed, /data-rolling-days="31"/);
+});
+
+test("rolling presets follow local dates across a daylight saving change", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  try {
+    for (const [days, expectedStart] of [[1, "2026-03-09"], [7, "2026-03-03"], [31, "2026-02-07"]]) {
+      const state = { rollingDays: days, endDateAuto: true, startDate: "2026-03-01", endDate: "2026-03-08" };
+      let redraws = 0;
+      const scheduler = dashboard._test.createDateRolloverScheduler(state, {
+        now: () => new Date("2026-03-09T07:01:00Z"),
+        setTimeout() { return 1; }, clearTimeout() {}
+      }, () => { redraws += 1; });
+      scheduler.refresh();
+      assert.equal(state.startDate, expectedStart);
+      assert.equal(state.endDate, "2026-03-09");
+      assert.equal(redraws, 1);
+      scheduler.stop();
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
+test("midnight scheduling uses the daylight saving length of the local calendar day", () => {
+  const priorTZ = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  const now = new Date("2026-03-08T08:30:00.000Z");
+  const state = { endDateAuto: true, endDate: localDateKey(now) };
+  let delay = 0;
+  const scheduler = dashboard._test.createDateRolloverScheduler(state, {
+    now: () => new Date(now),
+    setTimeout(fn, value) { delay = value; return 1; },
+    clearTimeout() {},
+  }, () => {});
+  try {
+    scheduler.sync();
+    assert.equal(delay, 22.5 * 60 * 60 * 1000 + 25);
+  } finally {
+    scheduler.stop();
+    if (priorTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = priorTZ;
+  }
+});
+
+test("saved or entered future dates are clamped to the current local calendar day", () => {
+  const today = localDateKey();
   const tomorrowDate = new Date();
-  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
-  const tomorrow = utcDateKey(tomorrowDate);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = localDateKey(tomorrowDate);
 
   assert.equal(dashboard._test.dateNoLaterThanToday(tomorrow), today);
   assert.equal(
@@ -2661,6 +2869,7 @@ test("GPTs feature counts stay only in title pills across chart, text, page, and
     requestReasoningEffort: "high",
     usageFeatures: ["gpts"],
     sourceMode: "chat",
+    dateKeyBasis: "utc",
     submittedAt: `2026-05-30T15:${String(index).padStart(2, "0")}:00.000Z`
   }));
   stats.featuresByModel = {
@@ -2780,6 +2989,7 @@ test("usage date range filters model counts, features, parameters, and conversat
       "reasoning.effort": "low"
     },
     usageFeatures: ["web_search"],
+    dateKeyBasis: "utc",
     submittedAt: "2026-05-01T10:00:00.000Z",
     conversationId: "conversation-old",
     pageTitle: "Old conversation",
@@ -2820,6 +3030,7 @@ test("dashboard normalizes raw event feature aliases before display", () => {
       requestModel: "future-family-2026-thinking",
       responseModel: "future-family-2026-thinking",
       usageFeatures: ["websearch", "dalle", "canvases"],
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:10:00.000Z"
     }
   ];
@@ -2876,7 +3087,7 @@ test("explicit date range uses dated relations and ignores cached sessions outsi
 
 test("model rows use the selected range count without repeating today's or all-time count", () => {
   const stats = createStats();
-  const today = utcDateKey();
+  const today = localDateKey();
   const selectedDate = today === "2026-05-30" ? "2026-05-29" : "2026-05-30";
   stats.totals = { "future-family-2026-thinking": 9 };
   stats.byDate = {
@@ -2923,6 +3134,7 @@ test("modelVariants uses responseModel instead of the requested route for actual
       apiModel: "gpt-5-6-thinking",
       modelMode: "pro",
       modelParameters: { model: "gpt-5-6-thinking" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:10:00.000Z"
     },
     {
@@ -2932,6 +3144,7 @@ test("modelVariants uses responseModel instead of the requested route for actual
       apiModel: "gpt-5-6-thinking",
       modelMode: "thinking",
       modelParameters: { model: "gpt-5-6-thinking" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:00:00.000Z"
     }
   ];
@@ -3330,6 +3543,7 @@ test("internal statistics keeps unavailable request evidence unknown instead of 
     apiModel: "gpt-should-not-be-used",
     modelParameters: { model: "gpt-should-not-be-used" },
     responseModel: "gpt-5-6-thinking",
+    dateKeyBasis: "utc",
     submittedAt: "2026-08-23T10:00:00.000Z"
   }];
   const state = {
@@ -3367,6 +3581,7 @@ test("internal statistics retains exact new request and response slugs even when
       requestModel: "gpt-9-1-thinking",
       requestModelEvidence: "trusted",
       responseModel: "gpt-9-1-pro",
+      dateKeyBasis: "utc",
       submittedAt: "2026-08-23T10:00:00.000Z"
     }]
   };
@@ -3403,13 +3618,13 @@ test("event-backed statistics warns once when retained event history is incomple
     dashboard._test.renderStatisticsCompletenessWarning(
       Object.assign({}, base, { statisticsMode: "internal" })
     ),
-    /does not represent the full history/
+    /historical details are missing or have an unknown date/
   );
   assert.match(
     dashboard._test.renderStatisticsCompletenessWarning(
       Object.assign({}, base, { sourceModeFilter: "chat" })
     ),
-    /does not represent the full history/
+    /historical details are missing or have an unknown date/
   );
 });
 
@@ -3427,6 +3642,7 @@ test("internal response children keep feature pills and mixed Chat Work conversa
       sourceMode: "chat",
       conversationId: "mixed-source",
       pageTitle: "Mixed source",
+      dateKeyBasis: "utc",
       submittedAt: "2026-08-23T10:00:00.000Z"
     },
     {
@@ -3438,6 +3654,7 @@ test("internal response children keep feature pills and mixed Chat Work conversa
       sourceMode: "work",
       conversationId: "mixed-source",
       pageTitle: "Mixed source",
+      dateKeyBasis: "utc",
       submittedAt: "2026-08-23T10:01:00.000Z"
     }
   ];
@@ -3468,6 +3685,7 @@ test("request-only events show an unknown actual response without inventing a mo
       requestModel: "gpt-5-6-thinking",
       responseModel: "gpt-5-6-pro",
       modelParameters: { model: "gpt-5-6-thinking" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:10:00.000Z"
     },
     {
@@ -3475,6 +3693,7 @@ test("request-only events show an unknown actual response without inventing a mo
       requestModel: "gpt-5-6-thinking",
       responseModel: "",
       modelParameters: { model: "gpt-5-6-thinking" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:00:00.000Z"
     }
   ];
@@ -3508,6 +3727,7 @@ test("a response-only event keeps the exact response relation and labels every m
     conversationId: "response-only",
     pageTitle: "Response only",
     pageUrl: "https://chatgpt.com/c/response-only",
+    dateKeyBasis: "utc",
     submittedAt: "2026-05-30T15:00:00.000Z"
   }];
 
@@ -3540,6 +3760,7 @@ test("chart count details show exact request-response pairs and the unknown pair
       requestModel: "gpt-5-6-thinking",
       responseModel: "gpt-5-6-thinking",
       modelParameters: { model: "gpt-5-6-thinking" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:20:00.000Z"
     },
     {
@@ -3547,6 +3768,7 @@ test("chart count details show exact request-response pairs and the unknown pair
       requestModel: "gpt-5-6",
       responseModel: "gpt-5-6",
       modelParameters: { model: "gpt-5-6" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:10:00.000Z"
     },
     {
@@ -3554,6 +3776,7 @@ test("chart count details show exact request-response pairs and the unknown pair
       requestModel: "gpt-5-6-thinking",
       responseModel: "",
       modelParameters: { model: "gpt-5-6-thinking" },
+      dateKeyBasis: "utc",
       submittedAt: "2026-05-30T15:00:00.000Z"
     }
   ];
@@ -3622,6 +3845,7 @@ test("Chat and Work contributions stay under the same exact request-response rel
         conversationId: "work-0001",
         pageTitle: "Work research",
         pageUrl: "https://chatgpt.com/c/work-0001",
+        dateKeyBasis: "utc",
         submittedAt: "2026-08-22T16:10:00.000Z"
       },
       {
@@ -3634,6 +3858,7 @@ test("Chat and Work contributions stay under the same exact request-response rel
         conversationId: "chat-0001",
         pageTitle: "Chat research",
         pageUrl: "https://chatgpt.com/c/chat-0001",
+        dateKeyBasis: "utc",
         submittedAt: "2026-08-22T16:00:00.000Z"
       }
     ]
@@ -5146,6 +5371,7 @@ test("export enrichment repairs prompt hashes produced by the legacy duplicated 
   }, {
     events: [{
       conversationId: "legacy-duplicated-prompt",
+      dateKeyBasis: "utc",
       submittedAt: "2026-08-23T01:29:16.464Z",
       promptHash: usagePromptHash(duplicatedPrompt),
       promptLength: duplicatedPrompt.length,

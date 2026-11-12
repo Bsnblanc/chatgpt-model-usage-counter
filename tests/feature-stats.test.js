@@ -152,6 +152,42 @@ test("dashboard feature rows hide zero-count entries and label canonical feature
   assert.doesNotMatch(html, />0 times</);
 });
 
+test("all-time feature counts do not disappear from text rows outside the default chart window", () => {
+  const model = "future-family-2026-thinking";
+  const older = new Date("2025-01-02T10:00:00.000Z");
+  const newer = new Date("2025-03-11T10:00:00.000Z");
+  let stats = background.createEmptyStats();
+  [older, new Date(older.getTime() + 3000), newer].forEach((at, index) => {
+    stats = background.applyIncrement(stats, {
+      submissionId: `all-time-feature-${index}`,
+      requestModel: model,
+      apiModel: model,
+      modelObservedSource: "webRequest",
+      modelParameters: { model },
+      usageFeatures: [index === 2 ? "web_search" : "deep_research"],
+      submittedAt: at.toISOString(),
+      pageUrl: "https://chatgpt.com/c/all-time-feature"
+    }, at);
+  });
+
+  const allTime = dashboard.renderModelTextList(stats, { language: "en", startDate: "", endDate: "" });
+  assert.match(allTime, /3 times/);
+  assert.match(allTime, /Deep Research <b>2<\/b>/);
+  assert.match(allTime, /Web search <b>1<\/b>/);
+
+  const filtered = dashboard.renderModelTextList(stats, {
+    language: "en", startDate: "2025-03-11", endDate: "2025-03-11"
+  });
+  assert.match(filtered, /1 times/);
+  assert.match(filtered, /Web search <b>1<\/b>/);
+  assert.doesNotMatch(filtered, /Deep Research/);
+
+  // Older retained-event details can be incomplete even when the aggregate is known.
+  const aggregateOnly = Object.assign({}, stats, { events: [], eventHistoryComplete: false, analyticsByDate: {} });
+  const restored = dashboard.renderModelTextList(aggregateOnly, { language: "en", startDate: "", endDate: "" });
+  assert.match(restored, /Deep Research <b>2<\/b>/);
+});
+
 test("bare GPT request slugs are counted exactly without an invented instant suffix", () => {
   const now = new Date("2026-06-26T12:00:00.000Z");
   // The current request body is authoritative. A bare slug remains bare unless

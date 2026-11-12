@@ -1,6 +1,12 @@
 (function initBackground(root) {
   "use strict";
 
+  if (!root.ChatGPTUsageDates && typeof importScripts === "function") {
+    try { importScripts("date-utils.js"); } catch (_) { importScripts("src/date-utils.js"); }
+  }
+  var usageDates = root.ChatGPTUsageDates || (typeof require === "function" ? require("./date-utils") : null);
+  if (!usageDates) throw new Error("date-utils-unavailable");
+
   if (!root.ChatGPTModelCatalog && typeof importScripts === "function") {
     try {
       importScripts("model-catalog.js");
@@ -30,10 +36,18 @@
   var IMPORTED_CONVERSATION_RECORD_PREFIX = "chatgptImportedConversations.record.v1.";
   var STATISTICS_BACKUP_FORMAT = "chatgpt-model-usage-counter.statistics";
   var STATISTICS_BACKUP_VERSION = 1;
+  var STORAGE_SCHEMA_VERSION = 1;
+
+  function unsupportedStoredSchema(value) {
+    return Boolean(value && typeof value === "object" &&
+      Object.prototype.hasOwnProperty.call(value, "version") &&
+      Number(value.version) !== STORAGE_SCHEMA_VERSION);
+  }
   var CATALOG_SESSION_KEY = "chatgptModelUsageCatalog.session.v1";
   var CATALOG_BINDING_SALT_SESSION_KEY = "chatgptModelUsageCatalogBindingSalt.session.v1";
   var CATALOG_REFRESH_SESSION_KEY = "chatgptModelUsageCatalogRefresh.session.v1";
   var STATUS_ALARM_NAME = "chatgpt-model-usage-openai-status";
+  var DATE_ROLLOVER_ALARM_NAME = "chatgpt-model-usage-date-rollover";
   var STATUS_ALARM_PERIOD_MINUTES = 5;
   var MAX_EVENTS = 500;
   var DOWNLOAD_FINAL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -59,6 +73,7 @@
   var USAGE_DEDUPE_WINDOW_MS = 2500;
   var CHATGPT_URL_PATTERNS = ["https://chatgpt.com/*", "https://chat.openai.com/*"];
   var ISOLATED_CONTENT_SCRIPT_FILES = [
+    "src/date-utils.js",
     "src/model-catalog.js",
     "src/detector.js",
     "src/exporter.js",
@@ -213,6 +228,7 @@
 
   function sanitizeSettings(settings) {
     var base = settings && typeof settings === "object" ? settings : createDefaultSettings();
+    if (unsupportedStoredSchema(base)) throw new Error("unsupported-settings-version");
     var legacyChartVisible = base.showTrendChart !== false;
     var showLineChart = typeof base.showLineChart === "boolean"
       ? base.showLineChart
@@ -225,6 +241,8 @@
       language: normalizeLanguage(base.language),
       startDate: dateSettingNoLaterThanToday(base.startDate),
       endDate: dateSettingNoLaterThanToday(base.endDate),
+      ...([1, 7, 31].indexOf(Number(base.rollingDays)) !== -1 ? { rollingDays: Number(base.rollingDays) } : {}),
+      ...(["today", "last7", "last31", "throughToday", "custom"].indexOf(base.dateRangeMode) !== -1 ? { dateRangeMode: base.dateRangeMode } : {}),
       activeView: sanitizeActiveView(base.activeView),
       statisticsMode: sanitizeStatisticsMode(base.statisticsMode),
       chartType: sanitizeChartType(base.chartType),
@@ -285,11 +303,46 @@
   }
 
   function todayKey(date) {
-    var value = date || new Date();
-    var year = value.getUTCFullYear();
-    var month = String(value.getUTCMonth() + 1).padStart(2, "0");
-    var day = String(value.getUTCDate()).padStart(2, "0");
-    return year + "-" + month + "-" + day;
+    return usageDates.localDateKey(date);
+  }
+
+  function utcDateKey(date) {
+    return usageDates.utcDateKey(date);
+  }
+
+  function validRecordedDateKey(value) {
+    return usageDates.isDateKey(value);
+  }
+
+  function eventDateKey(event) {
+    return usageDates.eventDateKey(event);
+  }
+
+  // A legacy event has no reliable time-zone marker. Its stored bucket can
+  // nevertheless be established when every count for that exact model is in
+  // one day and those buckets account for the model's whole total.
+  function provenEventDateKey(stats, event) {
+    var recorded = String(event && event.recordedDateKey || "");
+    if (validRecordedDateKey(recorded)) return recorded;
+    if (event && event.dateKeyBasis === "utc") {
+      var submitted = new Date(String(event.submittedAt || ""));
+      return Number.isNaN(submitted.getTime()) ? "" : utcDateKey(submitted);
+    }
+    var model = String(event && event.model || "");
+    var byDate = stats && stats.byDate || {};
+    var dates = Object.keys(byDate).filter(function hasModel(day) {
+      return sanitizeCount(byDate[day] && byDate[day][model]) > 0;
+    });
+    if (dates.length !== 1 || !validRecordedDateKey(dates[0])) return "";
+    return sanitizeCount(byDate[dates[0]][model]) === sanitizeCount(stats && stats.totals && stats.totals[model])
+      ? dates[0] : "";
+  }
+
+  function hasStoredEventContribution(stats, event, dateKey) {
+    var model = event && event.model;
+    return Boolean(dateKey && model &&
+      sanitizeCount(stats && stats.totals && stats.totals[model]) &&
+      sanitizeCount(stats && stats.byDate && stats.byDate[dateKey] && stats.byDate[dateKey][model]));
   }
 
   function responseMigrationKey(event) {
@@ -385,6 +438,7 @@
 
   function cloneStats(stats) {
     var base = stats && typeof stats === "object" ? stats : createEmptyStats();
+    if (unsupportedStoredSchema(base)) throw new Error("unsupported-statistics-version");
     var migratedCatalog = sanitizeRuntimeModelCatalog(base.runtimeModelCatalog);
     if (migratedCatalog) {
       activeRuntimeModelCatalog = migratedCatalog;
@@ -415,17 +469,25 @@
     var sourceAnalyticsByDate = base.analyticsByDate || {};
     var sourceResponseMigrationIndex = base.responseMigrationIndex || {};
     var sourceSubmissionDedupeIndex = base.submissionDedupeIndex || {};
+    var incompleteHistory = base.eventHistoryComplete !== true ||
+      !Array.isArray(base.events) || base.events.length !== totalCount(base);
+
+    function aggregateModelName(model, metadata) {
+      var canonical = canonicalStoredModelName(model, metadata);
+      if (isStoredModelValid(canonical, metadata, model)) return canonical;
+      return incompleteHistory ? sanitizeModelName(model) : "";
+    }
 
     Object.keys(sourceTotals).forEach(function copyTotal(model) {
       var metadata = sourceModels[model];
-      var canonicalModel = canonicalStoredModelName(model, metadata);
+      var canonicalModel = aggregateModelName(model, metadata);
       var count = sanitizeCount(sourceTotals[model]);
-      if (count <= 0 || !isStoredModelValid(canonicalModel, metadata, model)) {
+      if (count <= 0 || !canonicalModel) {
         return;
       }
 
-      totals[canonicalModel] = (Number(totals[canonicalModel]) || 0) + count;
-      models[canonicalModel] = mergeStoredModelMetadata(models[canonicalModel], canonicalModel, metadata);
+      setSafeObjectEntry(totals, canonicalModel, (Number(totals[canonicalModel]) || 0) + count);
+      setSafeObjectEntry(models, canonicalModel, mergeStoredModelMetadata(models[canonicalModel], canonicalModel, metadata));
     });
 
     Object.keys(sourceByDate).forEach(function copyDate(dateKey) {
@@ -433,17 +495,17 @@
       var day = {};
       Object.keys(sourceDay).forEach(function copyDayModel(model) {
         var metadata = sourceModels[model];
-        var canonicalModel = canonicalStoredModelName(model, metadata);
+        var canonicalModel = aggregateModelName(model, metadata);
         var count = sanitizeCount(sourceDay[model]);
-        if (count <= 0 || !isStoredModelValid(canonicalModel, metadata, model)) {
+        if (count <= 0 || !canonicalModel) {
           return;
         }
 
-        day[canonicalModel] = (Number(day[canonicalModel]) || 0) + count;
-        models[canonicalModel] = mergeStoredModelMetadata(models[canonicalModel], canonicalModel, metadata);
+        setSafeObjectEntry(day, canonicalModel, (Number(day[canonicalModel]) || 0) + count);
+        setSafeObjectEntry(models, canonicalModel, mergeStoredModelMetadata(models[canonicalModel], canonicalModel, metadata));
       });
       if (Object.keys(day).length > 0) {
-        byDate[dateKey] = day;
+        setSafeObjectEntry(byDate, dateKey, day);
       }
     });
 
@@ -571,26 +633,28 @@
             var metadata = Object.assign(Object.create(null), sourceModels[event.model] || {}, event);
             var canonicalModel = canonicalStoredModelName(event.model, metadata);
             if (!isStoredModelValid(canonicalModel, metadata, event.model)) {
-              return events;
+              // Keep an unrecognized legacy identity rather than silently
+              // dropping its retained event. Presentation can label the
+              // aggregate as unrecognized without changing stored counts.
+              canonicalModel = sanitizeModelName(event.model);
+              if (!canonicalModel) return events;
             }
 
             var canonicalEvent = canonicalizeStoredEvent(event, canonicalModel, metadata);
             events.push(canonicalEvent);
-            models[canonicalEvent.model] = mergeStoredModelMetadata(
+            setSafeObjectEntry(models, canonicalEvent.model, mergeStoredModelMetadata(
               models[canonicalEvent.model],
               canonicalEvent.model,
               metadata
-            );
+            ));
             return events;
           }, []).slice(0, MAX_EVENTS)
         : [],
       eventHistoryComplete: Boolean(
-        base.eventHistoryComplete === true ||
-        (
-          totalCount(base) <= MAX_EVENTS &&
-          Array.isArray(base.events) &&
-          base.events.length === totalCount(base)
-        )
+        base.eventHistoryComplete === true &&
+        totalCount(base) <= MAX_EVENTS &&
+        Array.isArray(base.events) &&
+        base.events.length === totalCount(base)
       ),
       responseMigrationIndex: sanitizeResponseMigrationIndex(
         sourceResponseMigrationIndex,
@@ -646,7 +710,8 @@
       });
       cloned.analyticsHistoryComplete = Boolean(
         cloned.eventHistoryComplete &&
-        cloned.events.length === totalCount(cloned)
+        cloned.events.length === totalCount(cloned) &&
+        cloned.events.every(function hasProvenDay(event) { return Boolean(eventDateKey(event)); })
       );
     }
     if (
@@ -655,12 +720,17 @@
     ) {
       cloned.analyticsHistoryComplete = false;
     }
+    if (cloned.events.some(function unknownEventDay(event) { return !eventDateKey(event); })) {
+      cloned.analyticsHistoryComplete = false;
+      cloned.analyticsDateBasisUncertain = true;
+    }
+    if (base.analyticsDateBasisUncertain === true) cloned.analyticsDateBasisUncertain = true;
     if (totalCount(cloned) > MAX_EVENTS || cloned.events.length !== totalCount(cloned)) {
       cloned.eventHistoryComplete = false;
     }
-    if (!cloned.eventHistoryComplete) {
-      removeKnownProjectGptsContributions(cloned, base.events, sourceModels);
-    }
+    // Partial event histories cannot prove how many aggregate feature counts
+    // came from a particular event. Keep the stored aggregate unchanged;
+    // subtracting retained events on every read is neither safe nor idempotent.
     return cloned;
   }
 
@@ -1248,8 +1318,7 @@
   }
 
   function analyticsDateKey(event) {
-    var submittedDate = new Date(String((event && event.submittedAt) || ""));
-    return todayKey(Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate);
+    return eventDateKey(event);
   }
 
   function updateAnalyticsContribution(stats, model, event) {
@@ -1260,6 +1329,10 @@
       ? stats.analyticsByDate
       : {};
     var dateKey = analyticsDateKey(event);
+    if (!dateKey) {
+      stats.analyticsHistoryComplete = false;
+      return;
+    }
     var sourceMode = normalizeSourceMode(event.sourceMode);
     var day = stats.analyticsByDate[dateKey] && typeof stats.analyticsByDate[dateKey] === "object"
       ? stats.analyticsByDate[dateKey]
@@ -1279,6 +1352,7 @@
 
   function removeAnalyticsContribution(stats, model, event) {
     var dateKey = analyticsDateKey(event);
+    if (!dateKey) return false;
     var sourceMode = normalizeSourceMode(event && event.sourceMode);
     var day = stats && stats.analyticsByDate && stats.analyticsByDate[dateKey];
     var source = day && day[sourceMode];
@@ -2187,6 +2261,10 @@
       source: String(sourceEvent.source || "unmarked-source").slice(0, 32),
       sourceMode: sourceMode,
       submittedAt: String(sourceEvent.submittedAt || "").slice(0, 48),
+      dateKeyBasis: sourceEvent.dateKeyBasis === "local" ? "local" : sourceEvent.dateKeyBasis === "utc" ? "utc" : "",
+      ...(validRecordedDateKey(sourceEvent.recordedDateKey)
+        ? { recordedDateKey: String(sourceEvent.recordedDateKey), dateTimeZone: String(sourceEvent.dateTimeZone || "").slice(0, 128) }
+        : {}),
       pageUrl: String(sourceEvent.pageUrl || "").slice(0, 500),
       pageTitle: sanitizeTitle(sourceEvent.pageTitle),
       conversationId: sanitizeConversationId(
@@ -3608,14 +3686,13 @@
     }
   }
 
-  function removeUsageEventContribution(stats, event) {
+  function removeUsageEventContribution(stats, event, skipAnalytics) {
     var model = sanitizePublicModelName(event && event.model);
-    if (!model) {
+    var dateKey = eventDateKey(event);
+    if (!model || !dateKey) {
       return false;
     }
     decrementCountEntry(stats.totals, model, 1);
-    var submittedDate = new Date(String((event && event.submittedAt) || ""));
-    var dateKey = todayKey(Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate);
     if (stats.byDate[dateKey]) {
       decrementCountEntry(stats.byDate[dateKey], model, 1);
       if (!Object.keys(stats.byDate[dateKey]).length) {
@@ -3627,21 +3704,21 @@
     removeFeatureContribution(stats, model, event);
     removeSessionContribution(stats, model, event);
     removeRelationContribution(stats, model, event);
-    var analyticsRemoved = removeAnalyticsContribution(stats, model, event);
+    var analyticsRemoved = skipAnalytics ? false : removeAnalyticsContribution(stats, model, event);
     if (!sanitizeCount(stats.totals[model])) {
       delete stats.models[model];
     }
     return analyticsRemoved;
   }
 
-  function addUsageEventContribution(stats, event, modelInfo) {
+  function addUsageEventContribution(stats, event, modelInfo, skipAnalytics) {
     var model = modelInfo && modelInfo.label;
     if (!model) {
       return;
     }
     var submittedAt = String((event && event.submittedAt) || new Date().toISOString());
-    var submittedDate = new Date(submittedAt);
-    var dateKey = todayKey(Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate);
+    var dateKey = eventDateKey(event);
+    if (!dateKey) return;
     if (!stats.byDate[dateKey]) {
       stats.byDate[dateKey] = {};
     }
@@ -3667,7 +3744,7 @@
       submittedAt: submittedAt
     });
     updateRelationStats(stats, model, event);
-    updateAnalyticsContribution(stats, model, event);
+    if (!skipAnalytics) updateAnalyticsContribution(stats, model, event);
   }
 
   function addNetworkParameter(parameters, key, value, priority) {
@@ -4734,6 +4811,13 @@
       {},
       eventIndex >= 0 ? stats.events[eventIndex] : archivedEntry.event
     );
+    var previousAnalyticsDayUnknown = !eventDateKey(previousEvent);
+    var previousDateKey = provenEventDateKey(stats, previousEvent);
+    if (!hasStoredEventContribution(stats, previousEvent, previousDateKey)) {
+      stats.analyticsHistoryComplete = false;
+      return stats;
+    }
+    previousEvent.recordedDateKey = previousDateKey;
     var previousRequestModel = exactRequestModelFromMetadata(previousEvent);
     if (previousRequestModel && previousRequestModel !== requestModel) {
       return stats;
@@ -4813,8 +4897,12 @@
     }
 
     var analyticsWasComplete = stats.analyticsHistoryComplete === true;
-    var analyticsRemoved = removeUsageEventContribution(stats, previousEvent);
-    addUsageEventContribution(stats, updatedEvent, modelInfo);
+    var analyticsRemoved = removeUsageEventContribution(stats, previousEvent, previousAnalyticsDayUnknown);
+    addUsageEventContribution(stats, updatedEvent, modelInfo, previousAnalyticsDayUnknown);
+    if (previousAnalyticsDayUnknown) {
+      stats.analyticsHistoryComplete = false;
+      stats.analyticsDateBasisUncertain = true;
+    }
     if (
       analyticsWasComplete &&
       (
@@ -4861,6 +4949,7 @@
       submittedAt = now.toISOString();
       submittedDate = now;
     }
+    submittedAt = submittedDate.toISOString();
     var dateKey = todayKey(submittedDate);
     var pageUrl = String((payload && payload.pageUrl) || "").slice(0, 500);
     var conversationId = sanitizeConversationId(
@@ -4929,6 +5018,9 @@
       source: String((payload && payload.source) || "unmarked-source").slice(0, 32),
       sourceMode: normalizeSourceMode(payload && payload.sourceMode),
       submittedAt: submittedAt,
+      dateKeyBasis: "local",
+      recordedDateKey: dateKey,
+      dateTimeZone: (typeof Intl !== "undefined" && Intl.DateTimeFormat ? Intl.DateTimeFormat().resolvedOptions().timeZone : "") || "",
       pageUrl: pageUrl,
       pageTitle: pageTitle,
       conversationId: conversationId,
@@ -5170,6 +5262,13 @@
       {},
       eventIndex >= 0 ? stats.events[eventIndex] : archivedEntry.event
     );
+    var previousAnalyticsDayUnknown = !eventDateKey(previousEvent);
+    var previousDateKey = provenEventDateKey(stats, previousEvent);
+    if (!hasStoredEventContribution(stats, previousEvent, previousDateKey)) {
+      stats.analyticsHistoryComplete = false;
+      return stats;
+    }
+    previousEvent.recordedDateKey = previousDateKey;
     var previousResponseModel = exactResponseModelFromMetadata(previousEvent);
 
     var observedSource = String((payload && payload.observedSource) || "").slice(0, 64);
@@ -5267,8 +5366,12 @@
     }
 
     var analyticsWasComplete = stats.analyticsHistoryComplete === true;
-    var analyticsRemoved = removeUsageEventContribution(stats, previousEvent);
-    addUsageEventContribution(stats, updatedEvent, modelInfo);
+    var analyticsRemoved = removeUsageEventContribution(stats, previousEvent, previousAnalyticsDayUnknown);
+    addUsageEventContribution(stats, updatedEvent, modelInfo, previousAnalyticsDayUnknown);
+    if (previousAnalyticsDayUnknown) {
+      stats.analyticsHistoryComplete = false;
+      stats.analyticsDateBasisUncertain = true;
+    }
     if (
       analyticsWasComplete &&
       (
@@ -5333,10 +5436,8 @@
     var evidenceNeedsRepair = sourceEvents.some(storedEventNeedsEvidenceRepair);
     var eventHistoryCanBeComplete = sourceEvents.length > 0 &&
       sourceTotal <= MAX_EVENTS &&
-      (
-        source.eventHistoryComplete === true ||
-        sourceEvents.length === sourceTotal
-      );
+      source.eventHistoryComplete === true &&
+      sourceEvents.length === sourceTotal;
     var aggregateCountNeedsRepair = source.eventHistoryComplete === true &&
       sourceEvents.length !== sourceTotal;
     if (
@@ -5346,6 +5447,24 @@
     ) {
       return null;
     }
+
+    // Replaying events must never move a count to a guessed calendar day.
+    // Require proof of each event's day and agreement with stored buckets.
+    var provenDays = sourceEvents.map(function resolveDay(event) {
+      return provenEventDateKey(source, event);
+    });
+    if (provenDays.some(function unknown(day) { return !day; })) return null;
+    var eventBuckets = {};
+    sourceEvents.forEach(function countOriginalBucket(event, index) {
+      var day = provenDays[index];
+      var model = String(event.model || "");
+      if (!eventBuckets[day]) eventBuckets[day] = {};
+      eventBuckets[day][model] = (eventBuckets[day][model] || 0) + 1;
+    });
+    var daysToCheck = Object.keys(Object.assign({}, source.byDate || {}, eventBuckets));
+    if (daysToCheck.some(function differs(day) {
+      return !sameCountMap((source.byDate || {})[day] || {}, eventBuckets[day] || {});
+    })) return null;
 
     var sourceModels = source.models || {};
     var aggregateNeedsRemap = Object.keys(source.totals || {}).some(function needsRemap(model) {
@@ -5366,9 +5485,11 @@
         // survive an auditable catalog rebuild.
         continue;
       }
-      mapped.push({ event: sourceEvent, modelInfo: modelInfo });
+      mapped.push({ event: Object.assign({}, sourceEvent, { recordedDateKey: provenDays[i] }), modelInfo: modelInfo });
       mappedTotals[modelInfo.label] = (mappedTotals[modelInfo.label] || 0) + 1;
     }
+
+    if (mapped.length !== sourceEvents.length) return null;
 
     var rebuilt = createEmptyStats();
 
@@ -5379,9 +5500,7 @@
       var modelInfo = entry.modelInfo;
       var model = modelInfo.label;
       var submittedAt = String(sourceEvent.submittedAt || "");
-      var submittedDate = new Date(submittedAt);
-      var effectiveDate = Number.isNaN(submittedDate.getTime()) ? new Date() : submittedDate;
-      var dateKey = todayKey(effectiveDate);
+      var dateKey = eventDateKey(sourceEvent);
       var pageUrl = String(sourceEvent.pageUrl || "").slice(0, 500);
       var conversationId = String(sourceEvent.conversationId || extractConversationId(pageUrl)).slice(0, 128);
       var pageTitle = sanitizeTitle(sourceEvent.pageTitle);
@@ -5424,7 +5543,7 @@
     rebuilt.events = rebuilt.events.slice(0, MAX_EVENTS);
     rebuilt.eventHistoryComplete = totalCount(rebuilt) <= MAX_EVENTS &&
       rebuilt.events.length === totalCount(rebuilt);
-    rebuilt.analyticsHistoryComplete = true;
+    rebuilt.analyticsHistoryComplete = analyticsTotalCount(rebuilt.analyticsByDate) === totalCount(rebuilt);
     return totalCount(rebuilt) === mapped.length ? rebuilt : null;
   }
 
@@ -5621,6 +5740,7 @@
   // 角标范围过滤器:由面板(dashboard)推送当前选择的日期范围,角标只显示该范围内的次数,
   // 而不是全部总数(用户:角标显示面板所选日期范围对应的数字)。SW 重启后从存储恢复。
   var badgeFilter = null;
+  var badgeFilterRevision = 0;
 
   function sanitizeBadgeFilter(filter) {
     if (!filter || typeof filter !== "object") { return null; }
@@ -5637,6 +5757,8 @@
     if (
       !startDate &&
       !endDate &&
+      [1, 7, 31].indexOf(Number(filter.rollingDays)) === -1 &&
+      filter.followToday !== true &&
       !modelsSpecified &&
       statisticsMode === "mapped" &&
       sourceModeFilter === "all"
@@ -5649,17 +5771,42 @@
       models: models,
       modelsSpecified: modelsSpecified,
       statisticsMode: statisticsMode,
-      sourceModeFilter: sourceModeFilter
+      sourceModeFilter: sourceModeFilter,
+      ...(filter.autoSelectNewModels === true && Array.isArray(filter.knownModels)
+        ? { autoSelectNewModels: true, knownModels: filter.knownModels.filter(function keepKnown(model) { return typeof model === "string" && model; }).slice(0, 200) }
+        : {}),
+      ...(filter.followToday === true ? { followToday: true } : {}),
+      ...([1, 7, 31].indexOf(Number(filter.rollingDays)) !== -1 ? { rollingDays: Number(filter.rollingDays) } : {})
     };
   }
 
   function setBadgeFilter(filter) {
+    badgeFilterRevision += 1;
     badgeFilter = sanitizeBadgeFilter(filter);
+    scheduleBadgeRollover();
     return badgeFilter;
+  }
+
+  function scheduleBadgeRollover(nowDate) {
+    if (typeof chrome === "undefined" || !chrome.alarms) return;
+    if (!badgeFilter || (!badgeFilter.rollingDays && !badgeFilter.followToday)) {
+      if (typeof chrome.alarms.clear === "function") chrome.alarms.clear(DATE_ROLLOVER_ALARM_NAME);
+      return;
+    }
+    if (typeof chrome.alarms.create !== "function") return;
+    var next = nowDate ? new Date(nowDate) : new Date();
+    next.setDate(next.getDate() + 1);
+    next.setHours(0, 0, 0, 1000);
+    chrome.alarms.create(DATE_ROLLOVER_ALARM_NAME, { when: next.getTime() });
   }
 
   function badgeDateInRange(date, start, end) {
     return (!start || date >= start) && (!end || date <= end);
+  }
+
+  function badgeModelIncluded(clean, modelSet, model) {
+    if (!modelSet || modelSet[model]) return true;
+    return clean.autoSelectNewModels === true && clean.knownModels.indexOf(model) === -1;
   }
 
   function computeBadgeCountFromAnalytics(stats, clean, modelSet) {
@@ -5682,7 +5829,7 @@
             var countKey = clean.statisticsMode === "internal"
               ? (relation.requestModel || "__unknown_request_model__")
               : mappedModel;
-            if (modelSet && !modelSet[countKey]) {
+            if (!badgeModelIncluded(clean, modelSet, countKey)) {
               return;
             }
             sum += sanitizeCount(relation.count);
@@ -5701,6 +5848,12 @@
     if (!clean) { return totalCount(stats); }
     var start = clean.startDate;
     var end = clean.endDate;
+    if (clean.rollingDays) {
+      end = todayKey();
+      start = usageDates.addCalendarDays(end, 1 - clean.rollingDays);
+    } else if (clean.followToday) {
+      end = todayKey();
+    }
     if (start && end && start > end) { var swap = start; start = end; end = swap; }
     clean.startDate = start;
     clean.endDate = end;
@@ -5725,7 +5878,7 @@
       if (end && date > end) { return; }
       var dayModels = byDate[date] || {};
       Object.keys(dayModels).forEach(function eachModel(model) {
-        if (modelSet && !modelSet[model]) { return; }
+        if (!badgeModelIncluded(clean, modelSet, model)) { return; }
         sum += Number(dayModels[model]) || 0;
       });
     });
@@ -5737,9 +5890,11 @@
       if (done) { done(); }
       return;
     }
+    var revision = badgeFilterRevision;
     try {
       chrome.storage.local.get(["chatgptUsageBadgeFilter"], function applyStored(items) {
-        badgeFilter = sanitizeBadgeFilter(items && items.chatgptUsageBadgeFilter);
+        if (revision === badgeFilterRevision) badgeFilter = sanitizeBadgeFilter(items && items.chatgptUsageBadgeFilter);
+        scheduleBadgeRollover();
         if (done) { done(); }
       });
     } catch (_) {
@@ -6575,6 +6730,10 @@
     // stored catalog-proven mappings preserve themselves without a live catalog.
     chrome.storage.local.get([STORAGE_KEY], function handleGet(result) {
       var rawStats = result[STORAGE_KEY];
+      if (unsupportedStoredSchema(rawStats)) {
+        callback(null, new Error("unsupported-statistics-version"));
+        return;
+      }
       var migratedCatalog = sanitizeRuntimeModelCatalog(rawStats && rawStats.runtimeModelCatalog);
       if (migratedCatalog) {
         activeRuntimeModelCatalog = migratedCatalog;
@@ -6582,12 +6741,8 @@
         activeRuntimeModelCatalogContextKey = "";
       }
       var cleanStats = cloneStats(rawStats);
-      if (rawStats && JSON.stringify(rawStats) !== JSON.stringify(cleanStats)) {
-        chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleCleanedStats() {
-          callback(cleanStats);
-        });
-        return;
-      }
+      // Reads must not race a concurrent increment by writing a stale clone.
+      // Normalized values are persisted only by an explicit queued write.
       callback(cleanStats);
     });
   }
@@ -6595,10 +6750,16 @@
   function storageSet(stats, callback) {
     var cleanStats = cloneStats(stats);
     delete cleanStats.runtimeModelCatalog;
-    chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleSet() {
-      statusGet(function updateBadgeWithStatus(statusRecord) {
-        setBadge(cleanStats, statusRecord);
-        if (callback) callback(cleanStats);
+    chrome.storage.local.get([STORAGE_KEY], function checkExisting(result) {
+      if (unsupportedStoredSchema(result && result[STORAGE_KEY])) {
+        if (callback) callback(null, new Error("unsupported-statistics-version"));
+        return;
+      }
+      chrome.storage.local.set({ [STORAGE_KEY]: cleanStats }, function handleSet() {
+        statusGet(function updateBadgeWithStatus(statusRecord) {
+          setBadge(cleanStats, statusRecord);
+          if (callback) callback(cleanStats);
+        });
       });
     });
   }
@@ -6825,13 +6986,11 @@
   function settingsGet(callback) {
     chrome.storage.local.get([SETTINGS_KEY], function handleGet(result) {
       var storedSettings = result[SETTINGS_KEY];
-      var cleanSettings = sanitizeSettings(storedSettings);
-      if (JSON.stringify(storedSettings || {}) !== JSON.stringify(cleanSettings)) {
-        chrome.storage.local.set({ [SETTINGS_KEY]: cleanSettings }, function persistedCleanSettings() {
-          callback(cleanSettings);
-        });
+      if (unsupportedStoredSchema(storedSettings)) {
+        callback(null, new Error("unsupported-settings-version"));
         return;
       }
+      var cleanSettings = sanitizeSettings(storedSettings);
       callback(cleanSettings);
     });
   }
@@ -6846,6 +7005,12 @@
     settingsWriteBusy = true;
     var item = settingsWriteQueue.shift();
     chrome.storage.local.get([SETTINGS_KEY], function handleGet(result) {
+      if (unsupportedStoredSchema(result && result[SETTINGS_KEY])) {
+        if (item.callback) item.callback(null, new Error("unsupported-settings-version"));
+        settingsWriteBusy = false;
+        drainSettingsWriteQueue();
+        return;
+      }
       var nextSettings = mergeSettings(
         result && result[SETTINGS_KEY],
         item.settings
@@ -6877,8 +7042,8 @@
   function statusSet(statusRecord, callback) {
     var cleanRecord = sanitizeOpenAIStatusRecord(statusRecord);
     chrome.storage.local.set({ [STATUS_KEY]: cleanRecord }, function handleSet() {
-      storageGet(function updateBadge(stats) {
-        setBadge(stats, cleanRecord);
+      storageGet(function updateBadge(stats, error) {
+        if (!error) setBadge(stats, cleanRecord);
         if (callback) callback(cleanRecord);
       });
     });
@@ -6903,14 +7068,14 @@
   }
 
   function storageGetPromise() {
-    return new Promise(function resolveStorageGet(resolve) {
-      storageGet(resolve);
+    return new Promise(function resolveStorageGet(resolve, reject) {
+      storageGet(function gotStats(stats, error) { if (error) reject(error); else resolve(stats); });
     });
   }
 
   function storageSetPromise(stats) {
-    return new Promise(function resolveStorageSet(resolve) {
-      storageSet(stats, resolve);
+    return new Promise(function resolveStorageSet(resolve, reject) {
+      storageSet(stats, function savedStats(result, error) { if (error) reject(error); else resolve(result); });
     });
   }
 
@@ -8098,7 +8263,8 @@
     }
 
     if (message.type === "usage.get") {
-      storageGet(function respond(stats) {
+      storageGet(function respond(stats, error) {
+        if (error) { sendResponse({ ok: false, error: error.message }); return; }
         // 带上当前状态记录再刷角标,否则 OpenAI 异常期间打开面板会把角标的 !/? 状态徽标刷回普通数字。
         statusGet(function withStatus(record) {
           setBadge(stats, record);
@@ -8109,7 +8275,8 @@
     }
 
     if (message.type === "usage.pending.get") {
-      storageGet(function respondPending(stats) {
+      storageGet(function respondPending(stats, error) {
+        if (error) { sendResponse({ ok: false, error: error.message }); return; }
         var conversationId = sanitizeConversationId(message.conversationId);
         var events = usageEventsForConversation(stats, conversationId);
         sendResponse({
@@ -8125,14 +8292,16 @@
     }
 
     if (message.type === "settings.get") {
-      settingsGet(function respond(settings) {
+      settingsGet(function respond(settings, error) {
+        if (error) { sendResponse({ ok: false, error: error.message }); return; }
         sendResponse({ ok: true, settings: settings });
       });
       return true;
     }
 
     if (message.type === "settings.set") {
-      settingsSet(message.settings || {}, function respond(settings) {
+      settingsSet(message.settings || {}, function respond(settings, error) {
+        if (error) { sendResponse({ ok: false, error: error.message }); return; }
         sendResponse({ ok: true, settings: settings });
       });
       return true;
@@ -8214,10 +8383,14 @@
     }
 
     if (message.type === "usage.reset") {
-      var empty = createEmptyStats();
-      storageSet(empty, function respond(savedStats) {
+      var resetJob = usageIncrementQueue.catch(function ignorePreviousFailure() {}).then(function resetStats() {
+        return storageSetPromise(createEmptyStats());
+      }).then(function respond(savedStats) {
         sendResponse({ ok: true, stats: savedStats });
+      }).catch(function failed(error) {
+        sendResponse({ ok: false, error: String(error && error.message || error) });
       });
+      usageIncrementQueue = resetJob.catch(function keepQueueAlive() {});
       return true;
     }
 
@@ -8236,7 +8409,8 @@
       if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
         try { chrome.storage.local.set({ chatgptUsageBadgeFilter: badgeFilter }); } catch (_) {}
       }
-      storageGet(function withStats(stats) {
+      storageGet(function withStats(stats, error) {
+        if (error) { sendResponse({ ok: false, error: error.message }); return; }
         statusGet(function withStatus(record) {
           setBadge(stats, record);
           sendResponse({ ok: true, filter: badgeFilter });
@@ -8459,17 +8633,22 @@
     loadBadgeFilter();
     addChromeListener(chrome.runtime.onInstalled, function handleInstalled() {
       ensureStatusAlarm();
-      refreshOpenAIStatus();
-      loadBadgeFilter();
+      loadBadgeFilter(function afterBadgeFilter() { refreshOpenAIStatus(); });
     });
     addChromeListener(chrome.runtime.onStartup, function handleStartup() {
       ensureStatusAlarm();
-      refreshOpenAIStatus();
-      loadBadgeFilter();
+      loadBadgeFilter(function afterBadgeFilter() { refreshOpenAIStatus(); });
     });
     addChromeListener(chrome.alarms && chrome.alarms.onAlarm, function handleAlarm(alarm) {
       if (alarm && alarm.name === STATUS_ALARM_NAME) {
-        refreshOpenAIStatus();
+        loadBadgeFilter(function afterBadgeFilter() { refreshOpenAIStatus(); });
+      } else if (alarm && alarm.name === DATE_ROLLOVER_ALARM_NAME) {
+        loadBadgeFilter(function afterBadgeFilter() {
+          storageGet(function refreshDateBadge(stats, error) {
+            if (error) return;
+            statusGet(function withStatus(record) { setBadge(stats, record); });
+          });
+        });
       }
     });
     addChromeListener(chrome.tabs && chrome.tabs.onUpdated, function handleTabUpdated(tabId, changeInfo, tab) {
@@ -8514,10 +8693,12 @@
     badgeText: badgeText,
     computeBadgeCount: computeBadgeCount,
     setBadgeFilter: setBadgeFilter,
+    scheduleBadgeRollover: scheduleBadgeRollover,
     sanitizeBadgeFilter: sanitizeBadgeFilter,
     createDefaultSettings: createDefaultSettings,
     createEmptyStats: createEmptyStats,
     cloneStats: cloneStats,
+    rebuildStatsFromCompleteEventHistory: rebuildStatsFromCompleteEventHistory,
     createStatisticsBackup: createStatisticsBackup,
     sanitizeStatisticsBackup: sanitizeStatisticsBackup,
     statisticsBackupSummary: statisticsBackupSummary,
@@ -8561,6 +8742,7 @@
       snapshot: accountRequestCoordinatorSnapshot
     },
     todayKey: todayKey,
+    eventDateKey: eventDateKey,
     totalCount: totalCount
   };
 

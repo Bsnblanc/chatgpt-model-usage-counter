@@ -110,6 +110,14 @@ The extension records ChatGPT web submissions, model relationships, and related 
 | **User-triggered safe reads** | The extension does not scan or refresh account history in the background; index and body reads occur only when the user opens Export, refreshes it, or starts an export, with one-request concurrency, pacing, timeouts, and global backoff |
 | **Local processing** | Model statistics, conversation-list cache, backups, CSV files, and exported files are processed locally and are not uploaded to a publisher server |
 
+### Dates and existing statistics
+
+Today, Last 7 days, Last 31 days, a fixed start through today, and custom dates use the device's calendar and time zone. Rolling ranges include today. The saved range mode is shared by the dashboard and badge; a previously saved fixed end date remains fixed when upgrading.
+
+New events retain their UTC submission timestamp, the calendar day recorded at submission, its date basis, and the device time-zone identifier. A later time-zone change does not move those events to a different stored day. The statistics storage schema version (`version`) and backup format version (`formatVersion`) are separate from the extension release version. Unsupported storage or backup versions are rejected rather than rewritten.
+
+Legacy aggregate totals and daily buckets are preserved when event history is incomplete. An unmarked historical event can have an unknown date basis: older releases have used different conventions, so its timestamp alone is not enough to assign a day. Detailed views may therefore omit events with unproven dates and show an incomplete-history notice; Basic totals remain based on the stored daily buckets. A complete event history is rebuilt only when the original day for each event is recorded or established from the stored aggregates and the resulting event buckets match those aggregates. No missing events are invented. Export a Backup JSON before importing or changing extensions; import replaces statistics rather than merging them.
+
 ### Install
 
 1. Download the extension archive from [Releases](https://github.com/Bsnblanc/chatgpt-model-usage-counter/releases).

@@ -31,10 +31,10 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function utcDateKey(date = new Date()) {
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  return `${date.getUTCFullYear()}-${month}-${day}`;
+function localDateKey(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
 }
 
 class CdpPipe {
@@ -705,7 +705,7 @@ async function main() {
       })()`
     );
 
-    const e2eDate = utcDateKey();
+    const e2eDate = localDateKey();
     await evaluate(
       cdp,
       storageSessionId,

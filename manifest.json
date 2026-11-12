@@ -52,6 +52,7 @@
         "https://chat.openai.com/backend-api/*"
       ],
       "js": [
+        "src/date-utils.js",
         "src/model-catalog.js",
         "src/detector.js",
         "src/exporter.js",
