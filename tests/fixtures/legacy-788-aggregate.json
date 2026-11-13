@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "totals": {
+    "gpt-10-thinking": 4,
+    "gpt-11-thinking": 3,
+    "gpt-12-thinking": 4,
+    "gpt-13-thinking": 38,
+    "gpt-14-thinking": 734,
+    "gpt-15-thinking": 5
+  },
+  "byDate": {
+    "2024-01-01": {
+      "gpt-10-thinking": 1,
+      "gpt-14-thinking": 5
+    },
+    "2024-01-02": {
+      "gpt-10-thinking": 1,
+      "gpt-11-thinking": 3,
+      "gpt-13-thinking": 38,
+      "gpt-14-thinking": 135
+    },
+    "2024-01-03": {
+      "gpt-14-thinking": 219
+    },
+    "2024-01-04": {
+      "gpt-12-thinking": 2,
+      "gpt-14-thinking": 101,
+      "gpt-15-thinking": 5
+    },
+    "2024-01-05": {
+      "gpt-12-thinking": 2,
+      "gpt-14-thinking": 88
+    },
+    "2024-01-06": {
+      "gpt-10-thinking": 1,
+      "gpt-14-thinking": 49
+    },
+    "2024-01-07": {
+      "gpt-14-thinking": 39
+    },
+    "2024-01-08": {
+      "gpt-10-thinking": 1,
+      "gpt-14-thinking": 98
+    }
+  },
+  "retainedEventCount": 500,
+  "totalCount": 788
+}

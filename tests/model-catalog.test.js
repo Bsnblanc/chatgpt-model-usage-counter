@@ -270,21 +270,22 @@ test("catalog accepts current public labels and unknown future GPT versions", ()
   });
 });
 
-test("catalog accepts unknown versioned slugs only with explicit model-field evidence", () => {
+test("catalog keeps authoritative unknown model slugs without trusting visible text", () => {
   assert.equal(catalog.isModelSlug("aurora-7"), false);
   assert.equal(catalog.isRequestModelSlug("aurora-7"), true);
   assert.equal(catalog.resolveModelInfo("aurora-7"), null);
   assert.equal(catalog.resolveRequestModelInfo("aurora-7").label, "aurora-7");
   assert.equal(catalog.resolveModelInfo('{"model":"aurora-7"}').label, "aurora-7");
 
-  [
-    "model-v2",
-    "temperature-v2",
-    "conversation-2026",
-    "request-v3",
-    "image-generation-v4",
-    "deepsearch-v2"
-  ].forEach((value) => {
+  // Valid, explicitly supplied future model values are preserved rather than
+  // being thrown away based on names that resemble known feature families.
+  ["temperature-v2", "image-generation-v4", "deepsearch-v2"].forEach((value) => {
+    assert.equal(catalog.isRequestModelSlug(value), true, value);
+    assert.equal(catalog.isModelSlug(value), false, value);
+  });
+
+  // Generic structural or metadata fields are not model identities.
+  ["model-v2", "conversation-2026", "request-v3"].forEach((value) => {
     assert.equal(catalog.isRequestModelSlug(value), false, value);
     assert.equal(catalog.resolveRequestModelInfo(value), null, value);
   });
@@ -440,4 +441,36 @@ test("Auto is accepted only as an exact ChatGPT route and maps through the live 
   assert.equal(info.requestModel, "auto");
   assert.equal(info.mappingStatus, "mapped");
   assert.equal(info.source, "account-catalog:model-title");
+});
+
+
+test("numeric-only catalog titles never merge distinct GPT route model identities", () => {
+  const runtime = {
+    observedAt: "2026-11-13T01:00:00.000Z",
+    models: [{ slug: "gpt-6", title: "6" }],
+    versions: [],
+    categories: []
+  };
+  for (const slug of ["gpt-6", "gpt-6-thinking", "gpt-6-pro"]) {
+    const info = catalog.resolveRuntimePublicModelInfo(runtime, slug, {
+      selectedPublicModel: "6"
+    });
+    assert.equal(info.publicModel, slug);
+    assert.equal(info.requestModel, slug);
+    assert.equal(info.mappingStatus, "unmapped");
+    assert.equal(info.source, "unmapped-request-slug");
+  }
+});
+
+test("specific version display names still outrank generic numeric base titles", () => {
+  const runtime = runtimeCatalog();
+  runtime.models.push({ slug: "gpt-6", title: "6" });
+  runtime.versions.push({
+    id: "gpt-6-version",
+    slug: "gpt-6",
+    displayTextForIntelligence: "GPT-6 Thinking",
+    intelligencePresets: [{ modelSlug: "gpt-6-thinking", title: "Thinking" }]
+  });
+  const info = catalog.resolveRuntimePublicModelInfo(runtime, "gpt-6-thinking");
+  assert.equal(info.publicModel, "GPT-6 Thinking");
 });

@@ -22,6 +22,7 @@ test("manifest is MV3 and targets ChatGPT hosts", () => {
     "https://chat.openai.com/backend-api/*"
   ]);
   assert.deepEqual(manifest.content_scripts[0].js, [
+    "src/date-utils.js",
     "src/model-catalog.js",
     "src/detector.js",
     "src/exporter.js",

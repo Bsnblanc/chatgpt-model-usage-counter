@@ -5,6 +5,260 @@ const test = require("node:test");
 const vm = require("node:vm");
 const background = require("../src/background");
 
+test("unknown legacy event days are not guessed as UTC", () => {
+  const event = { submittedAt: "2026-11-10T15:01:00.000Z" };
+  assert.equal(background.eventDateKey(event), "");
+  assert.equal(background.eventDateKey({ ...event, dateKeyBasis: "utc" }), "2026-11-10");
+  assert.equal(background.eventDateKey({ ...event, dateKeyBasis: "local" }), "");
+  assert.equal(background.eventDateKey({ ...event, dateKeyBasis: "local", recordedDateKey: "2026-11-11" }), "2026-11-11");
+});
+
+test("legacy model correction uses a proven day and leaves ambiguous daily counts untouched", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "Asia/Tokyo";
+  const add = (stats, id, submittedAt) => background.applyIncrement(stats, {
+    submissionId: id, model: "gpt-5-thinking", requestModel: "gpt-5-thinking",
+    apiModel: "gpt-5-thinking", modelObservedSource: "webRequest",
+    modelParameters: { model: "gpt-5-thinking" }, submittedAt,
+    pageUrl: `https://chatgpt.com/c/${id}`
+  }, new Date(submittedAt));
+  const observe = (stats, id) => background.applyResponseObservation(stats, {
+    submissionId: id, responseModel: "gpt-5-pro", observedSource: "message-dom:model-slug",
+    observedAt: "2026-11-10T15:02:00.000Z"
+  }, new Date("2026-11-10T15:02:00.000Z"));
+  const forgetDay = stats => {
+    stats.eventHistoryComplete = false;
+    for (const event of stats.events) {
+      delete event.recordedDateKey;
+      delete event.dateTimeZone;
+      event.dateKeyBasis = "";
+    }
+    return stats;
+  };
+  try {
+    const single = forgetDay(add(background.createEmptyStats(), "one", "2026-11-10T15:01:00.000Z"));
+    const corrected = observe(single, "one");
+    assert.equal(background.totalCount(corrected), 1);
+    assert.equal(corrected.byDate["2026-11-11"]["gpt-5-pro"], 1);
+    assert.equal(corrected.byDate["2026-11-10"], undefined);
+    assert.equal(corrected.analyticsDateBasisUncertain, true);
+    const repeated = observe(corrected, "one");
+    assert.deepEqual(repeated.byDate, corrected.byDate);
+    assert.equal(background.totalCount(repeated), 1);
+
+    let ambiguous = add(background.createEmptyStats(), "first", "2026-11-10T14:30:00.000Z");
+    ambiguous = forgetDay(add(ambiguous, "second", "2026-11-10T15:01:00.000Z"));
+    const before = JSON.parse(JSON.stringify(ambiguous.byDate));
+    const untouched = observe(ambiguous, "second");
+    assert.deepEqual(untouched.byDate, before);
+    assert.equal(background.totalCount(untouched), 2);
+    assert.equal(untouched.analyticsHistoryComplete, false);
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});
+
+test("complete legacy events rebuild only when original day buckets prove their dates", () => {
+  const model = "gpt-5-thinking";
+  const events = Array.from({ length: 20 }, (_, i) => ({
+    model, apiModel: model, requestModel: model,
+    modelObservedSource: "fetch-request", modelParameters: { model },
+    submittedAt: `2026-11-10T15:${String(i).padStart(2, "0")}:00.000Z`
+  }));
+  const stats = {
+    version: 1, totals: { [model]: 20 },
+    byDate: { "2026-11-11": { [model]: 20 } },
+    models: {}, events, eventHistoryComplete: true
+  };
+  const rebuilt = background.rebuildStatsFromCompleteEventHistory(stats, true);
+  assert.ok(rebuilt);
+  assert.equal(rebuilt.byDate["2026-11-11"][model], 20);
+  assert.equal(rebuilt.byDate["2026-11-10"], undefined);
+  const ambiguous = { ...stats, byDate: { "2026-11-10": { [model]: 10 }, "2026-11-11": { [model]: 10 } } };
+  assert.equal(background.rebuildStatsFromCompleteEventHistory(ambiguous, true), null);
+  assert.deepEqual(background.cloneStats(ambiguous).byDate, ambiguous.byDate);
+});
+
+test("mixed explicit UTC and recorded local events keep their buckets after a time-zone change", () => {
+  const previous = process.env.TZ;
+  const model = "gpt-5-thinking";
+  try {
+    process.env.TZ = "America/Los_Angeles";
+    const common = { model, requestModel: model, apiModel: model, modelObservedSource: "webRequest", modelParameters: { model }, submittedAt: "2026-11-10T15:01:00.000Z" };
+    const stats = {
+      version: 1, totals: { [model]: 2 }, models: {},
+      byDate: { "2026-11-10": { [model]: 1 }, "2026-11-11": { [model]: 1 } },
+      events: [
+        { ...common, dateKeyBasis: "utc" },
+        { ...common, dateKeyBasis: "local", recordedDateKey: "2026-11-11", dateTimeZone: "Asia/Tokyo" }
+      ], eventHistoryComplete: true
+    };
+    const rebuilt = background.rebuildStatsFromCompleteEventHistory(stats, true);
+    assert.ok(rebuilt);
+    assert.deepEqual(rebuilt.byDate, stats.byDate);
+    const again = background.rebuildStatsFromCompleteEventHistory(rebuilt, true);
+    assert.ok(again);
+    assert.deepEqual(again.byDate, stats.byDate);
+    assert.equal(background.totalCount(again), 2);
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});
+
+test("anonymized incomplete legacy history retains its 788 counts and daily buckets through backup round trips", () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures/legacy-788-aggregate.json"), "utf8"));
+  const events = [];
+  for (const [day, models] of Object.entries(fixture.byDate)) {
+    for (const [model, count] of Object.entries(models)) {
+      for (let i = 0; i < count && events.length < fixture.retainedEventCount; i++) {
+        events.push({ model, apiModel: model, modelObservedSource: "fetch-request", submittedAt: `${day}T12:00:00.000Z` });
+      }
+    }
+  }
+  const stats = { version: 1, totals: fixture.totals, byDate: fixture.byDate, events };
+  const first = background.createStatisticsBackup(stats);
+  const second = background.sanitizeStatisticsBackup(first);
+  assert.equal(background.totalCount(second.statistics), 788);
+  assert.deepEqual(second.statistics.byDate, fixture.byDate);
+  assert.equal(second.statistics.events.length, 500);
+  assert.equal(second.statistics.analyticsHistoryComplete, false);
+  assert.equal(second.statistics.analyticsDateBasisUncertain, true);
+  assert.deepEqual(second.statistics.analyticsByDate, {});
+  assert.deepEqual(background.sanitizeStatisticsBackup(second).statistics.byDate, fixture.byDate);
+  assert.deepEqual(background.cloneStats(background.cloneStats(stats)), background.cloneStats(stats));
+});
+
+test("new event retains its recorded calendar day after device time zone changes", () => {
+  const previous = process.env.TZ;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    const instant = new Date("2026-11-10T15:01:00.000Z");
+    const result = background.applyIncrement(background.createEmptyStats(), {
+      model: "gpt-5-thinking", modelObservedSource: "fetch-request",
+      modelParameters: { model: "gpt-5-thinking" }, source: "send-button",
+      submittedAt: instant.toISOString()
+    }, instant);
+    assert.equal(result.events[0].recordedDateKey, "2026-11-11");
+    assert.equal(result.events[0].dateTimeZone, "Asia/Tokyo");
+    process.env.TZ = "America/Los_Angeles";
+    const roundtrip = background.cloneStats(result);
+    assert.equal(roundtrip.events[0].recordedDateKey, "2026-11-11");
+    assert.equal(roundtrip.byDate["2026-11-11"]["gpt-5-thinking"], 1);
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});
+
+test("new records use the device calendar in Tokyo, Los Angeles and Berlin", () => {
+  const previous = process.env.TZ;
+  const cases = [
+    ["Asia/Tokyo", "2026-03-28T15:01:00.000Z", "2026-03-29"],
+    ["America/Los_Angeles", "2026-03-29T06:59:00.000Z", "2026-03-28"],
+    ["Europe/Berlin", "2026-03-28T23:01:00.000Z", "2026-03-29"]
+  ];
+  try {
+    for (const [zone, instant, expected] of cases) {
+      process.env.TZ = zone;
+      const result = background.applyIncrement(background.createEmptyStats(), {
+        model: "gpt-5-thinking", modelObservedSource: "fetch-request",
+        modelParameters: { model: "gpt-5-thinking" }, submittedAt: instant
+      }, new Date(instant));
+      assert.equal(result.events[0].recordedDateKey, expected, zone);
+      assert.equal(result.events[0].dateTimeZone, zone);
+      assert.equal(result.byDate[expected]["gpt-5-thinking"], 1);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});
+
+test("rolling date presets persist and badge counts use the current local day", () => {
+  const key = offset => {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  };
+  const stats = { totals: { sample: 15 }, byDate: {
+    [key(0)]: { sample: 1 }, [key(-6)]: { sample: 2 },
+    [key(-30)]: { sample: 4 }, [key(-31)]: { sample: 8 }
+  } };
+  for (const [days, expected] of [[1, 1], [7, 3], [31, 7]]) {
+    assert.equal(background.mergeSettings({}, { rollingDays: days }).rollingDays, days);
+    assert.equal(background.computeBadgeCount(stats, { rollingDays: days }), expected);
+  }
+  assert.equal(background.mergeSettings({ rollingDays: 7 }, { rollingDays: 0 }).rollingDays, undefined);
+  for (const mode of ["today", "last7", "last31", "throughToday", "custom"]) {
+    assert.equal(background.mergeSettings({}, { dateRangeMode: mode }).dateRangeMode, mode);
+  }
+  assert.equal(background.mergeSettings({}, { dateRangeMode: "invalid" }).dateRangeMode, undefined);
+});
+
+test("badge rollover schedules the next local midnight across daylight saving", () => {
+  const previousTZ = process.env.TZ;
+  const previousChrome = globalThis.chrome;
+  const calls = [];
+  globalThis.chrome = { alarms: { create(name, options) { calls.push({ name, ...options }); }, clear() {} } };
+  try {
+    process.env.TZ = "America/Los_Angeles";
+    background.setBadgeFilter({ rollingDays: 1 });
+    background.scheduleBadgeRollover(new Date("2026-03-08T08:30:00.000Z"));
+    assert.equal(new Date(calls.at(-1).when).toISOString(), "2026-03-09T07:00:01.000Z");
+  } finally {
+    background.setBadgeFilter(null);
+    if (previousChrome === undefined) delete globalThis.chrome; else globalThis.chrome = previousChrome;
+    if (previousTZ === undefined) delete process.env.TZ; else process.env.TZ = previousTZ;
+  }
+});
+
+test("fired local-midnight alarm refreshes the badge after a sleeping service worker wakes", async () => {
+  const previous = process.env.TZ;
+  let clock = Date.parse("2026-11-11T14:59:00.000Z"); // Tokyo 23:59
+  class MutableDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [clock])); }
+    static now() { return clock; }
+  }
+  const model = "gpt-5-thinking";
+  const statistics = {
+    version: 1,
+    totals: { [model]: 3 },
+    byDate: { "2026-11-11": { [model]: 1 }, "2026-11-12": { [model]: 2 } },
+    models: {}, events: [], eventHistoryComplete: false
+  };
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    const harness = createBackgroundProtocolHarness({
+      Date: MutableDate,
+      initialStorage: { [background.STORAGE_KEY]: statistics }
+    });
+    const setResult = await harness.send({
+      type: "badge.setFilter",
+      filter: { rollingDays: 1, followToday: true, models: [model], modelsSpecified: true }
+    });
+    assert.equal(setResult.ok, true);
+    assert.equal(harness.badgeTexts.at(-1), "1");
+    assert.equal(harness.alarmsCreated.at(-1).name, "chatgpt-model-usage-date-rollover");
+    assert.equal(harness.alarmsCreated.at(-1).info.when, Date.parse("2026-11-11T15:00:01.000Z"));
+
+    // Simulate Chrome suspending the worker across midnight, then waking it on
+    // the persisted alarm. No polling timer or live dashboard is required.
+    clock = Date.parse("2026-11-11T15:01:00.000Z"); // Tokyo 00:01
+    await harness.fireAlarm("chatgpt-model-usage-date-rollover");
+    assert.equal(harness.badgeTexts.at(-1), "2");
+    assert.equal(harness.alarmsCreated.at(-1).info.when, Date.parse("2026-11-12T15:00:01.000Z"));
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});
+
+test("badge includes newly observed models but honors explicitly hidden known models", () => {
+  const day = background.todayKey();
+  const stats = { totals: { a: 1, b: 2, c: 3 }, byDate: { [day]: { a: 1, b: 2, c: 3 } } };
+  const common = { startDate: day, endDate: day, modelsSpecified: true };
+  assert.equal(background.computeBadgeCount(stats, { ...common, models: ["a"], knownModels: ["a", "b"], autoSelectNewModels: true }), 4);
+  assert.equal(background.computeBadgeCount(stats, { ...common, models: [], knownModels: [], autoSelectNewModels: true }), 6);
+  assert.equal(background.computeBadgeCount(stats, { ...common, models: [] }), 0);
+});
+
 const TEST_CATALOG_ACCOUNT_KEY = "acct-aaaaaaaaaaaaaaaa";
 const TEST_CATALOG_CONTEXT_KEY = "ctx-1111111111111111";
 function runtimeModelCatalog() {
@@ -668,7 +922,7 @@ test("history normalization removes legacy Project GPTs without deleting custom 
   assert.equal(normalized.featuresByModel[normalizedCustom.model].features.gpts.count, 1);
 });
 
-test("incomplete history subtracts only known Project GPTs and preserves custom GPT plus untracked aggregate usage", () => {
+test("incomplete history keeps stored feature aggregates and normalization is idempotent", () => {
   const model = "future-family-2029-thinking";
   const submittedAt = "2026-08-23T12:07:00.000Z";
   const event = (submissionId, pageUrl) => ({
@@ -749,10 +1003,11 @@ test("incomplete history subtracts only known Project GPTs and preserves custom 
   assert.equal(normalized.eventHistoryComplete, false);
   assert.deepEqual(normalizedProject.usageFeatures, []);
   assert.deepEqual(normalizedCustom.usageFeatures, ["gpts"]);
-  assert.equal(normalized.featuresByModel[model].features.gpts.count, 2);
-  assert.equal(normalized.featuresByModel[model].total, 2);
+  assert.equal(normalized.featuresByModel[model].features.gpts.count, 3);
+  assert.equal(normalized.featuresByModel[model].total, 3);
   assert.equal(relation.count, 3);
-  assert.equal(relation.features.gpts, 2);
+  assert.equal(relation.features.gpts, 3);
+  assert.deepEqual(background.cloneStats(normalized).featuresByModel, normalized.featuresByModel);
 });
 
 test("a pending new chat keeps one temporary conversation contribution until the final response supplies its real id", () => {
@@ -1158,7 +1413,7 @@ test("late response reconciliation moves one existing count without incrementing
 
   assert.equal(background.totalCount(reconciled), 1);
   assert.deepEqual(reconciled.totals, { "GPT-5.6 Sol": 1 });
-  assert.deepEqual(reconciled.byDate["2026-08-22"], { "GPT-5.6 Sol": 1 });
+  assert.deepEqual(reconciled.byDate[background.todayKey(new Date(submittedAt))], { "GPT-5.6 Sol": 1 });
   assert.equal(reconciled.events.length, 1);
   assert.equal(reconciled.events[0].submissionId, "late-response");
   assert.equal(reconciled.events[0].requestModel, "gpt-5-6-mini");
@@ -1497,7 +1752,7 @@ test("late response reconciliation updates the tracked event even when older eve
     new Date(submittedAt)
   );
   partial.totals["GPT-5.6 Luna"] += 1;
-  partial.byDate["2026-08-22"]["GPT-5.6 Luna"] += 1;
+  partial.byDate[background.todayKey(new Date(submittedAt))]["GPT-5.6 Luna"] += 1;
   partial.sessionsByModel["GPT-5.6 Luna"]["partial-history"].count += 1;
   partial.sessionsByModel["GPT-5.6 Luna"]["partial-history"].models["GPT-5.6 Luna"] += 1;
   // The missing older event already had a confirmed response. The tracked
@@ -1536,7 +1791,7 @@ test("late response reconciliation updates the tracked event even when older eve
 
   assert.equal(background.totalCount(reconciled), 2);
   assert.deepEqual(reconciled.totals, { "GPT-5.6 Luna": 1, "GPT-5.6 Sol": 1 });
-  assert.deepEqual(reconciled.byDate["2026-08-22"], { "GPT-5.6 Luna": 1, "GPT-5.6 Sol": 1 });
+  assert.deepEqual(reconciled.byDate[background.todayKey(new Date(submittedAt))], { "GPT-5.6 Luna": 1, "GPT-5.6 Sol": 1 });
   assert.equal(reconciled.events.length, 1);
   assert.equal(reconciled.events[0].model, "GPT-5.6 Sol");
   assert.equal(reconciled.variantsByModel["GPT-5.6 Luna"].variants["gpt-5-6-mini"].count, 1);
@@ -2000,7 +2255,7 @@ test("publishing the live catalog rebuilds stale variant and request-parameter d
   });
 });
 
-test("catalog rebuild drops unmatched small legacy aggregates and keeps auditable events", () => {
+test("catalog rebuild retains unmatched legacy aggregates even when completeness was incorrectly marked", () => {
   const catalog = runtimeModelCatalog();
   const submittedAt = new Date("2026-08-22T17:00:00.000Z");
   const existing = background.applyIncrement(
@@ -2033,10 +2288,8 @@ test("catalog rebuild drops unmatched small legacy aggregates and keeps auditabl
   );
 
   existing.totals["GPT-5.6 Sol"] += 1;
-  existing.byDate["2026-08-22"]["GPT-5.6 Sol"] += 1;
-  // Only a ledger explicitly known to be complete may discard an aggregate
-  // that has no matching event. Legacy stores without this marker can contain
-  // older aggregate-only history and must preserve it.
+  existing.byDate[background.todayKey(submittedAt)]["GPT-5.6 Sol"] += 1;
+  // A completeness marker cannot make a missing event recoverable.
   existing.eventHistoryComplete = true;
 
   const rebuilt = background.applyIncrement(
@@ -2049,16 +2302,16 @@ test("catalog rebuild drops unmatched small legacy aggregates and keeps auditabl
     submittedAt
   );
 
-  assert.equal(background.totalCount(rebuilt), 1);
-  assert.equal(rebuilt.totals["GPT-5.6 Sol"], 1);
+  assert.equal(background.totalCount(rebuilt), 2);
+  assert.equal(rebuilt.totals["GPT-5.6 Sol"], 2);
   assert.equal(rebuilt.events.length, 1);
   assert.equal(rebuilt.events[0].submissionId, "auditable-small-history");
   assert.equal(rebuilt.events[0].promptHash, undefined);
   assert.equal(rebuilt.events[0].promptLength, undefined);
-  assert.equal(rebuilt.eventHistoryComplete, true);
+  assert.equal(rebuilt.eventHistoryComplete, false);
 });
 
-test("catalog rebuild removes legacy pending events whose request model came only from DOM text", () => {
+test("catalog rebuild preserves counts when legacy DOM evidence cannot prove a safe remap", () => {
   const existing = background.createEmptyStats();
   existing.totals["GPT-5.6 Sol"] = 1;
   existing.totals["gpt-5.6-sol"] = 1;
@@ -2114,13 +2367,11 @@ test("catalog rebuild removes legacy pending events whose request model came onl
     TEST_CATALOG_CONTEXT_KEY
   );
 
-  assert.deepEqual(rebuilt.totals, { "gpt-5-6-thinking": 1 });
-  assert.equal(rebuilt.events.length, 1);
-  assert.equal(rebuilt.events[0].submissionId, "auditable-request-response");
-  assert.equal(
-    rebuilt.relationsByModel["gpt-5-6-thinking"]["gpt-5-6-thinking\u0001gpt-5-6-thinking"].count,
-    1
-  );
+  assert.equal(background.totalCount(rebuilt), 2);
+  assert.equal(Object.values(rebuilt.byDate["2026-08-22"]).reduce((sum, count) => sum + count, 0), 2);
+  assert.equal(rebuilt.events.length, 2);
+  assert.equal(rebuilt.events.some((event) => event.submissionId === "legacy-dom-only"), true);
+  assert.equal(rebuilt.events.some((event) => event.submissionId === "auditable-request-response"), true);
 });
 
 test("catalog rebuild preserves an exact legacy response while marking an unproven request unavailable", () => {
@@ -2486,7 +2737,7 @@ test("applyIncrement refuses unknown and ambiguous GPT family records", () => {
     "voice-v2"
   ];
 
-  invalidModels.forEach((model) => {
+  invalidModels.forEach((model, index) => {
     const next = background.applyIncrement(
       background.createEmptyStats(),
       {
@@ -2623,7 +2874,7 @@ test("applyIncrement normalizes stored public dotted GPT labels across every agg
   assert.equal(next.totals["future-family-2026-thinking"], 2);
 });
 
-test("applyIncrement migrates public historical labels through exact request metadata", () => {
+test("applyIncrement corrects exact legacy model labels without changing their stored day", () => {
   const now = new Date("2026-05-23T12:00:00.000Z");
   const invalidModels = ["GPT-5.5", "gpt-5.5", "Unknown model", "gptLastUsedModel"];
   const existingStats = background.createEmptyStats();
@@ -2687,24 +2938,21 @@ test("applyIncrement migrates public historical labels through exact request met
     now
   );
 
-  invalidModels.forEach((model) => {
-    assert.equal(next.totals[model], undefined, model);
-    assert.equal(next.models[model], undefined, model);
-    assert.equal(next.parametersByModel[model], undefined, model);
-    assert.equal(next.variantsByModel[model], undefined, model);
-    assert.equal(next.featuresByModel[model], undefined, model);
-    assert.equal(next.sessionsByModel[model], undefined, model);
-    assert.equal(next.events.some((event) => event.model === model), false, model);
-    assert.equal(JSON.stringify(next).includes(model), false, model);
-  });
+  assert.equal(next.totals["gpt-5.5"], undefined);
+  assert.equal(next.totals["GPT-5.5"], undefined);
   assert.equal(next.totals["gpt-5-thinking"], 4);
+  assert.equal(next.byDate["2026-05-22"]["gpt-5-thinking"], 3);
+  assert.equal(next.totals["Unknown model"], 3);
+  assert.equal(next.byDate["2026-05-22"]["Unknown model"], 3);
+  assert.equal(next.totals.gptLastUsedModel, 4);
+  assert.equal(next.byDate["2026-05-22"].gptLastUsedModel, 4);
   assert.equal(next.totals.thinking, undefined);
   assert.equal(next.events[0].model, "gpt-5-thinking");
   assert.equal(next.events[0].modelParameters.model, "gpt-5-thinking");
-  assert.equal(next.events.length, 3);
+  assert.equal(next.events.length, 5);
 });
 
-test("applyIncrement removes feature-only model keys from stored aggregates", () => {
+test("applyIncrement preserves incomplete feature-like aggregates without subtracting counts", () => {
   const now = new Date("2026-05-23T12:00:00.000Z");
   const existingStats = {
     version: 1,
@@ -2891,30 +3139,20 @@ test("applyIncrement removes feature-only model keys from stored aggregates", ()
     now
   );
 
-  assert.equal(next.totals["agent-mode"], undefined);
-  assert.equal(next.totals.deep_research, undefined);
-  assert.equal(next.totals["canvas-v2"], undefined);
-  assert.equal(next.byDate["2026-05-23"]["agent-mode"], undefined);
-  assert.equal(next.byDate["2026-05-23"]["canvas-v2"], undefined);
-  assert.equal(next.models["agent-mode"], undefined);
-  assert.equal(next.models["canvas-v2"], undefined);
-  assert.equal(next.sessionsByModel["agent-mode"], undefined);
-  assert.equal(next.sessionsByModel["canvas-v2"], undefined);
-  assert.equal(next.parametersByModel["agent-mode"], undefined);
-  assert.equal(next.parametersByModel["canvas-v2"], undefined);
-  assert.equal(next.variantsByModel["agent-mode"], undefined);
-  assert.equal(next.variantsByModel["canvas-v2"], undefined);
-  assert.equal(next.featuresByModel["agent-mode"], undefined);
-  assert.equal(next.featuresByModel["canvas-v2"], undefined);
-  assert.equal(next.events.some((event) => event.model === "agent-mode"), false);
-  assert.equal(next.events.some((event) => event.model === "canvas-v2"), false);
+  assert.equal(next.totals["agent-mode"], 3);
+  assert.equal(next.totals.deep_research, 2);
+  assert.equal(next.totals["canvas-v2"], 4);
+  assert.equal(next.byDate["2026-05-23"]["agent-mode"], 3);
+  assert.equal(next.byDate["2026-05-23"]["canvas-v2"], 4);
+  assert.equal(next.events.some((event) => event.model === "agent-mode"), true);
+  assert.equal(next.events.some((event) => event.model === "canvas-v2"), true);
 
   assert.equal(next.totals["future-family-2026-thinking"], 2);
-  assert.equal(next.events.length, 2);
+  assert.equal(next.events.length, 4);
   assert.equal(next.featuresByModel["future-family-2026-thinking"].features.agent_mode.count, 2);
 });
 
-test("applyIncrement removes legacy ordinary UI labels that have no model evidence", () => {
+test("applyIncrement preserves incomplete legacy totals even when model labels look like UI text", () => {
   const now = new Date("2026-08-22T12:00:00.000Z");
   const existing = background.createEmptyStats();
   existing.totals.Share = 4;
@@ -2940,11 +3178,9 @@ test("applyIncrement removes legacy ordinary UI labels that have no model eviden
     now
   );
 
-  assert.equal(next.totals.Share, undefined);
-  assert.equal(next.totals["New chat"], undefined);
-  assert.equal(next.models.Share, undefined);
-  assert.equal(next.models["New chat"], undefined);
-  assert.equal(next.events.some((event) => event.model === "Share" || event.model === "New chat"), false);
+  assert.equal(next.totals.Share, 4);
+  assert.equal(next.totals["New chat"], 3);
+  assert.deepEqual(next.byDate["2026-08-21"], { Share: 4, "New chat": 3 });
   assert.equal(next.totals["gpt-5.6-sol"], 1);
 });
 
@@ -4099,8 +4335,8 @@ test("applyIncrement migrates and cleans stored parameter aggregates", () => {
 
   assert.equal(next.parametersByModel["Unknown model"], undefined);
   assert.equal(next.parametersByModel.unknown, undefined);
-  assert.equal(next.events.some((event) => event.model === "Unknown model"), false);
-  assert.equal(next.events.some((event) => event.model === "unknown"), false);
+  assert.equal(next.events.some((event) => event.model === "Unknown model"), true);
+  assert.equal(next.events.some((event) => event.model === "unknown"), true);
   assert.equal(aggregate.total, 3);
   assert.equal(combinations.length, 2);
   assert.equal(lowCombination.count, 2);
@@ -4687,7 +4923,7 @@ test("webRequest observations accept a future versioned model family from the ex
   assert.equal(observed.model, "aurora-7");
   assert.equal(observed.modelParameters.model, "aurora-7");
 
-  const rejected = background.observeNetworkRequest(
+  const futureFamily = background.observeNetworkRequest(
     {
       tabId: 119,
       url: "https://chatgpt.com/backend-api/f/conversation",
@@ -4697,7 +4933,22 @@ test("webRequest observations accept a future versioned model family from the ex
     },
     now
   );
-  assert.equal(rejected, null);
+  assert.ok(futureFamily);
+  assert.equal(futureFamily.model, "temperature-v2");
+
+  // A parameter value alone is not enough to introduce a model identity.
+  const noModelField = background.observeNetworkRequest(
+    {
+      tabId: 120,
+      url: "https://chatgpt.com/backend-api/f/conversation",
+      requestBody: { raw: [{ bytes: Buffer.from(JSON.stringify({
+        temperature: "temperature-v2",
+        feature: "code-interpreter-v2"
+      }), "utf8") }] }
+    },
+    now
+  );
+  assert.equal(noModelField, null);
 });
 
 test("webRequest observations are consumed once per tab", () => {
@@ -4965,6 +5216,8 @@ test("webRequest ignores model-bearing writes outside conversation submission en
 });
 
 test("applyIncrement stores daily counts using submittedAt date", () => {
+  const submittedAt = "2026-05-23T23:59:59.000Z";
+  const localDate = background.todayKey(new Date(submittedAt));
   const next = background.applyIncrement(
     background.createEmptyStats(),
     {
@@ -4972,15 +5225,31 @@ test("applyIncrement stores daily counts using submittedAt date", () => {
       modelObservedSource: "fetch-response",
       modelParameters: { model: "gpt-4o" },
       source: "send-button",
-      submittedAt: "2026-05-23T23:59:59.000Z",
+      submittedAt,
       promptHash: "date123",
       promptLength: 12
     },
     new Date("2026-05-24T00:00:10.000Z")
   );
 
-  assert.equal(next.byDate["2026-05-23"]["gpt-4o"], 1);
-  assert.equal(next.byDate["2026-05-24"], undefined);
+  assert.equal(next.byDate[localDate]["gpt-4o"], 1);
+  assert.equal(next.events.at(-1).dateKeyBasis, "local");
+  const restored = background.cloneStats(next);
+  assert.equal(restored.byDate[localDate]["gpt-4o"], 1);
+  assert.equal(restored.events.at(-1).dateKeyBasis, "local");
+});
+
+test("legacy daily aggregates keep their original keys without timestamp evidence", () => {
+  const model = "gpt-5-6";
+  const oldKey = "2026-05-23";
+  const clean = background.cloneStats({
+    totals: { [model]: 4 },
+    byDate: { [oldKey]: { [model]: 4 } },
+    models: { [model]: { publicModel: "GPT-5.6 Sol", apiModel: "gpt-5-6" } },
+    events: [],
+  });
+  assert.deepEqual(clean.byDate, { [oldKey]: { [model]: 4 } });
+  assert.equal(Object.values(clean.byDate).flatMap(Object.values).reduce((a, b) => a + b, 0), 4);
 });
 
 test("an archived event beyond the 500-item detail limit keeps reversible idempotent late-response contributions", () => {
@@ -5277,6 +5546,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["text", "line", "text", "invalid"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -5298,6 +5568,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["text", "line", "donut"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -5332,6 +5603,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
@@ -5355,6 +5627,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
@@ -5393,15 +5666,17 @@ test("sanitizeSettings cleans and bounds mapped and internal model visibility in
   assert.equal(sanitized.internalModelSelectionInitialized, false);
 });
 
-test("sanitizeSettings clamps stored future dates to the current UTC calendar day", () => {
+test("sanitizeSettings clamps stored future dates to the current local calendar day", () => {
   const today = background.todayKey();
   const tomorrowDate = new Date();
-  tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1);
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
   const tomorrow = background.todayKey(tomorrowDate);
 
+  const example = new Date("2026-08-24T00:30:00.000Z");
+  const expectedExample = [example.getFullYear(), String(example.getMonth() + 1).padStart(2, "0"), String(example.getDate()).padStart(2, "0")].join("-");
   assert.equal(
-    background.todayKey(new Date("2026-08-24T00:30:00.000Z")),
-    "2026-08-24",
+    background.todayKey(example),
+    expectedExample,
   );
   assert.equal(background.dateSettingNoLaterThanToday(tomorrow), today);
   assert.deepEqual(background.sanitizeSettings({
@@ -5422,6 +5697,7 @@ test("sanitizeSettings clamps stored future dates to the current UTC calendar da
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
@@ -5447,6 +5723,7 @@ test("mergeSettings updates one shared UI preference without resetting the other
     showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["donut", "text", "line"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -5470,6 +5747,7 @@ test("mergeSettings updates one shared UI preference without resetting the other
     showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["donut", "text", "line"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -6063,6 +6341,7 @@ test("project directory message uses MAIN-world executeScript without storage, n
   };
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
 
+  context.ChatGPTUsageDates = require("../src/date-utils");
   vm.createContext(context);
   vm.runInContext(script, context);
   const messageListener = listeners.find((entry) => entry[0] === "message")[1];
@@ -6153,6 +6432,7 @@ test("service worker script registers available chrome events without requiring 
   };
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
 
+  context.ChatGPTUsageDates = require("../src/date-utils");
   vm.createContext(context);
   assert.doesNotThrow(() => vm.runInContext(script, context));
   assert.equal(listeners.length, 3);
@@ -6270,6 +6550,7 @@ test("service worker wake after extension update preserves the last catalog-prov
   };
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
 
+  context.ChatGPTUsageDates = require("../src/date-utils");
   vm.createContext(context);
   assert.doesNotThrow(() => vm.runInContext(script, context));
   const messageListener = listeners.find((entry) => entry[0] === "message")[1];
@@ -6290,6 +6571,9 @@ test("runtime reinjection loads the same complete content-script stack as the ma
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
   assert.deepEqual(background.ISOLATED_CONTENT_SCRIPT_FILES, manifest.content_scripts[0].js);
   assert.ok(background.ISOLATED_CONTENT_SCRIPT_FILES.includes("src/conversation-source.js"));
+  background.ISOLATED_CONTENT_SCRIPT_FILES.forEach((file) => {
+    assert.ok(fs.existsSync(path.join(__dirname, "..", file)), `Reinjection file is missing: ${file}`);
+  });
 });
 
 test("status alarm stores latest OpenAI status while preserving the numeric toolbar count", async () => {
@@ -6385,6 +6669,7 @@ test("status alarm stores latest OpenAI status while preserving the numeric tool
   };
   const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
 
+  context.ChatGPTUsageDates = require("../src/date-utils");
   vm.createContext(context);
   assert.doesNotThrow(() => vm.runInContext(script, context));
   const alarmListener = listeners.find((entry) => entry[0] === "alarm")[1];
@@ -6464,6 +6749,7 @@ test("usage.increment message path dedupes root submissions across webRequest an
     submittedAt: "2026-06-01T17:35:28.583Z"
   });
 
+  context.ChatGPTUsageDates = require("../src/date-utils");
   vm.createContext(context);
   assert.doesNotThrow(() => vm.runInContext(script, context));
   const messageListener = listeners.find((entry) => entry[0] === "message")[1];
@@ -6546,6 +6832,9 @@ function createBackgroundProtocolHarness(options = {}) {
   const storageState = cloneProtocolValue(options.initialStorage || {});
   const storageOperations = [];
   const messageListeners = [];
+  const alarmListeners = [];
+  const alarmsCreated = [];
+  const badgeTexts = [];
   const downloadChangedListeners = new Set();
   const pendingDownloadStarts = [];
   const downloadItems = new Map();
@@ -6655,13 +6944,14 @@ function createBackgroundProtocolHarness(options = {}) {
       },
       downloads,
       alarms: {
-        create: () => {},
-        onAlarm: { addListener: () => {} }
+        create: (name, info) => alarmsCreated.push({ name, info: cloneProtocolValue(info) }),
+        clear: () => {},
+        onAlarm: { addListener: (listener) => alarmListeners.push(listener) }
       },
       action: {
         setBadgeBackgroundColor: () => {},
         setBadgeTextColor: () => {},
-        setBadgeText: () => {},
+        setBadgeText: (payload) => badgeTexts.push(payload.text),
         setTitle: () => {},
         setIcon: () => Promise.resolve()
       },
@@ -6680,7 +6970,7 @@ function createBackgroundProtocolHarness(options = {}) {
       }
     },
     console,
-    Date,
+    Date: options.Date || Date,
     Math,
     Number,
     Object,
@@ -6691,8 +6981,10 @@ function createBackgroundProtocolHarness(options = {}) {
     setTimeout,
     clearTimeout
   };
-  const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
+  const dateScript = fs.readFileSync(path.join(__dirname, "..", "src", "date-utils.js"), "utf8");
   vm.createContext(context);
+  vm.runInContext(dateScript, context);
+  const script = fs.readFileSync(path.join(__dirname, "..", "src", "background.js"), "utf8");
   vm.runInContext(script, context);
   assert.equal(messageListeners.length, 1, "background registers one runtime message listener");
   storageOperations.length = 0;
@@ -6708,6 +7000,12 @@ function createBackgroundProtocolHarness(options = {}) {
 
   function send(message) {
     return new Promise((resolve) => dispatch(message, resolve));
+  }
+
+  async function fireAlarm(name) {
+    alarmListeners.forEach((listener) => listener({ name }));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
   }
 
   function startNextDownload(downloadId, state = "in_progress") {
@@ -6733,6 +7031,9 @@ function createBackgroundProtocolHarness(options = {}) {
   return {
     storageState,
     storageOperations,
+    alarmsCreated,
+    badgeTexts,
+    fireAlarm,
     downloadCalls,
     cancelCalls,
     pendingDownloadStarts,
@@ -6760,6 +7061,34 @@ function importedConversationFixture(id, title) {
     ]
   };
 }
+
+test("future statistics schemas cannot be silently rewritten by reads, resets, or imports", async () => {
+  const future = { version: 2, totals: { "gpt-5-thinking": 4 }, futureField: { keep: true } };
+  const harness = createBackgroundProtocolHarness({ initialStorage: { [background.STORAGE_KEY]: future } });
+  const backup = background.createStatisticsBackup(background.createEmptyStats());
+  for (const message of [
+    { type: "usage.get" },
+    { type: "usage.reset" },
+    { type: "usage.data.import", mode: "replace", backup }
+  ]) {
+    const result = await harness.send(message);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "unsupported-statistics-version");
+    assert.deepEqual(harness.storageState[background.STORAGE_KEY], future);
+  }
+  assert.throws(() => background.cloneStats({ version: "2.0.0" }), /unsupported-statistics-version/);
+});
+
+test("future settings schemas cannot be silently rewritten by reads or updates", async () => {
+  const future = { version: 2, futureSetting: { keep: true } };
+  const harness = createBackgroundProtocolHarness({ initialStorage: { [background.SETTINGS_KEY]: future } });
+  for (const message of [{ type: "settings.get" }, { type: "settings.set", settings: { language: "en" } }]) {
+    const result = await harness.send(message);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "unsupported-settings-version");
+    assert.deepEqual(harness.storageState[background.SETTINGS_KEY], future);
+  }
+});
 
 test("conversation import failure and abort preserve the previously committed cache", async () => {
   const oldImportId = "old-import";
