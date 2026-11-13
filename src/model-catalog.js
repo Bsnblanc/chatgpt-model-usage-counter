@@ -380,6 +380,12 @@
     if (!clean || /^(?:default|none|null|undefined|unknown(?: model)?)$/i.test(clean)) {
       return "";
     }
+    // A bare model version is not a stable public model identity: e.g. "6"
+    // would otherwise collapse gpt-6, gpt-6-thinking, and gpt-6-pro into one
+    // public-model bucket when only the base model catalog title is present.
+    if (/^\d+(?:[.,]\d+)*$/.test(clean)) {
+      return "";
+    }
     return clean;
   }
 
