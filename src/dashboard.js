@@ -872,7 +872,12 @@
     "sourceModeWork": "Work",
     "sourceModeUnknown": "不明",
     "startDate": "開始",
-    "todayOnly": "今日 {today}"
+    "todayOnly": "今日 {today}",
+    "unrecognizedAggregates": "一部の過去のモデルは識別できません。保存済みの件数は保持されていますが、この表示には含まれません。",
+    "followToday": "開始日を固定・終了日は今日に合わせる",
+    "rollingToday": "今日",
+    "rollingSeven": "過去7日間",
+    "rollingThirtyOne": "過去31日間"
   });
 
   function normalizeLanguage(value) {
