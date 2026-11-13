@@ -442,3 +442,35 @@ test("Auto is accepted only as an exact ChatGPT route and maps through the live 
   assert.equal(info.mappingStatus, "mapped");
   assert.equal(info.source, "account-catalog:model-title");
 });
+
+
+test("numeric-only catalog titles never merge distinct GPT route model identities", () => {
+  const runtime = {
+    observedAt: "2026-11-13T01:00:00.000Z",
+    models: [{ slug: "gpt-6", title: "6" }],
+    versions: [],
+    categories: []
+  };
+  for (const slug of ["gpt-6", "gpt-6-thinking", "gpt-6-pro"]) {
+    const info = catalog.resolveRuntimePublicModelInfo(runtime, slug, {
+      selectedPublicModel: "6"
+    });
+    assert.equal(info.publicModel, slug);
+    assert.equal(info.requestModel, slug);
+    assert.equal(info.mappingStatus, "unmapped");
+    assert.equal(info.source, "unmapped-request-slug");
+  }
+});
+
+test("specific version display names still outrank generic numeric base titles", () => {
+  const runtime = runtimeCatalog();
+  runtime.models.push({ slug: "gpt-6", title: "6" });
+  runtime.versions.push({
+    id: "gpt-6-version",
+    slug: "gpt-6",
+    displayTextForIntelligence: "GPT-6 Thinking",
+    intelligencePresets: [{ modelSlug: "gpt-6-thinking", title: "Thinking" }]
+  });
+  const info = catalog.resolveRuntimePublicModelInfo(runtime, "gpt-6-thinking");
+  assert.equal(info.publicModel, "GPT-6 Thinking");
+});
