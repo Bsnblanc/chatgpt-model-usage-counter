@@ -824,6 +824,73 @@ async function main() {
     );
     assert.equal(chinesePopup.language, "zh");
     assert.match(chinesePopup.headline, /模型使用/);
+
+    await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => {
+        const japanese = document.querySelector('[data-language-select="ja"]');
+        if (!japanese) throw new Error("Missing Japanese language option");
+        japanese.click();
+        return true;
+      })()`
+    );
+    await wait(750);
+    const japanesePopup = await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => ({
+        headline: document.querySelector(".usage-topline")?.textContent || "",
+        language: document.querySelector('[data-language-select="ja"]')?.getAttribute("aria-pressed") === "true"
+          ? "ja" : "other"
+      }))()`
+    );
+    assert.equal(japanesePopup.language, "ja");
+    assert.match(japanesePopup.headline, /モデル使用量/);
+    await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => {
+        const hidden = document.querySelector('[data-page-button-select="hide"]');
+        if (!hidden) throw new Error("Missing hide-page-button option");
+        hidden.click();
+        return true;
+      })()`
+    );
+    await wait(800);
+    let pageButtonSettings = await readStorage(cdp, storageSessionId);
+    assert.equal(pageButtonSettings[SETTINGS_KEY].showPageButton, false);
+    const hiddenPageButton = await evaluate(
+      cdp,
+      pageSessionId,
+      `(() => {
+        const host = document.querySelector("#chatgpt-model-usage-counter-panel-host");
+        return host ? getComputedStyle(host).display : "missing";
+      })()`
+    );
+    assert.equal(hiddenPageButton, "none", "In-page Usage button should be hidden without disabling recording.");
+    await evaluate(
+      cdp,
+      reopenedPopupSessionId,
+      `(() => {
+        const shown = document.querySelector('[data-page-button-select="show"]');
+        if (!shown) throw new Error("Missing show-page-button option");
+        shown.click();
+        return true;
+      })()`
+    );
+    await wait(800);
+    pageButtonSettings = await readStorage(cdp, storageSessionId);
+    assert.equal(pageButtonSettings[SETTINGS_KEY].showPageButton, true);
+    const shownPageButton = await evaluate(
+      cdp,
+      pageSessionId,
+      `(() => {
+        const host = document.querySelector("#chatgpt-model-usage-counter-panel-host");
+        return host ? getComputedStyle(host).display : "missing";
+      })()`
+    );
+    assert.notEqual(shownPageButton, "none", "Showing the in-page button should restore it.");
     await evaluate(
       cdp,
       reopenedPopupSessionId,
@@ -885,6 +952,7 @@ async function main() {
           chartPopup,
           internalPopup,
           chinesePopup,
+          japanesePopup,
           englishPopup
         },
         null,

@@ -41,6 +41,7 @@ const RELEASE_FILES = Object.freeze([
   "src/background.js",
   "src/date-utils.js",
   "src/content.js",
+  "src/conversation-importer.js",
   "src/conversation-source.js",
   "src/dashboard.js",
   "src/detector.js",

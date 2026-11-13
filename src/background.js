@@ -132,7 +132,7 @@
   }
 
   function normalizeLanguage(value) {
-    return value === "zh" ? "zh" : "en";
+    return value === "zh" || value === "ja" ? value : "en";
   }
 
   function sanitizeConversationId(value) {
@@ -164,6 +164,7 @@
       showDonutChart: false,
       showTrendChart: true,
       showTextStatistics: true,
+      showPageButton: true,
       statisticsSectionOrder: ["line", "donut", "text"],
       mappedVisibleModels: [],
       mappedKnownModels: [],
@@ -252,6 +253,7 @@
       showDonutChart: showDonutChart,
       showTrendChart: showLineChart || showDonutChart,
       showTextStatistics: base.showTextStatistics !== false,
+      showPageButton: base.showPageButton !== false,
       statisticsSectionOrder: sanitizeStatisticsSectionOrder(base.statisticsSectionOrder),
       mappedVisibleModels: sanitizeSettingsModelList(base.mappedVisibleModels),
       mappedKnownModels: sanitizeSettingsModelList(base.mappedKnownModels),

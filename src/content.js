@@ -3320,7 +3320,7 @@
 
     function statusLabel(record, language) {
       var label = String((record && record.label) || "").replace(/\s+/g, " ").trim();
-      if (label) {
+      if (label && language !== "ja") {
         return label;
       }
       var state = normalizeStatusState(record && record.state);
@@ -3335,6 +3335,17 @@
         if (state === "fetch-failure") return "Status fetch failed";
         return "Unknown";
       }
+      if (language === "ja") {
+        if (state === "operational") return "正常";
+        if (state === "degraded") return "パフォーマンス低下";
+        if (state === "partial") return "一部障害";
+        if (state === "maintenance") return "メンテナンス中";
+        if (state === "major") return "重大な障害";
+        if (state === "unavailable") return "稼働状況を取得できません";
+        if (state === "timeout") return "状態確認がタイムアウトしました";
+        if (state === "fetch-failure") return "状態の取得に失敗しました";
+        return "不明";
+      }
       if (state === "operational") return "正常";
       if (state === "degraded") return "性能下降";
       if (state === "partial") return "部分中断";
@@ -3347,14 +3358,14 @@
     }
 
     function applyPanelToggleState() {
-      var language = currentPanelLanguage === "en" ? "en" : "zh";
+      var language = currentPanelLanguage === "ja" ? "ja" : currentPanelLanguage === "en" ? "en" : "zh";
       var isEnglish = language === "en";
-      var baseTitle = isEnglish ? "Model Usage" : "模型统计";
+      var baseTitle = language === "ja" ? "モデル使用量" : isEnglish ? "Model Usage" : "模型统计";
       if (toggleButton) {
         toggleButton.title = baseTitle;
       }
       if (toggleLabel) {
-        toggleLabel.textContent = isEnglish ? "Usage" : "统计";
+        toggleLabel.textContent = language === "ja" ? "使用量" : isEnglish ? "Usage" : "统计";
       }
       if (!currentStatusRecord) {
         host.removeAttribute("data-openai-status-state");
@@ -3372,13 +3383,21 @@
     }
 
     function applyPanelToggleLanguage(language) {
-      currentPanelLanguage = language === "en" ? "en" : "zh";
+      currentPanelLanguage = language === "ja" ? "ja" : language === "en" ? "en" : "zh";
       applyPanelToggleState();
     }
 
     function applyPanelToggleStatus(record) {
       currentStatusRecord = record && typeof record === "object" ? record : null;
       applyPanelToggleState();
+    }
+
+    function applyPageButtonVisibility(settings) {
+      var visible = !settings || settings.showPageButton !== false;
+      host.style.display = visible ? "" : "none";
+      if (!visible && !panel.hidden) {
+        closePanel();
+      }
     }
 
     function readPanelToggleLanguage() {
@@ -3394,7 +3413,8 @@
             return;
           }
           var settings = items && items[SETTINGS_KEY];
-          applyPanelToggleLanguage(settings && settings.language === "zh" ? "zh" : "en");
+          applyPageButtonVisibility(settings);
+          applyPanelToggleLanguage(settings && /^(ja|zh)$/.test(settings.language) ? settings.language : "en");
           applyPanelThemeMode(settings && settings.themeMode);
           applyPanelToggleStatus(items && items[STATUS_KEY]);
         });
@@ -3415,7 +3435,8 @@
         var settingsChange = changes && changes[SETTINGS_KEY];
         if (settingsChange) {
           var settings = settingsChange.newValue;
-          applyPanelToggleLanguage(settings && settings.language === "zh" ? "zh" : "en");
+          applyPageButtonVisibility(settings);
+          applyPanelToggleLanguage(settings && /^(ja|zh)$/.test(settings.language) ? settings.language : "en");
           applyPanelThemeMode(settings && settings.themeMode);
         }
         var statusChange = changes && changes[STATUS_KEY];
@@ -3709,6 +3730,9 @@
     }
 
     function panelLabels(language) {
+      if (language === "ja") {
+        return { toggle: "使用量", title: "モデル使用量" };
+      }
       if (language === "en") {
         return { toggle: "Usage", title: "Model usage" };
       }

@@ -62,9 +62,9 @@
     } catch (error) {
       language = document.documentElement.lang || "";
     }
-    return /^zh(?:[-_]|$)/i.test(String(language || "").trim())
-      ? "zh"
-      : "en";
+    var normalized = String(language || "").trim();
+    if (/^ja(?:[-_]|$)/i.test(normalized)) return "ja";
+    return /^zh(?:[-_]|$)/i.test(normalized) ? "zh" : "en";
   }
 
   function applyActivePageLanguage(dashboard) {
@@ -123,7 +123,7 @@
     surface: "popup",
     detectedLanguage: detectBrowserLanguage(),
     onLanguageChange: function syncPopupLanguage(language) {
-      document.documentElement.lang = language === "en" ? "en" : "zh-CN";
+      document.documentElement.lang = language === "ja" ? "ja" : language === "zh" ? "zh-CN" : "en";
     },
     onUsageViewActivate: ensureUsageCatalogOnce
   });

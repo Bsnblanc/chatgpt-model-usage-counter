@@ -93,7 +93,7 @@ test("background does not count disabled or excluded feature signals", () => {
   assert.deepEqual(observed.usageFeatures, ["agent_mode"]);
 });
 
-test("versioned feature names never become future model slugs", () => {
+test("feature-like names in visible text do not become future models", () => {
   [
     "file-upload-v2",
     "code-interpreter-v2",
@@ -101,12 +101,15 @@ test("versioned feature names never become future model slugs", () => {
     "gpts-v2",
     "tasks-v2"
   ].forEach((value) => {
-    assert.equal(catalog.isRequestModelSlug(value), false, value);
+    // The visible-text detector must remain conservative, but authoritative
+    // request.model fields can contain unforeseen model-family names.
+    assert.equal(catalog.isModelSlug(value), false, value);
     assert.equal(pageModelHook.isModelSlug(value), false, value);
     assert.equal(detector.resolveModelInfo(value), null, value);
   });
 
   assert.equal(catalog.isRequestModelSlug("aurora-7"), true);
+  assert.equal(catalog.isRequestModelSlug("connectors-v2"), true);
   assert.equal(pageModelHook.isModelSlug("aurora-7"), true);
 });
 

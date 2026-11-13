@@ -610,29 +610,34 @@
 
   // 导出按"聊天记录"而非字段表来排版:说话人显示名 + 左右分栏(用户靠右、助手靠左)。
   function exportLanguage(options) {
-    return options && options.language === "zh" ? "zh" : "en";
+    var language = options && options.language;
+    return language === "zh" || language === "ja" ? language : "en";
   }
 
   function exportSummary(options, conversationCount, messageCount) {
-    return exportLanguage(options) === "zh"
+    var language = exportLanguage(options);
+    if (language === "ja") {
+      return "出力日時: " + exportTimestamp(options) + " · " + conversationCount + "件の会話 · " + messageCount + "件のメッセージ";
+    }
+    return language === "zh"
       ? "导出于 " + exportTimestamp(options) + " · " + conversationCount + " 段对话 · " + messageCount + " 条消息"
       : "Exported " + exportTimestamp(options) + " · " + conversationCount + " conversations · " + messageCount + " messages";
   }
 
   function exportMessageCount(options, count) {
-    return String(count) + (exportLanguage(options) === "zh" ? " 条消息" : " messages");
+    return String(count) + (exportLanguage(options) === "ja" ? "件のメッセージ" : exportLanguage(options) === "zh" ? " 条消息" : " messages");
   }
 
   function exportConversationCount(options, count) {
-    return String(count) + (exportLanguage(options) === "zh" ? " 段对话" : " conversations");
+    return String(count) + (exportLanguage(options) === "ja" ? "件の会話" : exportLanguage(options) === "zh" ? " 段对话" : " conversations");
   }
 
   function speakerName(role, options) {
     var clean = normalizedRoleKey(role);
-    if (clean === "user") return exportLanguage(options) === "zh" ? "你" : "You";
+    if (clean === "user") return exportLanguage(options) === "ja" ? "あなた" : exportLanguage(options) === "zh" ? "你" : "You";
     if (clean === "assistant") return "ChatGPT";
-    if (clean === "system") return exportLanguage(options) === "zh" ? "系统" : "System";
-    if (clean === "tool") return exportLanguage(options) === "zh" ? "工具" : "Tool";
+    if (clean === "system") return exportLanguage(options) === "ja" ? "システム" : exportLanguage(options) === "zh" ? "系统" : "System";
+    if (clean === "tool") return exportLanguage(options) === "ja" ? "ツール" : exportLanguage(options) === "zh" ? "工具" : "Tool";
     return roleLabel(role);
   }
 
@@ -647,22 +652,24 @@
     }
     var responseModel = sanitizeExportModel(message.responseModel);
     var requestModel = sanitizeExportModel(message.requestModel);
-    var zh = exportLanguage(options) === "zh";
-    var unknown = zh ? "未知" : "Unknown";
+    var language = exportLanguage(options);
+    var zh = language === "zh";
+    var ja = language === "ja";
+    var unknown = ja ? "不明" : zh ? "未知" : "Unknown";
     var parts = [
-      (zh ? "请求型号：" : "Request model: ") + (requestModel || unknown),
-      (zh ? "实际回复型号：" : "Actual response model: ") + (responseModel || unknown),
-      (zh ? "思考强度：" : "Reasoning effort: ") +
+      (ja ? "リクエストモデル: " : zh ? "请求型号：" : "Request model: ") + (requestModel || unknown),
+      (ja ? "実際の応答モデル: " : zh ? "实际回复型号：" : "Actual response model: ") + (responseModel || unknown),
+      (ja ? "思考強度: " : zh ? "思考强度：" : "Reasoning effort: ") +
         (message.reasoningEffort ? String(message.reasoningEffort) : unknown)
     ];
     if (message.selectedPublicModel) {
-      parts.push((zh ? "公开选择：" : "Public selection: ") + String(message.selectedPublicModel));
+      parts.push((ja ? "選択モデル: " : zh ? "公开选择：" : "Public selection: ") + String(message.selectedPublicModel));
     }
     if (message.selectedPublicModeLabel || message.selectedPublicMode) {
-      parts.push((zh ? "公开模式：" : "Public mode: ") + String(message.selectedPublicModeLabel || message.selectedPublicMode));
+      parts.push((ja ? "選択モード: " : zh ? "公开模式：" : "Public mode: ") + String(message.selectedPublicModeLabel || message.selectedPublicMode));
     }
     if (hasFeatures(message.features)) {
-      parts.push((zh ? "功能：" : "Features: ") + featureDisplay(message.features));
+      parts.push((ja ? "機能: " : zh ? "功能：" : "Features: ") + featureDisplay(message.features));
     }
     return parts.join(" · ");
   }
@@ -1712,9 +1719,7 @@
     } else {
       // 多对话同文件兜底。
       lines.push("# " + exportTitle(options), "");
-      lines.push("> " + (exportLanguage(options) === "zh"
-        ? "导出于 " + exportTimestamp(options) + " · " + list.length + " 段对话 · " + messageCount + " 条消息"
-        : "Exported " + exportTimestamp(options) + " · " + list.length + " conversations · " + messageCount + " messages"), "");
+      lines.push("> " + exportSummary(options, list.length, messageCount), "");
       list.forEach(function conversationToMarkdown(conversation, conversationIndex) {
         if (conversationIndex > 0) { lines.push("", "---", ""); }
         lines.push("## " + conversation.title, "");
@@ -4054,10 +4059,11 @@
   var EXPORT_PROMO_NAME = "ChatGPT Model Usage Counter";
   var EXPORT_PROMO_DESC_ZH = "按模型和日期统计 ChatGPT 用量，并把所选对话本地导出为 JSON / Markdown / PDF / Word / PNG。";
   var EXPORT_PROMO_DESC_EN = "Count ChatGPT usage by model and date, then export selected conversations locally as JSON, Markdown, PDF, Word, or PNG.";
+  var EXPORT_PROMO_DESC_JA = "ChatGPTのモデル別・日付別使用量を集計し、選択した会話をJSON・Markdown・PDF・Word・PNG形式でローカルに出力します。";
   var EXPORT_PROMO_URL = "https://github.com/Bsnblanc/chatgpt-model-usage-counter";
 
   function exportPromoDescription(options) {
-    return exportLanguage(options) === "zh" ? EXPORT_PROMO_DESC_ZH : EXPORT_PROMO_DESC_EN;
+    return exportLanguage(options) === "ja" ? EXPORT_PROMO_DESC_JA : exportLanguage(options) === "zh" ? EXPORT_PROMO_DESC_ZH : EXPORT_PROMO_DESC_EN;
   }
 
   var CV_FONT = "'Microsoft YaHei','PingFang SC','Noto Sans CJK SC','Segoe UI',system-ui,sans-serif";

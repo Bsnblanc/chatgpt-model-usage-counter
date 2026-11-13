@@ -4923,7 +4923,7 @@ test("webRequest observations accept a future versioned model family from the ex
   assert.equal(observed.model, "aurora-7");
   assert.equal(observed.modelParameters.model, "aurora-7");
 
-  const rejected = background.observeNetworkRequest(
+  const futureFamily = background.observeNetworkRequest(
     {
       tabId: 119,
       url: "https://chatgpt.com/backend-api/f/conversation",
@@ -4933,7 +4933,22 @@ test("webRequest observations accept a future versioned model family from the ex
     },
     now
   );
-  assert.equal(rejected, null);
+  assert.ok(futureFamily);
+  assert.equal(futureFamily.model, "temperature-v2");
+
+  // A parameter value alone is not enough to introduce a model identity.
+  const noModelField = background.observeNetworkRequest(
+    {
+      tabId: 120,
+      url: "https://chatgpt.com/backend-api/f/conversation",
+      requestBody: { raw: [{ bytes: Buffer.from(JSON.stringify({
+        temperature: "temperature-v2",
+        feature: "code-interpreter-v2"
+      }), "utf8") }] }
+    },
+    now
+  );
+  assert.equal(noModelField, null);
 });
 
 test("webRequest observations are consumed once per tab", () => {
@@ -5531,6 +5546,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["text", "line", "text", "invalid"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -5552,6 +5568,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: false,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["text", "line", "donut"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -5586,6 +5603,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
@@ -5609,6 +5627,7 @@ test("sanitizeSettings keeps only supported UI languages, main views, and statis
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
@@ -5678,6 +5697,7 @@ test("sanitizeSettings clamps stored future dates to the current local calendar 
     showDonutChart: false,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["line", "donut", "text"],
     mappedVisibleModels: [],
     mappedKnownModels: [],
@@ -5703,6 +5723,7 @@ test("mergeSettings updates one shared UI preference without resetting the other
     showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["donut", "text", "line"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],
@@ -5726,6 +5747,7 @@ test("mergeSettings updates one shared UI preference without resetting the other
     showDonutChart: true,
     showTrendChart: true,
     showTextStatistics: true,
+    showPageButton: true,
     statisticsSectionOrder: ["donut", "text", "line"],
     mappedVisibleModels: ["GPT-5.6 Sol"],
     mappedKnownModels: ["GPT-5.6 Sol", "GPT-5.6 Luna"],

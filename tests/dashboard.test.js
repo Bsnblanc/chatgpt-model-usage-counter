@@ -1985,7 +1985,7 @@ test("popup and page dashboards share aligned header controls and popup spacing"
   assert.equal((pageContainer.innerHTML.match(/class="usage-settings-menu"/g) || []).length, 1);
   assert.doesNotMatch(pageContainer.innerHTML, /usage-language-toggle|data-language-toggle/);
   assert.doesNotMatch(pageContainer.innerHTML, /usage-panel-close|data-panel-close/);
-  const expectedSettingsOrder = ["language", "theme", "source", "statistics", "sections", "data"];
+  const expectedSettingsOrder = ["language", "page-button", "theme", "source", "statistics", "sections", "data"];
   [popupContainer.innerHTML, pageContainer.innerHTML].forEach((html) => {
     assert.deepEqual(
       Array.from(html.matchAll(/data-settings-category="([^"]+)"/g), (match) => match[1]),
@@ -2007,7 +2007,7 @@ test("popup and page dashboards share aligned header controls and popup spacing"
       ["line", "donut", "text"]
     );
   });
-  ["language", "theme", "source", "statistics", "sections", "data"].forEach((category) => {
+  ["language", "page-button", "theme", "source", "statistics", "sections", "data"].forEach((category) => {
     assert.match(popupContainer.innerHTML, new RegExp(`data-settings-category="${category}"`));
     assert.match(pageContainer.innerHTML, new RegExp(`data-settings-category="${category}"`));
   });
